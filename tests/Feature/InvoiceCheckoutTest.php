@@ -1,0 +1,259 @@
+<?php
+
+namespace Tests\Feature;
+
+use App\Models\ApplicationPaymentGateway;
+use App\Models\CheckoutOutboxMessage;
+use App\Models\Invoice;
+use App\Models\PaymentAttempt;
+use App\Models\Subscription;
+use App\Models\User;
+use App\Services\CheckoutService;
+use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Http\Client\ConnectionException;
+use Illuminate\Http\Client\Request as HttpRequest;
+use Illuminate\Support\Facades\Http;
+use Laravel\Sanctum\Sanctum;
+use Tests\TestCase;
+
+class InvoiceCheckoutTest extends TestCase
+{
+    use RefreshDatabase;
+
+    protected function setUp(): void
+    {
+        parent::setUp();
+
+        config()->set('services.dana_gateway', [
+            'environment' => 'sandbox',
+            'base_urls' => ['sandbox' => 'https://gateway.test'],
+            'timeout' => 8,
+            'connect_timeout' => 3,
+            'merchant_api_keys' => ['sandbox' => ['udev-demo' => 'test-api-key']],
+            'merchants' => ['sandbox' => ['udev-demo' => ['name' => 'UDEV Demo', 'is_active' => true]]],
+        ]);
+    }
+
+    public function test_admin_can_create_a_valid_checkout_without_changing_invoice_or_subscription_status(): void
+    {
+        [$invoice, $subscription] = $this->invoiceWithGateway(withSubscription: true);
+        $previousExpiry = $subscription->expires_at->toISOString();
+        $this->fakeGatewayForNewPayment($invoice, 'gateway-payment-001');
+
+        $this->actingAdmin()
+            ->postJson("/api/v1/admin/invoices/{$invoice->id}/checkout", [], ['Idempotency-Key' => 'checkout-valid-001'])
+            ->assertOk()
+            ->assertJsonPath('data.invoice_id', $invoice->id)
+            ->assertJsonPath('data.gateway_payment_id', 'gateway-payment-001')
+            ->assertJsonPath('data.checkout_status', 'ready')
+            ->assertJsonPath('data.status', PaymentAttempt::StatusPending)
+            ->assertJsonPath('data.checkout_url', 'https://checkout.test/session/001');
+
+        $invoice->refresh();
+        $subscription?->refresh();
+        $this->assertSame(Invoice::StatusPending, $invoice->status);
+        $this->assertSame($previousExpiry, $subscription->fresh()->expires_at->toISOString());
+        $this->assertDatabaseHas('checkout_outbox_messages', ['status' => CheckoutOutboxMessage::StatusCompleted]);
+    }
+
+    public function test_checkout_rejects_paid_and_expired_invoices(): void
+    {
+        [$paidInvoice] = $this->invoiceWithGateway(['status' => Invoice::StatusPaid]);
+        [$expiredInvoice] = $this->invoiceWithGateway(['due_at' => now()->subSecond()]);
+
+        $this->actingAdmin()
+            ->postJson("/api/v1/admin/invoices/{$paidInvoice->id}/checkout", [], ['Idempotency-Key' => 'checkout-paid-001'])
+            ->assertUnprocessable();
+        $this->actingAdmin()
+            ->postJson("/api/v1/admin/invoices/{$expiredInvoice->id}/checkout", [], ['Idempotency-Key' => 'checkout-expired-001'])
+            ->assertUnprocessable();
+
+        Http::assertNothingSent();
+    }
+
+    public function test_checkout_rejects_non_idr_and_fractional_rupiah_without_calling_gateway(): void
+    {
+        [$usdInvoice] = $this->invoiceWithGateway(['currency' => 'USD']);
+        [$fractionalInvoice] = $this->invoiceWithGateway(['amount' => '10000.50']);
+
+        $this->actingAdmin()
+            ->postJson("/api/v1/admin/invoices/{$usdInvoice->id}/checkout", [], ['Idempotency-Key' => 'checkout-usd-001'])
+            ->assertUnprocessable();
+        $this->actingAdmin()
+            ->postJson("/api/v1/admin/invoices/{$fractionalInvoice->id}/checkout", [], ['Idempotency-Key' => 'checkout-fraction-001'])
+            ->assertUnprocessable();
+
+        Http::assertNothingSent();
+    }
+
+    public function test_checkout_requires_a_server_side_merchant_mapping(): void
+    {
+        $invoice = Invoice::factory()->create();
+
+        $this->actingAdmin()
+            ->postJson("/api/v1/admin/invoices/{$invoice->id}/checkout", [], ['Idempotency-Key' => 'checkout-mapping-001'])
+            ->assertUnprocessable()
+            ->assertJsonValidationErrors('invoice');
+
+        Http::assertNothingSent();
+    }
+
+    public function test_repeated_checkout_request_returns_the_same_attempt_and_does_not_create_another_gateway_payment(): void
+    {
+        [$invoice] = $this->invoiceWithGateway();
+        $this->fakeGatewayForNewPayment($invoice, 'gateway-payment-002');
+
+        $this->actingAdmin()
+            ->postJson("/api/v1/admin/invoices/{$invoice->id}/checkout", [], ['Idempotency-Key' => 'checkout-repeat-001'])
+            ->assertOk();
+        $this->actingAdmin()
+            ->postJson("/api/v1/admin/invoices/{$invoice->id}/checkout", [], ['Idempotency-Key' => 'checkout-repeat-002'])
+            ->assertOk()
+            ->assertJsonPath('data.gateway_payment_id', 'gateway-payment-002');
+
+        $this->assertDatabaseCount('payment_attempts', 1);
+        Http::assertSentCount(2);
+    }
+
+    public function test_timeout_is_reconciled_by_merchant_reference_before_a_retry_creates_nothing_new(): void
+    {
+        [$invoice] = $this->invoiceWithGateway();
+        $timedOut = false;
+        Http::fake(function (HttpRequest $request) use (&$timedOut): mixed {
+            if ($request->method() === 'GET') {
+                return Http::response([
+                    'data' => $timedOut
+                        ? [$this->gatewayPayment(PaymentAttempt::query()->sole(), 'gateway-payment-003')]
+                        : [],
+                ]);
+            }
+
+            $timedOut = true;
+            throw new ConnectionException('timeout');
+        });
+
+        $this->actingAdmin()
+            ->postJson("/api/v1/admin/invoices/{$invoice->id}/checkout", [], ['Idempotency-Key' => 'checkout-timeout-001'])
+            ->assertAccepted()
+            ->assertJsonPath('data.checkout_status', 'processing');
+
+        $attempt = PaymentAttempt::query()->sole();
+        $outbox = CheckoutOutboxMessage::query()->sole();
+        $this->assertSame(CheckoutOutboxMessage::StatusPending, $outbox->status);
+
+        $outbox->update(['available_at' => now()->subSecond()]);
+        app(CheckoutService::class)->retryCheckout($attempt);
+
+        $attempt->refresh();
+        $this->assertSame(CheckoutOutboxMessage::StatusCompleted, $outbox->fresh()->status);
+        $this->assertSame('gateway-payment-003', $attempt->gateway_payment_id);
+        $this->assertSame(PaymentAttempt::StatusPending, $attempt->status);
+        Http::assertSentCount(2);
+    }
+
+    public function test_invalid_gateway_response_and_reference_mismatch_are_not_accepted(): void
+    {
+        [$invalidInvoice] = $this->invoiceWithGateway();
+        Http::fake([
+            'https://gateway.test/api/v1/payments*' => Http::response(['data' => []]),
+        ]);
+
+        $this->actingAdmin()
+            ->postJson("/api/v1/admin/invoices/{$invalidInvoice->id}/checkout", [], ['Idempotency-Key' => 'checkout-invalid-001'])
+            ->assertStatus(502);
+        $this->assertDatabaseHas('checkout_outbox_messages', ['status' => CheckoutOutboxMessage::StatusFailed]);
+
+        [$mismatchInvoice] = $this->invoiceWithGateway();
+        $this->fakeGatewayForNewPayment($mismatchInvoice, 'gateway-payment-004', merchantOrderId: 'foreign-reference');
+
+        $this->actingAdmin()
+            ->postJson("/api/v1/admin/invoices/{$mismatchInvoice->id}/checkout", [], ['Idempotency-Key' => 'checkout-mismatch-001'])
+            ->assertStatus(502);
+        $this->assertDatabaseHas('checkout_outbox_messages', ['payment_attempt_id' => 2, 'status' => CheckoutOutboxMessage::StatusFailed]);
+    }
+
+    public function test_endpoint_rejects_frontend_controlled_payment_fields(): void
+    {
+        [$invoice] = $this->invoiceWithGateway();
+
+        $this->actingAdmin()
+            ->postJson("/api/v1/admin/invoices/{$invoice->id}/checkout", [
+                'amount' => '1',
+                'currency' => 'USD',
+                'merchant_code' => 'foreign-merchant',
+            ], ['Idempotency-Key' => 'checkout-prohibited-001'])
+            ->assertUnprocessable()
+            ->assertJsonValidationErrors(['amount', 'currency', 'merchant_code']);
+
+        Http::assertNothingSent();
+    }
+
+    /** @param array<string, mixed> $attributes
+     * @return array{0: Invoice, 1: Subscription|null}
+     */
+    private function invoiceWithGateway(array $attributes = [], bool $withSubscription = false): array
+    {
+        $invoice = Invoice::factory()->create([
+            'amount' => '10000.00',
+            'currency' => 'IDR',
+            'due_at' => now()->addDay(),
+            ...$attributes,
+        ]);
+        $subscription = null;
+
+        if ($withSubscription) {
+            $subscription = Subscription::factory()->create([
+                'application_customer_id' => $invoice->application_customer_id,
+                'subscription_plan_id' => $invoice->subscription_plan_id,
+                'expires_at' => now()->addMonth(),
+            ]);
+            $invoice->update(['subscription_id' => $subscription->id]);
+        }
+
+        ApplicationPaymentGateway::query()->create([
+            'application_id' => $invoice->plan->application_id,
+            'provider' => 'dana',
+            'environment' => 'sandbox',
+            'gateway_merchant_code' => 'udev-demo',
+            'is_active' => true,
+        ]);
+
+        return [$invoice->fresh(), $subscription];
+    }
+
+    private function actingAdmin(): self
+    {
+        Sanctum::actingAs(User::factory()->create(['is_admin' => true]), ['admin:access']);
+
+        return $this;
+    }
+
+    private function fakeGatewayForNewPayment(Invoice $invoice, string $gatewayPaymentId, ?string $merchantOrderId = null): void
+    {
+        Http::fake(function (HttpRequest $request) use ($gatewayPaymentId, $merchantOrderId): mixed {
+            if ($request->method() === 'GET') {
+                return Http::response(['data' => []]);
+            }
+
+            $attempt = PaymentAttempt::query()->sole();
+
+            return Http::response([
+                'data' => $this->gatewayPayment($attempt, $gatewayPaymentId, $merchantOrderId),
+            ]);
+        });
+    }
+
+    /** @return array<string, mixed> */
+    private function gatewayPayment(PaymentAttempt $attempt, string $gatewayPaymentId, ?string $merchantOrderId = null): array
+    {
+        return [
+            'id' => $gatewayPaymentId,
+            'merchant_order_id' => $merchantOrderId ?? $attempt->merchant_reference,
+            'amount_minor' => 10000,
+            'currency' => 'IDR',
+            'status' => 'pending',
+            'checkout_url' => 'https://checkout.test/session/001',
+            'expires_at' => now()->addMinutes(30)->toISOString(),
+        ];
+    }
+}
