@@ -3,6 +3,7 @@
 use App\Http\Controllers\Api\V1\Admin\ApplicationController;
 use App\Http\Controllers\Api\V1\Admin\ApplicationCustomerController;
 use App\Http\Controllers\Api\V1\Admin\ApplicationPaymentGatewayController;
+use App\Http\Controllers\Api\V1\Admin\DanaGatewayMerchantProvisioningController;
 use App\Http\Controllers\Api\V1\Admin\InvoiceCheckoutController;
 use App\Http\Controllers\Api\V1\Admin\InvoiceController;
 use App\Http\Controllers\Api\V1\Admin\PaymentAttemptController;
@@ -28,6 +29,11 @@ Route::prefix('v1/admin')
         Route::get('payment-gateways/merchants', [ApplicationPaymentGatewayController::class, 'merchants']);
         Route::apiResource('payment-gateways', ApplicationPaymentGatewayController::class)
             ->only(['index', 'store', 'update']);
+        Route::prefix('dana-gateway-merchants')->middleware('throttle:admin-dana-gateway-merchants')->group(function (): void {
+            Route::get('/', [DanaGatewayMerchantProvisioningController::class, 'index']);
+            Route::post('/', [DanaGatewayMerchantProvisioningController::class, 'store']);
+            Route::get('{merchantId}', [DanaGatewayMerchantProvisioningController::class, 'show'])->whereNumber('merchantId');
+        });
         Route::apiResource('application-customers', ApplicationCustomerController::class)
             ->only(['index', 'store', 'show', 'update']);
         Route::apiResource('subscription-plans', SubscriptionPlanController::class)

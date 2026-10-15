@@ -47,4 +47,11 @@ return [
         'merchants' => json_decode((string) env('DANA_GATEWAY_MERCHANTS', '{}'), true) ?: [],
     ],
 
+    'dana_merchant_provisioning' => [
+        'base_url' => env('DANA_MERCHANT_PROVISIONING_BASE_URL'),
+        'service_token' => env('DANA_MERCHANT_PROVISIONING_SERVICE_TOKEN'),
+        'timeout' => (int) env('DANA_MERCHANT_PROVISIONING_TIMEOUT', 8),
+        'connect_timeout' => (int) env('DANA_MERCHANT_PROVISIONING_CONNECT_TIMEOUT', 3),
+    ],
+
 ];
