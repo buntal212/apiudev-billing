@@ -32,6 +32,15 @@ Route::prefix('v1/admin')
         Route::prefix('dana-gateway-merchants')->middleware('throttle:admin-dana-gateway-merchants')->group(function (): void {
             Route::get('/', [DanaGatewayMerchantProvisioningController::class, 'index']);
             Route::post('/', [DanaGatewayMerchantProvisioningController::class, 'store']);
+            Route::get('{merchantId}/readiness', [DanaGatewayMerchantProvisioningController::class, 'readiness'])->whereNumber('merchantId');
+            Route::put('{merchantId}/dana-configuration', [DanaGatewayMerchantProvisioningController::class, 'configureDanaSandbox'])->whereNumber('merchantId');
+            Route::get('{merchantId}/api-keys', [DanaGatewayMerchantProvisioningController::class, 'apiKeys'])->whereNumber('merchantId');
+            Route::post('{merchantId}/api-keys/issue', [DanaGatewayMerchantProvisioningController::class, 'issueApiKey'])->whereNumber('merchantId');
+            Route::get('{merchantId}/api-key-issuances', [DanaGatewayMerchantProvisioningController::class, 'issuances'])->whereNumber('merchantId');
+            Route::get('{merchantId}/api-key-issuances/{issuanceId}', [DanaGatewayMerchantProvisioningController::class, 'issuanceStatus'])->whereNumber(['merchantId', 'issuanceId']);
+            Route::post('{merchantId}/api-key-issuances/{issuanceId}/cancel', [DanaGatewayMerchantProvisioningController::class, 'cancelIssuance'])->whereNumber(['merchantId', 'issuanceId']);
+            Route::delete('{merchantId}/api-keys/{apiKeyId}', [DanaGatewayMerchantProvisioningController::class, 'revokeApiKey'])
+                ->whereNumber(['merchantId', 'apiKeyId']);
             Route::get('{merchantId}', [DanaGatewayMerchantProvisioningController::class, 'show'])->whereNumber('merchantId');
         });
         Route::apiResource('application-customers', ApplicationCustomerController::class)

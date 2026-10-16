@@ -54,4 +54,9 @@ return [
         'connect_timeout' => (int) env('DANA_MERCHANT_PROVISIONING_CONNECT_TIMEOUT', 3),
     ],
 
+    'dana_merchant_secret_store' => [
+        'active_key_version' => env('DANA_MERCHANT_SECRET_STORE_ACTIVE_KEY_VERSION'),
+        'keys' => json_decode((string) env('DANA_MERCHANT_SECRET_STORE_KEYS', '{}'), true) ?: [],
+    ],
+
 ];

@@ -23,6 +23,28 @@ class DanaMerchantProvisioningClient
     }
 
     /**
+     * @param  array{environment: string, partner_id: string, merchant_id: string, private_key: string, dana_webhook_public_key: string, origin: string, channel_id: string, notification_url: string, callback_url: string, mcc: string, enabled: bool}  $attributes
+     */
+    public function stableDanaConfigurationIdempotencyKey(int $merchantId, array $attributes): string
+    {
+        ksort($attributes);
+
+        return 'udev-dana-configuration-'.hash_hmac('sha256', json_encode([
+            'gateway_merchant_id' => $merchantId,
+            ...$attributes,
+        ], JSON_THROW_ON_ERROR), (string) config('app.key'));
+    }
+
+    public function stableApiKeyRevocationIdempotencyKey(int $merchantId, int $apiKeyId): string
+    {
+        return 'udev-api-key-revocation-'.hash_hmac('sha256', json_encode([
+            'gateway_merchant_id' => $merchantId,
+            'api_key_id' => $apiKeyId,
+            'confirm_revoke' => true,
+        ], JSON_THROW_ON_ERROR), (string) config('app.key'));
+    }
+
+    /**
      * @param  array{code: string, name: string, email: string|null, environment: string}  $attributes
      * @return array{merchant: array{merchant_id: int, merchant_code: string, merchant_name: string, environment: string, merchant_status: string, provisioning_status: string, credential_status: string, dana_configuration_status: string, provisioned_at: string|null}, status: int}
      */
@@ -72,6 +94,119 @@ class DanaMerchantProvisioningClient
         $body = $this->decodeSuccessfulResponse($response);
 
         return $this->merchant($body['data'] ?? null);
+    }
+
+    /**
+     * @return array{merchant_code: string, merchant_status: string, environment: string, active_api_key_count: int, dana_configuration: array{available: bool, enabled: bool, ready: bool}, readiness_status: string, not_ready_components: list<string>}
+     */
+    public function readiness(int $merchantId): array
+    {
+        $response = $this->send(fn (PendingRequest $request): Response => $request->get("/api/v1/internal/merchants/{$merchantId}/readiness"));
+        $body = $this->decodeSuccessfulResponse($response);
+
+        return $this->readinessData($body['data'] ?? null);
+    }
+
+    /**
+     * @param  array{environment: string, partner_id: string, merchant_id: string, private_key: string, dana_webhook_public_key: string, origin: string, channel_id: string, notification_url: string, callback_url: string, mcc: string, enabled: bool}  $attributes
+     * @return array{merchant_code: string, environment: string, dana_configuration: array{available: bool, enabled: bool, ready: bool}}
+     */
+    public function configureDanaSandbox(int $merchantId, array $attributes, string $idempotencyKey): array
+    {
+        $response = $this->send(function (PendingRequest $request) use ($merchantId, $attributes, $idempotencyKey): Response {
+            return $request->put("/api/v1/internal/merchants/{$merchantId}/dana-configuration", [
+                ...$attributes,
+                'idempotency_key' => $idempotencyKey,
+            ]);
+        });
+        $body = $this->decodeSuccessfulResponse($response);
+
+        return $this->danaConfiguration($body['data'] ?? null);
+    }
+
+    /**
+     * @return list<array{id: int, name: string, key_prefix: string, abilities: list<string>, is_active: bool, expires_at: string|null, revoked_at: string|null, last_used_at: string|null, created_at: string|null}>
+     */
+    public function apiKeys(int $merchantId): array
+    {
+        $response = $this->send(fn (PendingRequest $request): Response => $request->get("/api/v1/internal/merchants/{$merchantId}/api-keys"));
+        $body = $this->decodeSuccessfulResponse($response);
+        $data = $body['data'] ?? null;
+
+        if (! is_array($data)) {
+            throw new DanaMerchantProvisioningException('Respons metadata API key gateway tidak valid.', 502, false, $response->status());
+        }
+
+        return array_map(fn (mixed $apiKey): array => $this->apiKey($apiKey), $data);
+    }
+
+    /**
+     * @return array{id: int, key_prefix: string, revoked_at: string|null}
+     */
+    public function revokeApiKey(int $merchantId, int $apiKeyId, string $idempotencyKey): array
+    {
+        $response = $this->send(fn (PendingRequest $request): Response => $request->delete(
+            "/api/v1/internal/merchants/{$merchantId}/api-keys/{$apiKeyId}",
+            ['idempotency_key' => $idempotencyKey, 'confirm_revoke' => true],
+        ));
+        $body = $this->decodeSuccessfulResponse($response);
+        $apiKey = $body['data'] ?? null;
+
+        if (! is_array($apiKey)
+            || ! is_int($apiKey['id'] ?? null)
+            || ! is_string($apiKey['key_prefix'] ?? null)
+            || (! is_string($apiKey['revoked_at'] ?? null) && $apiKey['revoked_at'] !== null)) {
+            throw new DanaMerchantProvisioningException('Respons pencabutan API key gateway tidak valid.', 502, false, $response->status());
+        }
+
+        return [
+            'id' => $apiKey['id'],
+            'key_prefix' => $apiKey['key_prefix'],
+            'revoked_at' => $apiKey['revoked_at'],
+        ];
+    }
+
+    public function issueApiKey(int $merchantId, array $attributes, string $idempotencyKey): array
+    {
+        $response = $this->send(fn (PendingRequest $request): Response => $request->withHeaders(['Idempotency-Key' => $idempotencyKey])->post("/api/v1/internal/merchants/{$merchantId}/api-keys", $attributes));
+        $data = $this->decodeSuccessfulResponse($response)['data'] ?? null;
+        if (! is_array($data) || ! is_array($data['issuance'] ?? null) || ! is_string($data['api_key'] ?? null)) {
+            throw new DanaMerchantProvisioningException('Respons penerbitan API key gateway tidak valid.', 502, false, $response->status());
+        }
+
+        return ['issuance' => $data['issuance'], 'api_key' => $data['api_key']];
+    }
+
+    public function issuanceStatus(int $merchantId, int $issuanceId): array
+    {
+        $response = $this->send(fn (PendingRequest $request): Response => $request->get("/api/v1/internal/merchants/{$merchantId}/api-key-issuances/{$issuanceId}"));
+        $data = $this->decodeSuccessfulResponse($response)['data'] ?? null;
+        if (! is_array($data)) {
+            throw new DanaMerchantProvisioningException('Respons status issuance gateway tidak valid.', 502, false, $response->status());
+        }
+
+        return $data;
+    }
+
+    public function confirmApiKeyIssuance(int $merchantId, int $issuanceId, string $key): array
+    {
+        return $this->mutateIssuance($merchantId, $issuanceId, 'confirm', 'confirm_storage', $key);
+    }
+
+    public function cancelApiKeyIssuance(int $merchantId, int $issuanceId, string $key): array
+    {
+        return $this->mutateIssuance($merchantId, $issuanceId, 'cancel', 'confirm_cancel', $key);
+    }
+
+    private function mutateIssuance(int $merchantId, int $issuanceId, string $action, string $field, string $key): array
+    {
+        $response = $this->send(fn (PendingRequest $request): Response => $request->withHeaders(['Idempotency-Key' => $key])->post("/api/v1/internal/merchants/{$merchantId}/api-key-issuances/{$issuanceId}/{$action}", [$field => true]));
+        $data = $this->decodeSuccessfulResponse($response)['data'] ?? null;
+        if (! is_array($data)) {
+            throw new DanaMerchantProvisioningException('Respons konfirmasi issuance gateway tidak valid.', 502, false, $response->status());
+        }
+
+        return $data;
     }
 
     private function request(): PendingRequest
@@ -163,6 +298,109 @@ class DanaMerchantProvisioningClient
             'credential_status' => $merchant['credential_status'],
             'dana_configuration_status' => $merchant['dana_configuration_status'],
             'provisioned_at' => $merchant['provisioned_at'],
+        ];
+    }
+
+    /**
+     * @return array{merchant_code: string, merchant_status: string, environment: string, active_api_key_count: int, dana_configuration: array{available: bool, enabled: bool, ready: bool}, readiness_status: string, not_ready_components: list<string>}
+     */
+    private function readinessData(mixed $readiness): array
+    {
+        $configuration = is_array($readiness) ? ($readiness['dana_configuration'] ?? null) : null;
+        $components = is_array($readiness) ? ($readiness['not_ready_components'] ?? null) : null;
+
+        if (! is_array($readiness)
+            || ! is_string($readiness['merchant_code'] ?? null)
+            || ! is_string($readiness['merchant_status'] ?? null)
+            || ! is_string($readiness['environment'] ?? null)
+            || ! is_int($readiness['active_api_key_count'] ?? null)
+            || ! is_array($configuration)
+            || ! is_bool($configuration['available'] ?? null)
+            || ! is_bool($configuration['enabled'] ?? null)
+            || ! is_bool($configuration['ready'] ?? null)
+            || ! is_string($readiness['readiness_status'] ?? null)
+            || ! is_array($components)
+            || collect($components)->contains(fn (mixed $component): bool => ! is_string($component))) {
+            throw new DanaMerchantProvisioningException('Respons readiness merchant gateway tidak valid.', 502, false);
+        }
+
+        return [
+            'merchant_code' => $readiness['merchant_code'],
+            'merchant_status' => $readiness['merchant_status'],
+            'environment' => $readiness['environment'],
+            'active_api_key_count' => $readiness['active_api_key_count'],
+            'dana_configuration' => [
+                'available' => $configuration['available'],
+                'enabled' => $configuration['enabled'],
+                'ready' => $configuration['ready'],
+            ],
+            'readiness_status' => $readiness['readiness_status'],
+            'not_ready_components' => array_values($components),
+        ];
+    }
+
+    /**
+     * @return array{merchant_code: string, environment: string, dana_configuration: array{available: bool, enabled: bool, ready: bool}}
+     */
+    private function danaConfiguration(mixed $configuration): array
+    {
+        $status = is_array($configuration) ? ($configuration['dana_configuration'] ?? null) : null;
+
+        if (! is_array($configuration)
+            || ! is_string($configuration['merchant_code'] ?? null)
+            || ! is_string($configuration['environment'] ?? null)
+            || ! is_array($status)
+            || ! is_bool($status['available'] ?? null)
+            || ! is_bool($status['enabled'] ?? null)
+            || ! is_bool($status['ready'] ?? null)) {
+            throw new DanaMerchantProvisioningException('Respons konfigurasi DANA gateway tidak valid.', 502, false);
+        }
+
+        return [
+            'merchant_code' => $configuration['merchant_code'],
+            'environment' => $configuration['environment'],
+            'dana_configuration' => [
+                'available' => $status['available'],
+                'enabled' => $status['enabled'],
+                'ready' => $status['ready'],
+            ],
+        ];
+    }
+
+    /**
+     * @return array{id: int, name: string, key_prefix: string, abilities: list<string>, is_active: bool, expires_at: string|null, revoked_at: string|null, last_used_at: string|null, created_at: string|null}
+     */
+    private function apiKey(mixed $apiKey): array
+    {
+        $abilities = is_array($apiKey) ? ($apiKey['abilities'] ?? null) : null;
+        $dateFields = ['expires_at', 'revoked_at', 'last_used_at', 'created_at'];
+
+        if (! is_array($apiKey)
+            || ! is_int($apiKey['id'] ?? null)
+            || ! is_string($apiKey['name'] ?? null)
+            || ! is_string($apiKey['key_prefix'] ?? null)
+            || ! is_array($abilities)
+            || ! is_bool($apiKey['is_active'] ?? null)
+            || collect($abilities)->contains(fn (mixed $ability): bool => ! is_string($ability))) {
+            throw new DanaMerchantProvisioningException('Respons metadata API key gateway tidak valid.', 502, false);
+        }
+
+        foreach ($dateFields as $field) {
+            if (! is_string($apiKey[$field] ?? null) && $apiKey[$field] !== null) {
+                throw new DanaMerchantProvisioningException('Respons metadata API key gateway tidak valid.', 502, false);
+            }
+        }
+
+        return [
+            'id' => $apiKey['id'],
+            'name' => $apiKey['name'],
+            'key_prefix' => $apiKey['key_prefix'],
+            'abilities' => array_values($abilities),
+            'is_active' => $apiKey['is_active'],
+            'expires_at' => $apiKey['expires_at'],
+            'revoked_at' => $apiKey['revoked_at'],
+            'last_used_at' => $apiKey['last_used_at'],
+            'created_at' => $apiKey['created_at'],
         ];
     }
 
