@@ -1,4 +1,4 @@
-name: API UDEV Billing Deploy
+name: Deploy API UDEV Billing
 
 on:
   push:
@@ -15,45 +15,73 @@ concurrency:
 
 jobs:
   deploy:
-    name: Verify HOMELAB Runner
-    runs-on:
-      - self-hosted
-      - linux
-      - apiudev-production
-
-    timeout-minutes: 10
+    name: Deploy Laravel to HOMELAB
+    runs-on: [self-hosted, apiudev-production]
+    timeout-minutes: 30
 
     steps:
       - name: Checkout source
         uses: actions/checkout@v4
-        with:
-          persist-credentials: false
 
-      - name: Verify server
+      - name: Deploy source Laravel
+        shell: bash
+        env:
+          APP_DIR: /www/wwwroot/apiudev.udumbara.my.id
+          PHP_BIN: /www/server/php/83/bin/php
         run: |
-          set -e
-          echo "=== SERVER ==="
-          hostname
-          whoami
-          pwd
+          set -euo pipefail
 
-          echo "=== PHP ==="
-          php -v
-
-          echo "=== COMPOSER ==="
-          composer --version
-
-          echo "=== LARAVEL ==="
+          echo "=== Checking requirements ==="
           test -f artisan
           test -f composer.json
-          echo "Laravel source detected"
+          test -f composer.lock
 
-          echo "=== DEPLOY DIRECTORY ==="
-          test -d /www/wwwroot/apiudev-billing
-          test -w /www/wwwroot/apiudev-billing
-          echo "Deployment directory writable"
+          command -v rsync
+          command -v composer
+          test -x "$PHP_BIN"
 
-      - name: Verify success
-        run: |
-          echo "GitHub Actions Runner HOMELAB ready!"
-          echo "No production files were modified."
+          echo "=== Synchronizing source ==="
+
+          rsync -a \
+            --exclude='.git/' \
+            --exclude='.github/' \
+            --exclude='.env' \
+            --exclude='.env.*' \
+            --exclude='vendor/' \
+            --exclude='storage/' \
+            --exclude='bootstrap/cache/' \
+            --exclude='.well-known/' \
+            --exclude='.user.ini' \
+            ./ "$APP_DIR/"
+
+          cd "$APP_DIR"
+
+          echo "=== Installing Composer dependencies ==="
+
+          "$PHP_BIN" "$(command -v composer)" install \
+            --no-dev \
+            --prefer-dist \
+            --no-interaction \
+            --optimize-autoloader \
+            --no-scripts
+
+          echo "=== Preparing Laravel storage ==="
+
+          mkdir -p \
+            storage/app/public \
+            storage/framework/cache/data \
+            storage/framework/sessions \
+            storage/framework/views \
+            storage/logs \
+            bootstrap/cache
+
+          echo "=== Checking application environment ==="
+
+          if [ -f .env ]; then
+            echo "Production .env found."
+          else
+            echo "Production .env not created yet."
+            echo "Laravel initialization will be completed later."
+          fi
+
+          echo "=== Source deployment successful ==="
