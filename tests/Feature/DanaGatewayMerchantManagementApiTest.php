@@ -220,6 +220,30 @@ class DanaGatewayMerchantManagementApiTest extends TestCase
         ]);
     }
 
+    public function test_sandbox_configuration_forwards_portal_key_material_to_the_gateway_for_cryptographic_validation(): void
+    {
+        $merchant = $this->sandboxProvisionedMerchant();
+        $privateKey = base64_encode('synthetic-private-der-is-validated-by-gateway');
+        $publicKey = base64_encode('synthetic-public-der-is-validated-by-gateway');
+        Http::fake([
+            "https://dana-gateway.test/api/v1/internal/merchants/{$merchant->gateway_merchant_id}/dana-configuration" => function (HttpRequest $request) use ($privateKey, $publicKey): mixed {
+                $this->assertSame($privateKey, $request->data()['private_key']);
+                $this->assertSame($publicKey, $request->data()['dana_webhook_public_key']);
+
+                return Http::response(['data' => $this->configuration()]);
+            },
+        ]);
+        $this->actingAdmin();
+
+        $this->putJson($this->configurationUrl($merchant->gateway_merchant_id), $this->configurationPayload([
+            'private_key' => $privateKey,
+            'dana_webhook_public_key' => $publicKey,
+        ]))
+            ->assertOk()
+            ->assertDontSee($privateKey)
+            ->assertDontSee($publicKey);
+    }
+
     public function test_gateway_timeout_is_safely_reported_and_audited_without_credential_details(): void
     {
         $merchant = $this->sandboxProvisionedMerchant();

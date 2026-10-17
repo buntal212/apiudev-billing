@@ -2,7 +2,6 @@
 
 namespace App\Http\Requests;
 
-use Closure;
 use Illuminate\Contracts\Validation\ValidationRule;
 use Illuminate\Validation\Validator;
 
@@ -22,8 +21,8 @@ class StoreDanaGatewayMerchantDanaConfigurationRequest extends ApiFormRequest
             'environment' => ['required', 'string', 'in:sandbox'],
             'partner_id' => ['required', 'string', 'max:150'],
             'merchant_id' => ['required', 'string', 'max:150'],
-            'private_key' => ['nullable', 'string', 'max:65535', $this->pemRule()],
-            'dana_webhook_public_key' => ['nullable', 'string', 'max:65535', $this->pemRule()],
+            'private_key' => ['nullable', 'string', 'max:65535'],
+            'dana_webhook_public_key' => ['nullable', 'string', 'max:65535'],
             'origin' => ['required', 'url', 'max:255', 'regex:/\Ahttps:\/\//i'],
             'channel_id' => ['required', 'string', 'max:100'],
             'notification_url' => ['required', 'url', 'max:2048', 'regex:/\Ahttps:\/\//i'],
@@ -46,14 +45,5 @@ class StoreDanaGatewayMerchantDanaConfigurationRequest extends ApiFormRequest
                 $validator->errors()->add($field, 'Field tidak diizinkan.');
             }
         }];
-    }
-
-    private function pemRule(): Closure
-    {
-        return function (string $attribute, mixed $value, Closure $fail): void {
-            if (! is_string($value) || preg_match('/\A-----BEGIN [A-Z0-9 ]+-----\R.+\R-----END [A-Z0-9 ]+-----\z/s', trim($value)) !== 1) {
-                $fail('Format PEM tidak valid.');
-            }
-        };
     }
 }
