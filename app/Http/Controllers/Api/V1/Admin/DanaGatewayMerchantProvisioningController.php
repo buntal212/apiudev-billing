@@ -12,6 +12,7 @@ use App\Http\Resources\DanaGatewayMerchantApiKeyRevocationResource;
 use App\Http\Resources\DanaGatewayMerchantDanaConfigurationResource;
 use App\Http\Resources\DanaGatewayMerchantReadinessResource;
 use App\Http\Resources\DanaGatewayMerchantResource;
+use App\Http\Resources\DanaGatewayMerchantStoredConfigurationResource;
 use App\Models\DanaMerchantApiKeyIssuance;
 use App\Models\DanaMerchantProvisioningAudit;
 use App\Services\DanaMerchantApiKeyIssuanceService;
@@ -135,6 +136,21 @@ class DanaGatewayMerchantProvisioningController extends Controller
         ], $idempotencyKey);
 
         return new DanaGatewayMerchantDanaConfigurationResource($configuration);
+    }
+
+    public function storedDanaConfiguration(int $merchantId, DanaMerchantProvisioningClient $client): DanaGatewayMerchantStoredConfigurationResource|JsonResponse
+    {
+        if ($this->sandboxProvisionedMerchant($merchantId) === null) {
+            return $this->merchantNotFound();
+        }
+
+        try {
+            return (new DanaGatewayMerchantStoredConfigurationResource($client->storedDanaConfiguration($merchantId)))
+                ->response()
+                ->header('Cache-Control', 'no-store');
+        } catch (DanaMerchantProvisioningException $exception) {
+            return $this->gatewayError($exception)->header('Cache-Control', 'no-store');
+        }
     }
 
     public function apiKeys(int $merchantId, Request $request, DanaMerchantProvisioningClient $client): AnonymousResourceCollection|JsonResponse

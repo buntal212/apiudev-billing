@@ -33,6 +33,7 @@ Route::prefix('v1/admin')
             Route::get('/', [DanaGatewayMerchantProvisioningController::class, 'index']);
             Route::post('/', [DanaGatewayMerchantProvisioningController::class, 'store']);
             Route::get('{merchantId}/readiness', [DanaGatewayMerchantProvisioningController::class, 'readiness'])->whereNumber('merchantId');
+            Route::get('{merchantId}/dana-configuration', [DanaGatewayMerchantProvisioningController::class, 'storedDanaConfiguration'])->whereNumber('merchantId');
             Route::put('{merchantId}/dana-configuration', [DanaGatewayMerchantProvisioningController::class, 'configureDanaSandbox'])->whereNumber('merchantId');
             Route::get('{merchantId}/api-keys', [DanaGatewayMerchantProvisioningController::class, 'apiKeys'])->whereNumber('merchantId');
             Route::post('{merchantId}/api-keys/issue', [DanaGatewayMerchantProvisioningController::class, 'issueApiKey'])->whereNumber('merchantId');

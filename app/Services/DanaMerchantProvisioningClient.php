@@ -107,6 +107,15 @@ class DanaMerchantProvisioningClient
         return $this->readinessData($body['data'] ?? null);
     }
 
+    /** @return array<string, mixed> */
+    public function storedDanaConfiguration(int $merchantId): array
+    {
+        $response = $this->send(fn (PendingRequest $request): Response => $request->get("/api/v1/internal/merchants/{$merchantId}/dana-configuration"));
+        $body = $this->decodeSuccessfulResponse($response);
+
+        return $this->storedDanaConfigurationData($body['data'] ?? null);
+    }
+
     /**
      * @param  array{environment: string, partner_id: string, merchant_id: string, private_key: string, dana_webhook_public_key: string, origin: string, channel_id: string, notification_url: string, callback_url: string, mcc: string, enabled: bool}  $attributes
      * @return array{merchant_code: string, environment: string, dana_configuration: array{available: bool, enabled: bool, ready: bool}}
@@ -364,6 +373,62 @@ class DanaMerchantProvisioningClient
                 'enabled' => $status['enabled'],
                 'ready' => $status['ready'],
             ],
+        ];
+    }
+
+    /** @return array<string, mixed> */
+    private function storedDanaConfigurationData(mixed $configuration): array
+    {
+        $status = is_array($configuration) ? ($configuration['dana_configuration'] ?? null) : null;
+        $values = is_array($configuration) ? ($configuration['configuration'] ?? null) : null;
+
+        if (! is_array($configuration)
+            || ! is_string($configuration['merchant_code'] ?? null)
+            || ($configuration['environment'] ?? null) !== 'sandbox'
+            || ! is_bool($configuration['configuration_exists'] ?? null)
+            || ! is_array($status)
+            || ! is_bool($status['available'] ?? null)
+            || ! is_bool($status['enabled'] ?? null)
+            || ! is_bool($status['ready'] ?? null)
+            || (! is_array($values) && $values !== null)
+            || ($configuration['configuration_exists'] === true && $values === null)
+            || ($configuration['configuration_exists'] === false && $values !== null)) {
+            throw new DanaMerchantProvisioningException('Respons metadata konfigurasi DANA gateway tidak valid.', 502, false);
+        }
+
+        if ($values === null) {
+            return [
+                'merchant_code' => $configuration['merchant_code'],
+                'environment' => 'sandbox',
+                'configuration_exists' => false,
+                'dana_configuration' => $status,
+                'configuration' => null,
+            ];
+        }
+
+        $stringOrNull = ['partner_id', 'merchant_id', 'origin', 'channel_id', 'notification_url', 'callback_url', 'mcc'];
+        foreach ($stringOrNull as $field) {
+            if (! is_string($values[$field] ?? null) && $values[$field] !== null) {
+                throw new DanaMerchantProvisioningException('Respons metadata konfigurasi DANA gateway tidak valid.', 502, false);
+            }
+        }
+        if (! is_bool($values['enabled'] ?? null)
+            || ! is_bool($values['private_key_configured'] ?? null)
+            || ! is_bool($values['dana_webhook_public_key_configured'] ?? null)) {
+            throw new DanaMerchantProvisioningException('Respons metadata konfigurasi DANA gateway tidak valid.', 502, false);
+        }
+
+        return [
+            'merchant_code' => $configuration['merchant_code'],
+            'environment' => 'sandbox',
+            'configuration_exists' => $configuration['configuration_exists'],
+            'dana_configuration' => $status,
+            'configuration' => collect($values)->only([
+                ...$stringOrNull,
+                'enabled',
+                'private_key_configured',
+                'dana_webhook_public_key_configured',
+            ])->all(),
         ];
     }
 

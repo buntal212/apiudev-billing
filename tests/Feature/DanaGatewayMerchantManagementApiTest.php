@@ -93,6 +93,59 @@ class DanaGatewayMerchantManagementApiTest extends TestCase
         ]);
     }
 
+    public function test_stored_dana_configuration_returns_safe_metadata_for_the_provisioned_sandbox_merchant_only(): void
+    {
+        $merchant = $this->sandboxProvisionedMerchant();
+        Http::fake([
+            "https://dana-gateway.test/api/v1/internal/merchants/{$merchant->gateway_merchant_id}/dana-configuration" => Http::response([
+                'data' => [
+                    'merchant_code' => $merchant->merchant_code,
+                    'environment' => 'sandbox',
+                    'configuration_exists' => true,
+                    'dana_configuration' => ['available' => true, 'enabled' => false, 'ready' => false],
+                    'configuration' => [
+                        'partner_id' => 'partner-sandbox',
+                        'merchant_id' => 'merchant-sandbox',
+                        'origin' => 'https://udev.example',
+                        'channel_id' => 'sandbox-channel',
+                        'notification_url' => 'https://dana.example/webhook',
+                        'callback_url' => 'https://udev.example/callback',
+                        'mcc' => '7392',
+                        'enabled' => false,
+                        'private_key_configured' => true,
+                        'dana_webhook_public_key_configured' => true,
+                    ],
+                ],
+            ]),
+        ]);
+        $this->actingAdmin();
+
+        $this->getJson($this->storedConfigurationUrl($merchant->gateway_merchant_id))
+            ->assertOk()
+            ->assertHeader('Cache-Control')
+            ->assertJsonPath('data.configuration_exists', true)
+            ->assertJsonPath('data.configuration.partner_id', 'partner-sandbox')
+            ->assertJsonPath('data.configuration.private_key_configured', true)
+            ->assertJsonMissingPath('data.configuration.private_key')
+            ->assertJsonMissingPath('data.configuration.dana_webhook_public_key');
+
+        Http::assertSent(function (HttpRequest $request): bool {
+            $this->assertSame('GET', $request->method());
+            $this->assertSame(['Bearer '.self::ServiceToken], $request->header('Authorization'));
+
+            return true;
+        });
+    }
+
+    public function test_stored_dana_configuration_does_not_call_gateway_for_unprovisioned_merchants(): void
+    {
+        $this->actingAdmin();
+
+        $this->getJson($this->storedConfigurationUrl(999999))->assertNotFound();
+
+        Http::assertNothingSent();
+    }
+
     public function test_sandbox_configuration_is_idempotent_audited_and_never_returns_or_persists_credentials(): void
     {
         $merchant = $this->sandboxProvisionedMerchant();
@@ -436,6 +489,11 @@ class DanaGatewayMerchantManagementApiTest extends TestCase
     }
 
     private function configurationUrl(int $merchantId): string
+    {
+        return "/api/v1/admin/dana-gateway-merchants/{$merchantId}/dana-configuration";
+    }
+
+    private function storedConfigurationUrl(int $merchantId): string
     {
         return "/api/v1/admin/dana-gateway-merchants/{$merchantId}/dana-configuration";
     }
