@@ -8,6 +8,20 @@ use Illuminate\Support\Facades\Http;
 
 class DanaGatewayClient
 {
+    /** @return array<string, mixed> */
+    public function findPayment(DanaGatewayMerchant $merchant, string $paymentId): array
+    {
+        $response = $this->request($merchant)->get("/api/v1/payments/{$paymentId}/status");
+        $body = $this->decodeSuccessfulResponse($response);
+        $payment = $body['data'] ?? null;
+
+        if (! is_array($payment)) {
+            throw new DanaGatewayException('Respons status pembayaran gateway tidak valid.', false);
+        }
+
+        return $payment;
+    }
+
     /** @return array<string, mixed>|null */
     public function findPaymentByMerchantOrderId(DanaGatewayMerchant $merchant, string $merchantOrderId): ?array
     {

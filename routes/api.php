@@ -10,7 +10,12 @@ use App\Http\Controllers\Api\V1\Admin\PaymentAttemptController;
 use App\Http\Controllers\Api\V1\Admin\SubscriptionController;
 use App\Http\Controllers\Api\V1\Admin\SubscriptionPlanController;
 use App\Http\Controllers\Api\V1\Auth\AuthController;
+use App\Http\Controllers\Api\V1\PaymentResultController;
 use Illuminate\Support\Facades\Route;
+
+Route::get('v1/payment-results/{reference}', [PaymentResultController::class, 'show'])
+    ->whereUlid('reference')
+    ->middleware('throttle:payment-result');
 
 Route::prefix('v1/auth')->group(function (): void {
     Route::post('login', [AuthController::class, 'login'])->middleware('throttle:admin-login');

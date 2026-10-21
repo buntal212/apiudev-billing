@@ -29,5 +29,9 @@ class AppServiceProvider extends ServiceProvider
         RateLimiter::for('admin-dana-gateway-merchants', function (Request $request): Limit {
             return Limit::perMinute(10)->by('admin-dana-gateway-merchants:'.$request->user()?->getAuthIdentifier().':'.$request->ip());
         });
+
+        RateLimiter::for('payment-result', function (Request $request): Limit {
+            return Limit::perMinute(30)->by('payment-result:'.$request->route('reference').':'.$request->ip());
+        });
     }
 }
