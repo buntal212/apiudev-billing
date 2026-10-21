@@ -126,6 +126,17 @@ class AuthApiTest extends TestCase
             ->assertJsonPath('message', 'Sesi Anda telah berakhir. Silakan masuk kembali.');
     }
 
+    public function test_expired_admin_token_is_unauthenticated(): void
+    {
+        $admin = User::factory()->create(['is_admin' => true]);
+        $token = $admin->createToken('test', ['admin:access'], now()->subMinute());
+
+        $this->withToken($token->plainTextToken)
+            ->getJson('/api/v1/auth/me')
+            ->assertUnauthorized()
+            ->assertJsonPath('message', 'Sesi Anda telah berakhir. Silakan masuk kembali.');
+    }
+
     public function test_non_admin_token_is_forbidden(): void
     {
         $user = User::factory()->create(['is_admin' => false]);

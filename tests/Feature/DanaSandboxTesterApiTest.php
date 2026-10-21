@@ -139,6 +139,9 @@ class DanaSandboxTesterApiTest extends TestCase
             ]),
         ]);
 
+        $this->getJson("/api/v1/admin/dana-gateway-merchants/sandbox-payment-results/{$context}")
+            ->assertUnauthorized();
+
         Sanctum::actingAs($admin, ['admin:access']);
         $this->getJson("/api/v1/admin/dana-gateway-merchants/sandbox-payment-results/{$context}")
             ->assertOk()
