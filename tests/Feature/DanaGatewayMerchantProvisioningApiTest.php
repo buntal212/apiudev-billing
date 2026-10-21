@@ -209,7 +209,8 @@ class DanaGatewayMerchantProvisioningApiTest extends TestCase
         }
 
         $this->getJson('/api/v1/admin/dana-gateway-merchants')
-            ->assertTooManyRequests();
+            ->assertTooManyRequests()
+            ->assertHeader('Retry-After');
     }
 
     /** @return array{code: string, name: string, email: string, environment: string} */

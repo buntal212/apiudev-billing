@@ -66,7 +66,22 @@ return Application::configure(basePath: dirname(__DIR__))
                 default => 'Permintaan tidak dapat diproses. Silakan coba kembali.',
             };
 
-            return response()->json(['message' => $message], $status);
+            $response = response()->json(['message' => $message], $status);
+
+            // ThrottleRequests menyediakan Retry-After, tetapi membuat respons
+            // JSON baru di sini sebelumnya menghilangkan header tersebut.
+            // Teruskan hanya metadata rate-limit yang aman agar klien dapat
+            // menghormati masa tunggu tanpa mengekspos header lain.
+            if ($status === 429 && method_exists($exception, 'getHeaders')) {
+                foreach (['Retry-After', 'X-RateLimit-Limit', 'X-RateLimit-Remaining'] as $header) {
+                    $value = $exception->getHeaders()[$header] ?? null;
+                    if (is_string($value) || is_numeric($value)) {
+                        $response->headers->set($header, (string) $value);
+                    }
+                }
+            }
+
+            return $response;
         });
 
         $exceptions->render(function (Throwable $exception, Request $request): JsonResponse {
