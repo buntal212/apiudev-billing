@@ -16,10 +16,12 @@ use App\Http\Resources\DanaGatewayMerchantResource;
 use App\Http\Resources\DanaGatewayMerchantStoredConfigurationResource;
 use App\Models\DanaMerchantApiKeyIssuance;
 use App\Models\DanaMerchantProvisioningAudit;
+use App\Models\User;
 use App\Services\DanaMerchantApiKeyIssuanceService;
 use App\Services\DanaMerchantProvisioningClient;
 use App\Services\DanaMerchantProvisioningException;
 use App\Services\DanaMerchantSecretStoreException;
+use App\Services\DanaSandboxResultContextService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Http\Resources\Json\AnonymousResourceCollection;
@@ -176,17 +178,32 @@ class DanaGatewayMerchantProvisioningController extends Controller
         return response()->json(['data' => $validation])->header('Cache-Control', 'no-store');
     }
 
-    public function createDanaSandboxTestTransaction(int $merchantId, StoreDanaSandboxTestTransactionRequest $request, DanaMerchantProvisioningClient $client): JsonResponse
+    public function createDanaSandboxTestTransaction(int $merchantId, StoreDanaSandboxTestTransactionRequest $request, DanaMerchantProvisioningClient $client, DanaSandboxResultContextService $contextService): JsonResponse
     {
         $merchant = $this->sandboxProvisionedMerchant($merchantId);
         if ($merchant === null) {
             return $this->merchantNotFound();
         }
 
+        /** @var User $admin */
+        $admin = $request->user();
+        $preparedContext = $contextService->prepare($merchant, $admin, $request->idempotencyKey());
+        $result = null;
+
         try {
-            $result = $client->createDanaSandboxTestTransaction($merchantId, $request->transactionAttributes(), $request->idempotencyKey());
+            $result = $client->createDanaSandboxTestTransaction($merchantId, [
+                ...$request->transactionAttributes(),
+                'return_context' => $preparedContext['token'],
+            ], $request->idempotencyKey());
+            $returnContext = $result['return_context'] ?? null;
+            if (! is_string($returnContext)) {
+                throw new DanaMerchantProvisioningException('Konteks hasil tester Sandbox tidak tersedia.', 502, false);
+            }
+            $contextService->bind($preparedContext['context'], $result['transaction']['id'], $returnContext);
         } catch (DanaMerchantProvisioningException $exception) {
-            $this->recordManagementAudit($request, $merchant, 'dana_sandbox_tester.transaction_created', 'failed', $exception->gatewayStatus, $exception->retryable, []);
+            $this->recordManagementAudit($request, $merchant, 'dana_sandbox_tester.transaction_created', 'failed', $exception->gatewayStatus, $exception->retryable, array_filter([
+                'payment_id' => is_array($result) && is_array($result['transaction'] ?? null) && is_string($result['transaction']['id'] ?? null) ? $result['transaction']['id'] : null,
+            ]));
 
             return $this->gatewayError($exception)->header('Cache-Control', 'no-store');
         }
@@ -196,7 +213,28 @@ class DanaGatewayMerchantProvisioningController extends Controller
             'checkout_available' => $result['transaction']['checkout_available'],
         ], $request->idempotencyKey());
 
+        unset($result['return_context']);
+        $result['result_context'] = $returnContext;
+
         return response()->json(['data' => $result], 201)->header('Cache-Control', 'no-store');
+    }
+
+    public function sandboxPaymentResult(string $context, Request $request, DanaMerchantProvisioningClient $client, DanaSandboxResultContextService $contextService): JsonResponse
+    {
+        /** @var User $admin */
+        $admin = $request->user();
+        $resultContext = $contextService->forReturn($context, $admin);
+
+        return $this->sandboxPaymentResultResponse($resultContext->gateway_merchant_id, $resultContext->gateway_payment_id, $client);
+    }
+
+    public function sandboxPaymentResultFromHistory(int $merchantId, string $paymentId, Request $request, DanaMerchantProvisioningClient $client, DanaSandboxResultContextService $contextService): JsonResponse
+    {
+        /** @var User $admin */
+        $admin = $request->user();
+        $resultContext = $contextService->forHistory($merchantId, $paymentId, $admin);
+
+        return $this->sandboxPaymentResultResponse($resultContext->gateway_merchant_id, $resultContext->gateway_payment_id, $client);
     }
 
     public function danaSandboxTestTransactionStatus(int $merchantId, string $paymentId, Request $request, DanaMerchantProvisioningClient $client): JsonResponse
@@ -415,6 +453,30 @@ class DanaGatewayMerchantProvisioningController extends Controller
     private function gatewayError(DanaMerchantProvisioningException $exception): JsonResponse
     {
         return response()->json(['message' => $exception->getMessage()], $exception->status);
+    }
+
+    private function sandboxPaymentResultResponse(int $merchantId, string $paymentId, DanaMerchantProvisioningClient $client): JsonResponse
+    {
+        $merchant = $this->sandboxProvisionedMerchant($merchantId);
+        if ($merchant === null) {
+            return $this->merchantNotFound();
+        }
+
+        try {
+            $result = $client->danaSandboxTestTransactionStatus($merchantId, $paymentId);
+        } catch (DanaMerchantProvisioningException $exception) {
+            return $this->gatewayError($exception)->header('Cache-Control', 'no-store');
+        }
+
+        $transaction = $result['transaction'];
+        if (($transaction['id'] ?? null) !== $paymentId) {
+            return response()->json(['message' => 'Data transaksi Sandbox gateway tidak cocok.'], 502)->header('Cache-Control', 'no-store');
+        }
+
+        return response()->json(['data' => [
+            'merchant' => $merchant->merchant_code,
+            'transaction' => collect($transaction)->only(['id', 'merchant_order_id', 'amount_minor', 'currency', 'status', 'created_at', 'updated_at'])->all(),
+        ]])->header('Cache-Control', 'no-store');
     }
 
     private function secretStoreError(): JsonResponse

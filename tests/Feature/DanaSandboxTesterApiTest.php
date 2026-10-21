@@ -3,6 +3,7 @@
 namespace Tests\Feature;
 
 use App\Models\DanaMerchantProvisioningAudit;
+use App\Models\DanaSandboxResultContext;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\Client\Request;
@@ -71,18 +72,22 @@ class DanaSandboxTesterApiTest extends TestCase
         ]);
     }
 
-    public function test_creating_transaction_forwards_idempotency_key_and_only_returns_valid_checkout_url(): void
+    public function test_creating_transaction_binds_a_hashed_result_context_before_returning_checkout(): void
     {
         $merchant = $this->sandboxProvisionedMerchant();
         $idempotencyKey = 'frontend-sandbox-tester-action-001';
+        $gatewayContext = null;
         Http::fake([
-            "https://dana-gateway.test/api/v1/internal/merchants/{$merchant->gateway_merchant_id}/sandbox-tester/transactions" => Http::response([
-                'data' => $this->transaction($merchant->merchant_code),
-            ], 201),
-        ]);
-        $this->actingAdmin();
+            "https://dana-gateway.test/api/v1/internal/merchants/{$merchant->gateway_merchant_id}/sandbox-tester/transactions" => function (Request $request) use ($merchant, &$gatewayContext) {
+                $gatewayContext = $request->data()['return_context'] ?? null;
 
-        $this->withHeader('Idempotency-Key', $idempotencyKey)
+                return Http::response(['data' => $this->transaction($merchant->merchant_code, $gatewayContext)], 201);
+            },
+        ]);
+        $admin = User::factory()->create(['is_admin' => true]);
+        Sanctum::actingAs($admin, ['admin:access']);
+
+        $response = $this->withHeader('Idempotency-Key', $idempotencyKey)
             ->postJson($this->transactionUrl($merchant->gateway_merchant_id), ['amount_minor' => 10_000])
             ->assertCreated()
             ->assertJsonPath('data.transaction.status', 'pending')
@@ -90,16 +95,64 @@ class DanaSandboxTesterApiTest extends TestCase
             ->assertJsonPath('data.transaction.checkout_url', 'https://checkout.sandbox.dana.id/session/udev-test')
             ->assertJsonMissingPath('data.transaction.private_key');
 
+        $resultContext = $response->json('data.result_context');
+        $this->assertIsString($gatewayContext);
+        $this->assertMatchesRegularExpression('/\A[A-Za-z0-9_-]{43}\z/', $gatewayContext);
+        $this->assertSame($gatewayContext, $resultContext);
+        $this->assertDatabaseHas('dana_sandbox_result_contexts', [
+            'admin_user_id' => $admin->id,
+            'gateway_merchant_id' => $merchant->gateway_merchant_id,
+            'gateway_payment_id' => '01K7A2M3N4P5Q6R7S8T9V0W1X2',
+            'context_hash' => hash('sha256', $gatewayContext),
+        ]);
+
         Http::assertSent(function (Request $request) use ($idempotencyKey): bool {
             return $request->method() === 'POST'
                 && $request->header('Idempotency-Key') === [$idempotencyKey]
-                && $request->data() === ['amount_minor' => 10_000]
+                && $request->data()['amount_minor'] === 10_000
+                && is_string($request->data()['return_context'] ?? null)
                 && $request->header('Authorization') === ['Bearer '.self::ServiceToken];
         });
         $this->assertDatabaseHas('dana_merchant_provisioning_audits', [
             'operation' => 'dana_sandbox_tester.transaction_created',
             'status' => 'succeeded',
         ]);
+    }
+
+    public function test_result_endpoint_requires_the_creating_admin_valid_context_and_matching_merchant_payment(): void
+    {
+        $merchant = $this->sandboxProvisionedMerchant();
+        $paymentId = '01K7A2M3N4P5Q6R7S8T9V0W1X2';
+        $context = str_repeat('A', 43);
+        $admin = User::factory()->create(['is_admin' => true]);
+        DanaSandboxResultContext::query()->create([
+            'admin_user_id' => $admin->id,
+            'gateway_merchant_id' => $merchant->gateway_merchant_id,
+            'gateway_payment_id' => $paymentId,
+            'context_hash' => hash('sha256', $context),
+            'idempotency_fingerprint' => hash('sha256', 'result-endpoint-test'),
+            'expires_at' => now()->addMinutes(20),
+        ]);
+        Http::fake([
+            "https://dana-gateway.test/api/v1/internal/merchants/{$merchant->gateway_merchant_id}/sandbox-tester/transactions/{$paymentId}/status" => Http::response([
+                'data' => $this->transaction($merchant->merchant_code),
+            ]),
+        ]);
+
+        Sanctum::actingAs($admin, ['admin:access']);
+        $this->getJson("/api/v1/admin/dana-gateway-merchants/sandbox-payment-results/{$context}")
+            ->assertOk()
+            ->assertHeader('Cache-Control', 'no-store, private')
+            ->assertJsonPath('data.transaction.id', $paymentId)
+            ->assertJsonPath('data.transaction.status', 'pending');
+
+        $this->getJson("/api/v1/admin/dana-gateway-merchants/{$merchant->gateway_merchant_id}/sandbox-tester/transactions/{$paymentId}/result")
+            ->assertOk()
+            ->assertJsonPath('data.transaction.id', $paymentId);
+
+        Sanctum::actingAs(User::factory()->create(['is_admin' => true]), ['admin:access']);
+        $this->getJson("/api/v1/admin/dana-gateway-merchants/sandbox-payment-results/{$context}")->assertNotFound();
+        $this->getJson("/api/v1/admin/dana-gateway-merchants/{$merchant->gateway_merchant_id}/sandbox-tester/transactions/{$paymentId}/result")->assertForbidden();
     }
 
     public function test_tester_history_is_sanitized_before_it_reaches_the_admin_ui(): void
@@ -159,9 +212,9 @@ class DanaSandboxTesterApiTest extends TestCase
     }
 
     /** @return array<string, mixed> */
-    private function transaction(string $merchantCode): array
+    private function transaction(string $merchantCode, ?string $returnContext = null): array
     {
-        return [
+        return array_filter([
             'merchant_code' => $merchantCode,
             'environment' => 'sandbox',
             'authentication' => [
@@ -179,7 +232,8 @@ class DanaSandboxTesterApiTest extends TestCase
                 'created_at' => '2026-10-17T10:00:00+07:00',
                 'updated_at' => '2026-10-17T10:00:00+07:00',
             ],
-        ];
+            'return_context' => $returnContext,
+        ], static fn (mixed $value): bool => $value !== null);
     }
 
     private function sandboxProvisionedMerchant(array $overrides = []): DanaMerchantProvisioningAudit

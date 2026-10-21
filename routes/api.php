@@ -46,6 +46,13 @@ Route::prefix('v1/admin')
             Route::get('{merchantId}/sandbox-tester/transactions/{paymentId}/status', [DanaGatewayMerchantProvisioningController::class, 'danaSandboxTestTransactionStatus'])
                 ->whereNumber('merchantId')
                 ->whereUlid('paymentId');
+            Route::get('sandbox-payment-results/{context}', [DanaGatewayMerchantProvisioningController::class, 'sandboxPaymentResult'])
+                ->where('context', '[A-Za-z0-9_-]{43}')
+                ->middleware('throttle:admin-sandbox-payment-result');
+            Route::get('{merchantId}/sandbox-tester/transactions/{paymentId}/result', [DanaGatewayMerchantProvisioningController::class, 'sandboxPaymentResultFromHistory'])
+                ->whereNumber('merchantId')
+                ->whereUlid('paymentId')
+                ->middleware('throttle:admin-sandbox-payment-result');
             Route::get('{merchantId}/api-keys', [DanaGatewayMerchantProvisioningController::class, 'apiKeys'])->whereNumber('merchantId');
             Route::post('{merchantId}/api-keys/issue', [DanaGatewayMerchantProvisioningController::class, 'issueApiKey'])->whereNumber('merchantId');
             Route::get('{merchantId}/api-key-issuances', [DanaGatewayMerchantProvisioningController::class, 'issuances'])->whereNumber('merchantId');

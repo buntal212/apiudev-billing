@@ -33,5 +33,9 @@ class AppServiceProvider extends ServiceProvider
         RateLimiter::for('payment-result', function (Request $request): Limit {
             return Limit::perMinute(30)->by('payment-result:'.$request->route('reference').':'.$request->ip());
         });
+
+        RateLimiter::for('admin-sandbox-payment-result', function (Request $request): Limit {
+            return Limit::perMinute(30)->by('admin-sandbox-payment-result:'.$request->user()?->getAuthIdentifier().':'.$request->ip());
+        });
     }
 }

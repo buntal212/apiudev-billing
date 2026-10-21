@@ -142,7 +142,7 @@ class DanaMerchantProvisioningClient
     }
 
     /**
-     * @param  array{amount_minor: int}  $attributes
+     * @param  array{amount_minor: int, return_context: string}  $attributes
      * @return array<string, mixed>
      */
     public function createDanaSandboxTestTransaction(int $merchantId, array $attributes, string $idempotencyKey): array
@@ -510,6 +510,13 @@ class DanaMerchantProvisioningClient
                 'updated_at',
             ])->all(),
         ];
+        if (array_key_exists('return_context', $result)
+            && (! is_string($result['return_context']) || preg_match('/\A[A-Za-z0-9_-]{43}\z/', $result['return_context']) !== 1)) {
+            throw new DanaMerchantProvisioningException('Respons konteks hasil tester Sandbox tidak valid.', 502, false);
+        }
+        if (is_string($result['return_context'] ?? null)) {
+            $data['return_context'] = $result['return_context'];
+        }
         if (is_array($authentication) && is_string($authentication['status'] ?? null) && is_string($authentication['message'] ?? null)) {
             $data['authentication'] = collect($authentication)->only(['status', 'message'])->all();
         }
