@@ -46,6 +46,11 @@ Route::prefix('v1/admin')
             Route::get('{merchantId}/sandbox-tester/transactions/{paymentId}/status', [DanaGatewayMerchantProvisioningController::class, 'danaSandboxTestTransactionStatus'])
                 ->whereNumber('merchantId')
                 ->whereUlid('paymentId');
+            Route::get('{merchantId}/sandbox-tester/payments', [DanaGatewayMerchantProvisioningController::class, 'danaSandboxPayments'])
+                ->whereNumber('merchantId');
+            Route::get('{merchantId}/sandbox-tester/payments/{paymentId}', [DanaGatewayMerchantProvisioningController::class, 'danaSandboxPaymentDetail'])
+                ->whereNumber('merchantId')
+                ->whereUlid('paymentId');
             Route::get('sandbox-payment-results/{context}', [DanaGatewayMerchantProvisioningController::class, 'sandboxPaymentResult'])
                 ->where('context', '[A-Za-z0-9_-]{43}')
                 ->middleware('throttle:admin-sandbox-payment-result');

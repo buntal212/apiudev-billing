@@ -187,6 +187,82 @@ class DanaSandboxTesterApiTest extends TestCase
             ->assertDontSee('must-not-reach-ui');
     }
 
+    public function test_tester_history_forwards_the_requested_page_to_the_gateway(): void
+    {
+        $merchant = $this->sandboxProvisionedMerchant();
+        $requestedPages = [];
+        Http::fake([
+            "https://dana-gateway.test/api/v1/internal/merchants/{$merchant->gateway_merchant_id}/sandbox-tester/transactions*" => function (Request $request) use ($merchant, &$requestedPages) {
+                parse_str((string) parse_url($request->url(), PHP_URL_QUERY), $query);
+                $page = (int) ($query['page'] ?? 1);
+                $requestedPages[] = $page;
+
+                return Http::response([
+                    'data' => [[
+                        'id' => $page,
+                        'merchant_code' => $merchant->merchant_code,
+                        'environment' => 'sandbox',
+                        'operation' => 'transaction_created',
+                        'status' => 'succeeded',
+                        'message' => 'Checkout Sandbox berhasil dibuat.',
+                        'payment_id' => null,
+                        'payment_status' => null,
+                        'created_at' => '2026-10-17T10:00:00+07:00',
+                    ]],
+                    'meta' => ['current_page' => $page, 'per_page' => 1, 'total' => 3, 'last_page' => 3],
+                ]);
+            },
+        ]);
+        $this->actingAdmin();
+
+        foreach ([1, 2, 3] as $page) {
+            $this->getJson($this->transactionUrl($merchant->gateway_merchant_id)."?page={$page}&per_page=1")
+                ->assertOk()
+                ->assertJsonPath('data.0.id', $page)
+                ->assertJsonPath('meta.current_page', $page);
+        }
+
+        $this->assertSame([1, 2, 3], $requestedPages);
+    }
+
+    public function test_payment_history_uses_verified_transaction_status_and_keeps_admin_isolation(): void
+    {
+        $merchant = $this->sandboxProvisionedMerchant();
+        $paymentId = '01K7A2M3N4P5Q6R7S8T9V0W1X2';
+        $admin = User::factory()->create(['is_admin' => true]);
+        DanaSandboxResultContext::query()->create([
+            'admin_user_id' => $admin->id,
+            'gateway_merchant_id' => $merchant->gateway_merchant_id,
+            'gateway_payment_id' => $paymentId,
+            'context_hash' => hash('sha256', 'payment-history-context'),
+            'idempotency_fingerprint' => hash('sha256', 'payment-history-test'),
+            'expires_at' => now()->subMinute(),
+        ]);
+        Http::fake([
+            "https://dana-gateway.test/api/v1/internal/merchants/{$merchant->gateway_merchant_id}/sandbox-tester/transactions/{$paymentId}/status" => Http::response([
+                'data' => $this->transaction($merchant->merchant_code, null, $paymentId, 'paid'),
+            ]),
+        ]);
+
+        $paymentsUrl = "/api/v1/admin/dana-gateway-merchants/{$merchant->gateway_merchant_id}/sandbox-tester/payments";
+        $this->getJson($paymentsUrl)->assertUnauthorized();
+
+        Sanctum::actingAs($admin, ['admin:access']);
+        $this->getJson($paymentsUrl)
+            ->assertOk()
+            ->assertJsonPath('data.0.transaction.id', $paymentId)
+            ->assertJsonPath('data.0.transaction.status', 'paid')
+            ->assertJsonPath('data.0.status_source', 'gateway_verified_payment_record')
+            ->assertJsonMissingPath('data.0.transaction.checkout_url');
+
+        $this->getJson("{$paymentsUrl}/{$paymentId}")
+            ->assertOk()
+            ->assertJsonPath('data.transaction.status', 'paid');
+
+        Sanctum::actingAs(User::factory()->create(['is_admin' => true]), ['admin:access']);
+        $this->getJson("{$paymentsUrl}/{$paymentId}")->assertForbidden();
+    }
+
     /** @return array<string, mixed> */
     private function validation(string $merchantCode, string $privateKey): array
     {
@@ -215,7 +291,12 @@ class DanaSandboxTesterApiTest extends TestCase
     }
 
     /** @return array<string, mixed> */
-    private function transaction(string $merchantCode, ?string $returnContext = null): array
+    private function transaction(
+        string $merchantCode,
+        ?string $returnContext = null,
+        string $paymentId = '01K7A2M3N4P5Q6R7S8T9V0W1X2',
+        string $status = 'pending',
+    ): array
     {
         return array_filter([
             'merchant_code' => $merchantCode,
@@ -225,11 +306,11 @@ class DanaSandboxTesterApiTest extends TestCase
                 'message' => 'Create Order Sandbox diterima dengan respons checkout yang valid.',
             ],
             'transaction' => [
-                'id' => '01K7A2M3N4P5Q6R7S8T9V0W1X2',
+                'id' => $paymentId,
                 'merchant_order_id' => 'UDEV-SANDBOX-001',
                 'amount_minor' => 10_000,
                 'currency' => 'IDR',
-                'status' => 'pending',
+                'status' => $status,
                 'checkout_url' => 'https://checkout.sandbox.dana.id/session/udev-test',
                 'checkout_available' => true,
                 'created_at' => '2026-10-17T10:00:00+07:00',
