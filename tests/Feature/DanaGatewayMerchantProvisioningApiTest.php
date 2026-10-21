@@ -8,7 +8,9 @@ use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Http\Client\Request as HttpRequest;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Log;
 use Laravel\Sanctum\Sanctum;
+use Mockery;
 use Tests\TestCase;
 
 class DanaGatewayMerchantProvisioningApiTest extends TestCase
@@ -211,6 +213,41 @@ class DanaGatewayMerchantProvisioningApiTest extends TestCase
         $this->getJson('/api/v1/admin/dana-gateway-merchants')
             ->assertTooManyRequests()
             ->assertHeader('Retry-After');
+    }
+
+    public function test_read_and_write_buckets_are_separate_and_throttle_log_is_safe(): void
+    {
+        Http::fake(function (HttpRequest $request): mixed {
+            return $request->method() === 'GET'
+                ? Http::response(['data' => [$this->merchant()], 'meta' => ['current_page' => 1, 'per_page' => 15, 'total' => 1, 'last_page' => 1]])
+                : Http::response(['data' => $this->merchant()], 201);
+        });
+        Log::spy();
+        $this->actingAdmin();
+
+        foreach (range(1, 10) as $attempt) {
+            $this->getJson('/api/v1/admin/dana-gateway-merchants')->assertOk();
+        }
+
+        // Aktivitas baca tidak menghabiskan bucket operasi mutasi.
+        $this->postJson('/api/v1/admin/dana-gateway-merchants', $this->payload())->assertCreated();
+
+        foreach (range(1, 4) as $attempt) {
+            $this->postJson('/api/v1/admin/dana-gateway-merchants', $this->payload(['code' => "udev-salon-{$attempt}"]))->assertCreated();
+        }
+        $this->postJson('/api/v1/admin/dana-gateway-merchants', $this->payload(['code' => 'udev-salon-limit']))
+            ->assertTooManyRequests()
+            ->assertHeader('Retry-After');
+
+        Log::shouldHaveReceived('warning')
+            ->once()
+            ->with('Admin API request throttled.', Mockery::on(function (array $context): bool {
+                return str_contains((string) ($context['route'] ?? ''), 'dana-gateway-merchants')
+                    && is_int($context['admin_id'] ?? null)
+                    && ($context['status'] ?? null) === 429
+                    && array_key_exists('occurred_at', $context)
+                    && ! array_key_exists('token', $context);
+            }));
     }
 
     /** @return array{code: string, name: string, email: string, environment: string} */

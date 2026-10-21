@@ -9,6 +9,7 @@ use Illuminate\Foundation\Configuration\Exceptions;
 use Illuminate\Foundation\Configuration\Middleware;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Validation\ValidationException;
 use Laravel\Sanctum\Http\Middleware\CheckAbilities;
 use Symfony\Component\HttpKernel\Exception\HttpExceptionInterface;
@@ -67,6 +68,19 @@ return Application::configure(basePath: dirname(__DIR__))
             };
 
             $response = response()->json(['message' => $message], $status);
+
+            if ($status === 429 && str_starts_with($request->path(), 'api/v1/admin/')) {
+                Log::warning('Admin API request throttled.', [
+                    'route' => $request->route()?->getName() ?: $request->path(),
+                    'method' => $request->method(),
+                    'admin_id' => $request->user()?->getAuthIdentifier(),
+                    'status' => $status,
+                    'occurred_at' => now()->toIso8601String(),
+                    'retry_after' => $exception->getHeaders()['Retry-After'] ?? null,
+                    'rate_limit' => $exception->getHeaders()['X-RateLimit-Limit'] ?? null,
+                    'rate_remaining' => $exception->getHeaders()['X-RateLimit-Remaining'] ?? null,
+                ]);
+            }
 
             // ThrottleRequests menyediakan Retry-After, tetapi membuat respons
             // JSON baru di sini sebelumnya menghilangkan header tersebut.
