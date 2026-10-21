@@ -133,6 +133,52 @@ class DanaMerchantProvisioningClient
         return $this->danaConfiguration($body['data'] ?? null);
     }
 
+    /** @return array<string, mixed> */
+    public function validateDanaSandboxTester(int $merchantId): array
+    {
+        $response = $this->send(fn (PendingRequest $request): Response => $request->get("/api/v1/internal/merchants/{$merchantId}/sandbox-tester/validation"));
+
+        return $this->sandboxTesterValidation($this->decodeSuccessfulResponse($response)['data'] ?? null);
+    }
+
+    /**
+     * @param  array{amount_minor: int}  $attributes
+     * @return array<string, mixed>
+     */
+    public function createDanaSandboxTestTransaction(int $merchantId, array $attributes, string $idempotencyKey): array
+    {
+        $response = $this->send(fn (PendingRequest $request): Response => $request
+            ->withHeaders(['Idempotency-Key' => $idempotencyKey])
+            ->post("/api/v1/internal/merchants/{$merchantId}/sandbox-tester/transactions", $attributes));
+
+        return $this->sandboxTesterTransaction($this->decodeSuccessfulResponse($response)['data'] ?? null);
+    }
+
+    /** @return array<string, mixed> */
+    public function danaSandboxTestTransactionStatus(int $merchantId, string $paymentId): array
+    {
+        $response = $this->send(fn (PendingRequest $request): Response => $request->get("/api/v1/internal/merchants/{$merchantId}/sandbox-tester/transactions/{$paymentId}/status"));
+
+        return $this->sandboxTesterTransaction($this->decodeSuccessfulResponse($response)['data'] ?? null);
+    }
+
+    /** @return array{runs: list<array<string, mixed>>, meta: array<string, int>} */
+    public function danaSandboxTestHistory(int $merchantId, array $filters): array
+    {
+        $response = $this->send(fn (PendingRequest $request): Response => $request->get("/api/v1/internal/merchants/{$merchantId}/sandbox-tester/transactions", $filters));
+        $body = $this->decodeSuccessfulResponse($response);
+        $runs = $body['data'] ?? null;
+
+        if (! is_array($runs)) {
+            throw new DanaMerchantProvisioningException('Respons riwayat tester Sandbox tidak valid.', 502, false, $response->status());
+        }
+
+        return [
+            'runs' => array_map(fn (mixed $run): array => $this->sandboxTesterRun($run), $runs),
+            'meta' => $this->paginationMeta($body['meta'] ?? null),
+        ];
+    }
+
     /**
      * @return list<array{id: int, name: string, key_prefix: string, abilities: list<string>, is_active: bool, expires_at: string|null, revoked_at: string|null, last_used_at: string|null, created_at: string|null}>
      */
@@ -374,6 +420,118 @@ class DanaMerchantProvisioningClient
                 'ready' => $status['ready'],
             ],
         ];
+    }
+
+    /** @return array<string, mixed> */
+    private function sandboxTesterValidation(mixed $validation): array
+    {
+        $requiredFields = is_array($validation) ? ($validation['required_fields'] ?? null) : null;
+        $privateKey = is_array($validation) ? ($validation['private_key'] ?? null) : null;
+        $publicKey = is_array($validation) ? ($validation['dana_webhook_public_key'] ?? null) : null;
+        $authentication = is_array($validation) ? ($validation['authentication'] ?? null) : null;
+        $fieldNames = ['merchant_id', 'partner_id', 'origin', 'channel_id', 'notification_url', 'pay_return_url', 'mcc'];
+
+        if (! is_array($validation)
+            || ! is_string($validation['merchant_code'] ?? null)
+            || ($validation['environment'] ?? null) !== 'sandbox'
+            || ! is_bool($validation['configuration_exists'] ?? null)
+            || ! is_bool($validation['enabled'] ?? null)
+            || ! is_array($requiredFields)
+            || ! is_array($privateKey)
+            || ! is_array($publicKey)
+            || ! is_bool($validation['format_valid'] ?? null)
+            || ! is_array($authentication)
+            || ! is_string($authentication['status'] ?? null)
+            || ! is_string($authentication['message'] ?? null)) {
+            throw new DanaMerchantProvisioningException('Respons validasi tester Sandbox tidak valid.', 502, false);
+        }
+
+        foreach ($fieldNames as $fieldName) {
+            if (! is_bool($requiredFields[$fieldName] ?? null)) {
+                throw new DanaMerchantProvisioningException('Respons validasi tester Sandbox tidak valid.', 502, false);
+            }
+        }
+        foreach ([$privateKey, $publicKey] as $key) {
+            if (! is_bool($key['configured'] ?? null) || ! is_bool($key['format_valid'] ?? null)) {
+                throw new DanaMerchantProvisioningException('Respons validasi tester Sandbox tidak valid.', 502, false);
+            }
+        }
+
+        return [
+            'merchant_code' => $validation['merchant_code'],
+            'environment' => 'sandbox',
+            'configuration_exists' => $validation['configuration_exists'],
+            'enabled' => $validation['enabled'],
+            'required_fields' => collect($requiredFields)->only($fieldNames)->all(),
+            'private_key' => collect($privateKey)->only(['configured', 'format_valid'])->all(),
+            'dana_webhook_public_key' => collect($publicKey)->only(['configured', 'format_valid'])->all(),
+            'format_valid' => $validation['format_valid'],
+            'authentication' => collect($authentication)->only(['status', 'message'])->all(),
+        ];
+    }
+
+    /** @return array<string, mixed> */
+    private function sandboxTesterTransaction(mixed $result): array
+    {
+        $transaction = is_array($result) ? ($result['transaction'] ?? null) : null;
+        $authentication = is_array($result) ? ($result['authentication'] ?? null) : null;
+
+        if (! is_array($result)
+            || ! is_string($result['merchant_code'] ?? null)
+            || ($result['environment'] ?? null) !== 'sandbox'
+            || ! is_array($transaction)
+            || ! is_string($transaction['id'] ?? null)
+            || ! is_string($transaction['merchant_order_id'] ?? null)
+            || ! is_int($transaction['amount_minor'] ?? null)
+            || ($transaction['currency'] ?? null) !== 'IDR'
+            || ! is_string($transaction['status'] ?? null)
+            || ! is_bool($transaction['checkout_available'] ?? null)
+            || (! is_string($transaction['checkout_url'] ?? null) && $transaction['checkout_url'] !== null)) {
+            throw new DanaMerchantProvisioningException('Respons transaksi tester Sandbox tidak valid.', 502, false);
+        }
+
+        $checkoutUrl = $transaction['checkout_url'];
+        if ($checkoutUrl !== null && (! filter_var($checkoutUrl, FILTER_VALIDATE_URL) || ! str_starts_with(strtolower($checkoutUrl), 'https://'))) {
+            throw new DanaMerchantProvisioningException('URL checkout tester Sandbox tidak valid.', 502, false);
+        }
+
+        $data = [
+            'merchant_code' => $result['merchant_code'],
+            'environment' => 'sandbox',
+            'transaction' => collect($transaction)->only([
+                'id',
+                'merchant_order_id',
+                'amount_minor',
+                'currency',
+                'status',
+                'checkout_url',
+                'checkout_available',
+                'created_at',
+                'updated_at',
+            ])->all(),
+        ];
+        if (is_array($authentication) && is_string($authentication['status'] ?? null) && is_string($authentication['message'] ?? null)) {
+            $data['authentication'] = collect($authentication)->only(['status', 'message'])->all();
+        }
+
+        return $data;
+    }
+
+    /** @return array<string, mixed> */
+    private function sandboxTesterRun(mixed $run): array
+    {
+        $fields = ['id', 'merchant_code', 'environment', 'operation', 'status', 'message', 'payment_id', 'payment_status', 'created_at'];
+        if (! is_array($run)
+            || ! is_int($run['id'] ?? null)
+            || ! is_string($run['merchant_code'] ?? null)
+            || ($run['environment'] ?? null) !== 'sandbox'
+            || ! is_string($run['operation'] ?? null)
+            || ! is_string($run['status'] ?? null)
+            || ! is_string($run['message'] ?? null)) {
+            throw new DanaMerchantProvisioningException('Respons riwayat tester Sandbox tidak valid.', 502, false);
+        }
+
+        return collect($run)->only($fields)->all();
     }
 
     /** @return array<string, mixed> */

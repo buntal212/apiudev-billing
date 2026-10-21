@@ -7,6 +7,7 @@ use App\Http\Requests\ListInternalDanaGatewayMerchantsRequest;
 use App\Http\Requests\RevokeDanaGatewayMerchantApiKeyRequest;
 use App\Http\Requests\StoreDanaGatewayMerchantDanaConfigurationRequest;
 use App\Http\Requests\StoreDanaGatewayMerchantRequest;
+use App\Http\Requests\StoreDanaSandboxTestTransactionRequest;
 use App\Http\Resources\DanaGatewayMerchantApiKeyResource;
 use App\Http\Resources\DanaGatewayMerchantApiKeyRevocationResource;
 use App\Http\Resources\DanaGatewayMerchantDanaConfigurationResource;
@@ -151,6 +152,91 @@ class DanaGatewayMerchantProvisioningController extends Controller
         } catch (DanaMerchantProvisioningException $exception) {
             return $this->gatewayError($exception)->header('Cache-Control', 'no-store');
         }
+    }
+
+    public function validateDanaSandboxTester(int $merchantId, Request $request, DanaMerchantProvisioningClient $client): JsonResponse
+    {
+        $merchant = $this->sandboxProvisionedMerchant($merchantId);
+        if ($merchant === null) {
+            return $this->merchantNotFound();
+        }
+
+        try {
+            $validation = $client->validateDanaSandboxTester($merchantId);
+        } catch (DanaMerchantProvisioningException $exception) {
+            $this->recordManagementAudit($request, $merchant, 'dana_sandbox_tester.configuration_validated', 'failed', $exception->gatewayStatus, $exception->retryable, []);
+
+            return $this->gatewayError($exception)->header('Cache-Control', 'no-store');
+        }
+
+        $this->recordManagementAudit($request, $merchant, 'dana_sandbox_tester.configuration_validated', $validation['format_valid'] ? 'succeeded' : 'failed', 200, false, [
+            'format_valid' => $validation['format_valid'],
+        ]);
+
+        return response()->json(['data' => $validation])->header('Cache-Control', 'no-store');
+    }
+
+    public function createDanaSandboxTestTransaction(int $merchantId, StoreDanaSandboxTestTransactionRequest $request, DanaMerchantProvisioningClient $client): JsonResponse
+    {
+        $merchant = $this->sandboxProvisionedMerchant($merchantId);
+        if ($merchant === null) {
+            return $this->merchantNotFound();
+        }
+
+        try {
+            $result = $client->createDanaSandboxTestTransaction($merchantId, $request->transactionAttributes(), $request->idempotencyKey());
+        } catch (DanaMerchantProvisioningException $exception) {
+            $this->recordManagementAudit($request, $merchant, 'dana_sandbox_tester.transaction_created', 'failed', $exception->gatewayStatus, $exception->retryable, []);
+
+            return $this->gatewayError($exception)->header('Cache-Control', 'no-store');
+        }
+
+        $this->recordManagementAudit($request, $merchant, 'dana_sandbox_tester.transaction_created', 'succeeded', 201, false, [
+            'payment_id' => $result['transaction']['id'],
+            'checkout_available' => $result['transaction']['checkout_available'],
+        ], $request->idempotencyKey());
+
+        return response()->json(['data' => $result], 201)->header('Cache-Control', 'no-store');
+    }
+
+    public function danaSandboxTestTransactionStatus(int $merchantId, string $paymentId, Request $request, DanaMerchantProvisioningClient $client): JsonResponse
+    {
+        $merchant = $this->sandboxProvisionedMerchant($merchantId);
+        if ($merchant === null) {
+            return $this->merchantNotFound();
+        }
+
+        try {
+            $result = $client->danaSandboxTestTransactionStatus($merchantId, $paymentId);
+        } catch (DanaMerchantProvisioningException $exception) {
+            $this->recordManagementAudit($request, $merchant, 'dana_sandbox_tester.transaction_status_checked', 'failed', $exception->gatewayStatus, $exception->retryable, []);
+
+            return $this->gatewayError($exception)->header('Cache-Control', 'no-store');
+        }
+
+        $this->recordManagementAudit($request, $merchant, 'dana_sandbox_tester.transaction_status_checked', 'succeeded', 200, false, [
+            'payment_id' => $result['transaction']['id'],
+            'payment_status' => $result['transaction']['status'],
+        ]);
+
+        return response()->json(['data' => $result])->header('Cache-Control', 'no-store');
+    }
+
+    public function danaSandboxTestHistory(int $merchantId, Request $request, DanaMerchantProvisioningClient $client): JsonResponse
+    {
+        $merchant = $this->sandboxProvisionedMerchant($merchantId);
+        if ($merchant === null) {
+            return $this->merchantNotFound();
+        }
+
+        $validated = $request->validate(['per_page' => ['nullable', 'integer', 'min:1', 'max:50']]);
+        try {
+            $result = $client->danaSandboxTestHistory($merchantId, $validated);
+        } catch (DanaMerchantProvisioningException $exception) {
+            return $this->gatewayError($exception)->header('Cache-Control', 'no-store');
+        }
+
+        return response()->json(['data' => $result['runs'], 'meta' => $result['meta']])->header('Cache-Control', 'no-store');
     }
 
     public function apiKeys(int $merchantId, Request $request, DanaMerchantProvisioningClient $client): AnonymousResourceCollection|JsonResponse
