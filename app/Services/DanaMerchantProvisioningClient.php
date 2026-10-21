@@ -179,6 +179,49 @@ class DanaMerchantProvisioningClient
         ];
     }
 
+    /** @return array<string, mixed> */
+    public function paymentAudit(int $merchantId, string $paymentId): array
+    {
+        $response = $this->send(fn (PendingRequest $request): Response => $request->get("/api/v1/internal/merchants/{$merchantId}/payments/{$paymentId}/audit"));
+        return $this->auditPayment($this->decodeSuccessfulResponse($response)['data'] ?? null);
+    }
+
+    /** @param array<string, mixed> $filters @return array{payments: list<array<string, mixed>>, meta: array<string, int>} */
+    public function paymentAuditList(int $merchantId, array $filters): array
+    {
+        $response = $this->send(fn (PendingRequest $request): Response => $request->get("/api/v1/internal/merchants/{$merchantId}/payment-audit", $filters));
+        $body = $this->decodeSuccessfulResponse($response);
+        if (! is_array($body['data'] ?? null)) {
+            throw new DanaMerchantProvisioningException('Respons daftar audit pembayaran gateway tidak valid.', 502, false, $response->status());
+        }
+
+        return ['payments' => array_map(fn (mixed $payment): array => $this->auditPayment($payment), $body['data']), 'meta' => $this->paginationMeta($body['meta'] ?? null)];
+    }
+
+    /** @param array<string, mixed> $filters @return array<string, mixed> */
+    public function paymentAuditSummary(int $merchantId, array $filters): array
+    {
+        $response = $this->send(fn (PendingRequest $request): Response => $request->get("/api/v1/internal/merchants/{$merchantId}/payment-audit/summary", $filters));
+        $data = $this->decodeSuccessfulResponse($response)['data'] ?? null;
+        if (! is_array($data) || ! is_int($data['total'] ?? null) || ! is_int($data['paid'] ?? null) || ! is_int($data['pending'] ?? null) || ! is_int($data['failed_or_expired'] ?? null) || ! is_array($data['paid_amounts'] ?? null)) {
+            throw new DanaMerchantProvisioningException('Respons ringkasan audit pembayaran gateway tidak valid.', 502, false, $response->status());
+        }
+
+        return $data;
+    }
+
+    /** @param array<string, mixed> $filters @return array{webhooks: list<array<string, mixed>>, meta: array<string, int>} */
+    public function paymentAuditWebhooks(int $merchantId, string $paymentId, array $filters): array
+    {
+        $response = $this->send(fn (PendingRequest $request): Response => $request->get("/api/v1/internal/merchants/{$merchantId}/payments/{$paymentId}/webhooks", $filters));
+        $body = $this->decodeSuccessfulResponse($response);
+        if (! is_array($body['data'] ?? null)) {
+            throw new DanaMerchantProvisioningException('Respons webhook audit pembayaran gateway tidak valid.', 502, false, $response->status());
+        }
+
+        return ['webhooks' => array_values($body['data']), 'meta' => $this->paginationMeta($body['meta'] ?? null)];
+    }
+
     /**
      * @return list<array{id: int, name: string, key_prefix: string, abilities: list<string>, is_active: bool, expires_at: string|null, revoked_at: string|null, last_used_at: string|null, created_at: string|null}>
      */
@@ -539,6 +582,25 @@ class DanaMerchantProvisioningClient
         }
 
         return collect($run)->only($fields)->all();
+    }
+
+    /** @return array<string, mixed> */
+    private function auditPayment(mixed $payment): array
+    {
+        $required = ['id', 'merchant_reference', 'amount_minor', 'currency', 'status', 'created_at', 'updated_at', 'gateway_verified_at'];
+        if (! is_array($payment) || ! is_string($payment['id'] ?? null) || ! is_int($payment['amount_minor'] ?? null) || ! is_string($payment['currency'] ?? null) || ! is_string($payment['status'] ?? null)) {
+            throw new DanaMerchantProvisioningException('Respons audit pembayaran gateway tidak valid.', 502, false);
+        }
+        foreach (['merchant_reference', 'provider_order_reference', 'created_at', 'updated_at', 'gateway_verified_at'] as $field) {
+            if (! is_string($payment[$field] ?? null) && $payment[$field] !== null) {
+                throw new DanaMerchantProvisioningException('Respons audit pembayaran gateway tidak valid.', 502, false);
+            }
+        }
+        if (array_key_exists('timeline', $payment) && (! is_array($payment['timeline']) || collect($payment['timeline'])->contains(fn (mixed $event): bool => ! is_array($event)))) {
+            throw new DanaMerchantProvisioningException('Respons audit pembayaran gateway tidak valid.', 502, false);
+        }
+
+        return collect($payment)->only([...$required, 'provider_order_reference', 'timeline'])->all();
     }
 
     /** @return array<string, mixed> */

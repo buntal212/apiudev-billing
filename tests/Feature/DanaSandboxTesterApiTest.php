@@ -239,8 +239,19 @@ class DanaSandboxTesterApiTest extends TestCase
             'expires_at' => now()->subMinute(),
         ]);
         Http::fake([
-            "https://dana-gateway.test/api/v1/internal/merchants/{$merchant->gateway_merchant_id}/sandbox-tester/transactions/{$paymentId}/status" => Http::response([
-                'data' => $this->transaction($merchant->merchant_code, null, $paymentId, 'paid'),
+            "https://dana-gateway.test/api/v1/internal/merchants/{$merchant->gateway_merchant_id}/payment-audit/summary*" => Http::response([
+                'data' => ['total' => 1, 'paid' => 1, 'pending' => 0, 'failed_or_expired' => 0, 'paid_amounts' => [['currency' => 'IDR', 'paid_amount_minor' => 10000]]],
+            ]),
+            "https://dana-gateway.test/api/v1/internal/merchants/{$merchant->gateway_merchant_id}/payments/{$paymentId}/webhooks*" => Http::response([
+                'data' => [['received_at' => '2026-10-17T10:01:00+07:00', 'processed_at' => '2026-10-17T10:01:01+07:00', 'signature_valid' => true, 'processing_status' => 'processed', 'error_code' => null, 'provider_event_id' => null]],
+                'meta' => ['current_page' => 1, 'per_page' => 15, 'total' => 1, 'last_page' => 1],
+            ]),
+            "https://dana-gateway.test/api/v1/internal/merchants/{$merchant->gateway_merchant_id}/payment-audit*" => Http::response([
+                'data' => [$this->auditPayment($paymentId, 'paid')],
+                'meta' => ['current_page' => 1, 'per_page' => 15, 'total' => 1, 'last_page' => 1],
+            ]),
+            "https://dana-gateway.test/api/v1/internal/merchants/{$merchant->gateway_merchant_id}/payments/{$paymentId}/audit" => Http::response([
+                'data' => $this->auditPayment($paymentId, 'paid', true),
             ]),
         ]);
 
@@ -250,14 +261,21 @@ class DanaSandboxTesterApiTest extends TestCase
         Sanctum::actingAs($admin, ['admin:access']);
         $this->getJson($paymentsUrl)
             ->assertOk()
-            ->assertJsonPath('data.0.transaction.id', $paymentId)
-            ->assertJsonPath('data.0.transaction.status', 'paid')
-            ->assertJsonPath('data.0.status_source', 'gateway_verified_payment_record')
-            ->assertJsonMissingPath('data.0.transaction.checkout_url');
+            ->assertJsonPath('data.0.id', $paymentId)
+            ->assertJsonPath('data.0.status', 'paid')
+            ->assertJsonMissingPath('data.0.checkout_url');
 
         $this->getJson("{$paymentsUrl}/{$paymentId}")
             ->assertOk()
-            ->assertJsonPath('data.transaction.status', 'paid');
+            ->assertJsonPath('data.status', 'paid');
+        $this->getJson("{$paymentsUrl}/summary")
+            ->assertOk()
+            ->assertJsonPath('data.paid', 1)
+            ->assertJsonPath('data.paid_amounts.0.currency', 'IDR');
+        $this->getJson("{$paymentsUrl}/{$paymentId}/webhooks")
+            ->assertOk()
+            ->assertJsonPath('data.0.signature_valid', true)
+            ->assertJsonMissingPath('data.0.payload_sha256');
 
         Sanctum::actingAs(User::factory()->create(['is_admin' => true]), ['admin:access']);
         $this->getJson("{$paymentsUrl}/{$paymentId}")->assertForbidden();
@@ -318,6 +336,27 @@ class DanaSandboxTesterApiTest extends TestCase
             ],
             'return_context' => $returnContext,
         ], static fn (mixed $value): bool => $value !== null);
+    }
+
+    /** @return array<string, mixed> */
+    private function auditPayment(string $paymentId, string $status, bool $withTimeline = false): array
+    {
+        $payment = [
+            'id' => $paymentId,
+            'merchant_reference' => 'UDEV-SANDBOX-001',
+            'provider_order_reference' => 'DANA-ORDER-001',
+            'amount_minor' => 10_000,
+            'currency' => 'IDR',
+            'status' => $status,
+            'created_at' => '2026-10-17T10:00:00+07:00',
+            'updated_at' => '2026-10-17T10:00:00+07:00',
+            'gateway_verified_at' => $status === 'paid' ? '2026-10-17T10:01:00+07:00' : null,
+        ];
+        if ($withTimeline) {
+            $payment['timeline'] = [];
+        }
+
+        return $payment;
     }
 
     private function sandboxProvisionedMerchant(array $overrides = []): DanaMerchantProvisioningAudit

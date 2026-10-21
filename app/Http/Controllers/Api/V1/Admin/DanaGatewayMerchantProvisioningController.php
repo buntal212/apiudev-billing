@@ -288,34 +288,19 @@ class DanaGatewayMerchantProvisioningController extends Controller
             return $this->merchantNotFound();
         }
 
-        $validated = $request->validate([
-            'page' => ['nullable', 'integer', 'min:1'],
-            'per_page' => ['nullable', 'integer', 'min:1', 'max:50'],
-        ]);
-        $contexts = DanaSandboxResultContext::query()
-            ->where('admin_user_id', $request->user()->getAuthIdentifier())
-            ->where('gateway_merchant_id', $merchantId)
-            ->whereNotNull('gateway_payment_id')
-            ->latest('id')
-            ->paginate($validated['per_page'] ?? 15, ['*'], 'page', $validated['page'] ?? null);
+        $validated = $this->paymentAuditFilters($request);
+        $paymentIds = $this->ownedSandboxPaymentIds($merchantId, $request);
+        if ($paymentIds === []) {
+            return response()->json(['data' => [], 'meta' => ['current_page' => $validated['page'] ?? 1, 'per_page' => $validated['per_page'] ?? 15, 'total' => 0, 'last_page' => 1]])->header('Cache-Control', 'no-store');
+        }
 
         try {
-            $payments = $contexts->getCollection()
-                ->map(fn (DanaSandboxResultContext $context): array => $this->sandboxPaymentData($merchant, $context->gateway_payment_id, $client))
-                ->values();
+            $result = $client->paymentAuditList($merchantId, [...$validated, 'payment_ids' => $paymentIds]);
         } catch (DanaMerchantProvisioningException $exception) {
             return $this->gatewayError($exception)->header('Cache-Control', 'no-store');
         }
 
-        return response()->json([
-            'data' => $payments,
-            'meta' => [
-                'current_page' => $contexts->currentPage(),
-                'per_page' => $contexts->perPage(),
-                'total' => $contexts->total(),
-                'last_page' => $contexts->lastPage(),
-            ],
-        ])->header('Cache-Control', 'no-store');
+        return response()->json(['data' => $result['payments'], 'meta' => $result['meta']])->header('Cache-Control', 'no-store');
     }
 
     public function danaSandboxPaymentDetail(int $merchantId, string $paymentId, Request $request, DanaMerchantProvisioningClient $client): JsonResponse
@@ -325,18 +310,46 @@ class DanaGatewayMerchantProvisioningController extends Controller
             return $this->merchantNotFound();
         }
 
-        $isAllowed = DanaSandboxResultContext::query()
-            ->where('admin_user_id', $request->user()->getAuthIdentifier())
-            ->where('gateway_merchant_id', $merchantId)
-            ->where('gateway_payment_id', $paymentId)
-            ->exists();
-        if (! $isAllowed) {
+        if (! $this->ownsSandboxPayment($merchantId, $paymentId, $request)) {
             return response()->json(['message' => 'Transaksi Sandbox tidak dapat diakses oleh admin ini.'], 403);
         }
 
         try {
-            return response()->json(['data' => $this->sandboxPaymentData($merchant, $paymentId, $client)])
+            return response()->json(['data' => $client->paymentAudit($merchantId, $paymentId)])
                 ->header('Cache-Control', 'no-store');
+        } catch (DanaMerchantProvisioningException $exception) {
+            return $this->gatewayError($exception)->header('Cache-Control', 'no-store');
+        }
+    }
+
+    public function danaSandboxPaymentWebhooks(int $merchantId, string $paymentId, Request $request, DanaMerchantProvisioningClient $client): JsonResponse
+    {
+        if ($this->sandboxProvisionedMerchant($merchantId) === null) {
+            return $this->merchantNotFound();
+        }
+        if (! $this->ownsSandboxPayment($merchantId, $paymentId, $request)) {
+            return response()->json(['message' => 'Transaksi Sandbox tidak dapat diakses oleh admin ini.'], 403);
+        }
+        $validated = $request->validate(['per_page' => ['nullable', 'integer', 'min:1', 'max:100']]);
+        try {
+            $result = $client->paymentAuditWebhooks($merchantId, $paymentId, $validated);
+            return response()->json(['data' => $result['webhooks'], 'meta' => $result['meta']])->header('Cache-Control', 'no-store');
+        } catch (DanaMerchantProvisioningException $exception) {
+            return $this->gatewayError($exception)->header('Cache-Control', 'no-store');
+        }
+    }
+
+    public function danaSandboxPaymentSummary(int $merchantId, Request $request, DanaMerchantProvisioningClient $client): JsonResponse
+    {
+        if ($this->sandboxProvisionedMerchant($merchantId) === null) {
+            return $this->merchantNotFound();
+        }
+        $paymentIds = $this->ownedSandboxPaymentIds($merchantId, $request);
+        if ($paymentIds === []) {
+            return response()->json(['data' => ['total' => 0, 'paid' => 0, 'pending' => 0, 'failed_or_expired' => 0, 'paid_amounts' => []]])->header('Cache-Control', 'no-store');
+        }
+        try {
+            return response()->json(['data' => $client->paymentAuditSummary($merchantId, [...$this->paymentAuditFilters($request), 'payment_ids' => $paymentIds])])->header('Cache-Control', 'no-store');
         } catch (DanaMerchantProvisioningException $exception) {
             return $this->gatewayError($exception)->header('Cache-Control', 'no-store');
         }
@@ -542,6 +555,44 @@ class DanaGatewayMerchantProvisioningController extends Controller
             'merchant' => $merchant->merchant_code,
             'transaction' => collect($transaction)->only(['id', 'merchant_order_id', 'amount_minor', 'currency', 'status', 'created_at', 'updated_at'])->all(),
         ]])->header('Cache-Control', 'no-store');
+    }
+
+    /** @return array<string, mixed> */
+    private function paymentAuditFilters(Request $request): array
+    {
+        return $request->validate([
+            'page' => ['nullable', 'integer', 'min:1'],
+            'per_page' => ['nullable', 'integer', 'min:1', 'max:100'],
+            'status' => ['nullable', 'in:pending,paid,failed,expired,cancelled'],
+            'from' => ['nullable', 'date_format:Y-m-d'],
+            'to' => ['nullable', 'date_format:Y-m-d', 'after_or_equal:from'],
+            'merchant_order_id' => ['nullable', 'string', 'max:255'],
+        ]);
+    }
+
+    /** @return list<string> */
+    private function ownedSandboxPaymentIds(int $merchantId, Request $request): array
+    {
+        return DanaSandboxResultContext::query()
+            ->where('admin_user_id', $request->user()->getAuthIdentifier())
+            ->where('gateway_merchant_id', $merchantId)
+            ->whereNotNull('gateway_payment_id')
+            ->latest('id')
+            ->limit(500)
+            ->pluck('gateway_payment_id')
+            ->filter(fn (mixed $paymentId): bool => is_string($paymentId) && $paymentId !== '')
+            ->unique()
+            ->values()
+            ->all();
+    }
+
+    private function ownsSandboxPayment(int $merchantId, string $paymentId, Request $request): bool
+    {
+        return DanaSandboxResultContext::query()
+            ->where('admin_user_id', $request->user()->getAuthIdentifier())
+            ->where('gateway_merchant_id', $merchantId)
+            ->where('gateway_payment_id', $paymentId)
+            ->exists();
     }
 
     /** @return array<string, mixed> */
