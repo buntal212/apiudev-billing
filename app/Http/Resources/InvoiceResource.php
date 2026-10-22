@@ -43,6 +43,8 @@ class InvoiceResource extends JsonResource
             'subscription' => $this->whenLoaded('subscription', fn (): ?array => $this->subscription ? [
                 'id' => $this->subscription->id,
                 'status' => $this->subscription->status,
+                'starts_at' => $this->subscription->starts_at?->toISOString(),
+                'expires_at' => $this->subscription->expires_at?->toISOString(),
             ] : null),
             'payment_attempts' => PaymentAttemptResource::collection(
                 $this->whenLoaded('paymentAttempts')

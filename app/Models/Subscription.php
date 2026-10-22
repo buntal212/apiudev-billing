@@ -8,6 +8,7 @@ use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
+use Illuminate\Database\Eloquent\Relations\HasOne;
 
 #[Fillable(['application_customer_id', 'subscription_plan_id', 'starts_at', 'expires_at', 'status'])]
 class Subscription extends Model
@@ -46,11 +47,27 @@ class Subscription extends Model
     }
 
     /**
+     * @return HasOne<SubscriptionPeriodEvent, $this>
+     */
+    public function latestPeriodEvent(): HasOne
+    {
+        return $this->hasOne(SubscriptionPeriodEvent::class)->latestOfMany('created_at');
+    }
+
+    /**
      * @return HasMany<Invoice, $this>
      */
     public function invoices(): HasMany
     {
         return $this->hasMany(Invoice::class);
+    }
+
+    /**
+     * @return HasOne<Invoice, $this>
+     */
+    public function latestInvoice(): HasOne
+    {
+        return $this->hasOne(Invoice::class)->latestOfMany('paid_at');
     }
 
     /**

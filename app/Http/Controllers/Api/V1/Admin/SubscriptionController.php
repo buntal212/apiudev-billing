@@ -17,7 +17,7 @@ class SubscriptionController extends Controller
 
         $filters = $request->validated();
         $subscriptions = Subscription::query()
-            ->with(['customer', 'plan'])
+            ->with(['customer', 'plan', 'latestInvoice', 'latestPeriodEvent'])
             ->when($filters['application_id'] ?? null, function (Builder $query, int $applicationId): void {
                 $query->whereHas('customer', function (Builder $query) use ($applicationId): void {
                     $query->where('application_id', $applicationId);
@@ -47,6 +47,8 @@ class SubscriptionController extends Controller
         return new SubscriptionResource($subscription->load([
             'customer',
             'plan',
+            'latestInvoice',
+            'latestPeriodEvent',
             'periodEvents',
             'invoices.paymentAttempts.latestReconciliationRun',
             'invoices.paymentAttempts.paymentAllocation',

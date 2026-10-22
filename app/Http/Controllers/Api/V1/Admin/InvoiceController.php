@@ -8,6 +8,7 @@ use App\Http\Requests\StoreInvoiceRequest;
 use App\Http\Resources\InvoiceResource;
 use App\Models\Invoice;
 use App\Services\InvoiceService;
+use App\Services\InvoiceSettlementService;
 use Carbon\CarbonImmutable;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Http\JsonResponse;
@@ -86,6 +87,21 @@ class InvoiceController extends Controller
             'paymentAttempts.checkoutOutbox',
             'paymentAttempts.paymentAllocation',
             'paymentAttempts.settlementEvents',
+        ]));
+    }
+
+    public function recoverSubscription(
+        Invoice $invoice,
+        InvoiceSettlementService $settlementService,
+    ): InvoiceResource {
+        $this->authorize('update', $invoice);
+
+        $recoveredInvoice = $settlementService->recoverSubscription($invoice);
+
+        return new InvoiceResource($recoveredInvoice->load([
+            'customer',
+            'plan',
+            'subscription.latestPeriodEvent',
         ]));
     }
 }

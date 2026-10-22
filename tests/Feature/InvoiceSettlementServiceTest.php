@@ -15,6 +15,7 @@ use App\Services\VerifiedGatewayPayment;
 use Illuminate\Database\QueryException;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Str;
+use Illuminate\Validation\ValidationException;
 use Tests\TestCase;
 
 class InvoiceSettlementServiceTest extends TestCase
@@ -41,6 +42,84 @@ class InvoiceSettlementServiceTest extends TestCase
             'status' => SettlementEvent::StatusCompleted,
             'error_code' => null,
         ]);
+    }
+
+    public function test_verified_payment_activates_a_new_subscription_when_invoice_has_none(): void
+    {
+        [$invoice, $attempt] = $this->settleableInvoice();
+        $paidAt = now()->subMinutes(2);
+
+        $result = app(InvoiceSettlementService::class)->settle(
+            $attempt,
+            $this->verification($attempt, paidAt: $paidAt),
+        );
+        $invoice->refresh();
+
+        $this->assertFalse($result->alreadySettled);
+        $this->assertNotNull($invoice->subscription_id);
+        $subscription = Subscription::query()->findOrFail($invoice->subscription_id);
+        $this->assertSame($paidAt->format('Y-m-d H:i:s'), $subscription->starts_at->format('Y-m-d H:i:s'));
+        $this->assertSame($paidAt->addMonth()->format('Y-m-d H:i:s'), $subscription->expires_at->format('Y-m-d H:i:s'));
+        $this->assertSame(Subscription::StatusActive, $subscription->status);
+        $this->assertDatabaseHas('subscription_period_events', [
+            'subscription_id' => $subscription->id,
+            'event_type' => 'activation',
+            'idempotency_key' => 'settlement:payment-attempt:'.$attempt->id.':activation',
+        ]);
+
+        app(InvoiceSettlementService::class)->settle(
+            $attempt->refresh(),
+            $this->verification($attempt, paidAt: $paidAt),
+        );
+
+        $this->assertDatabaseCount('subscriptions', 1);
+        $this->assertDatabaseCount('subscription_period_events', 1);
+    }
+
+    public function test_paid_invoice_without_subscription_can_be_recovered_idempotently(): void
+    {
+        [$invoice, $attempt] = $this->settleableInvoice();
+        $settlementKey = 'settlement:payment-attempt:'.$attempt->id;
+        $paidAt = now()->subMinutes(3);
+
+        PaymentAllocation::query()->create([
+            'invoice_id' => $invoice->id,
+            'payment_attempt_id' => $attempt->id,
+            'amount' => $invoice->amount,
+            'currency' => $invoice->currency,
+            'allocated_at' => $paidAt,
+            'idempotency_key' => $settlementKey,
+        ]);
+        $invoice->update([
+            'status' => Invoice::StatusPaid,
+            'paid_at' => $paidAt,
+        ]);
+        SettlementEvent::query()->create([
+            'invoice_id' => $invoice->id,
+            'payment_attempt_id' => $attempt->id,
+            'event_type' => SettlementEvent::EventSettlement,
+            'status' => SettlementEvent::StatusCompleted,
+            'idempotency_key' => $settlementKey,
+            'processed_at' => $paidAt,
+        ]);
+
+        $first = app(InvoiceSettlementService::class)->recoverSubscription($invoice);
+        $second = app(InvoiceSettlementService::class)->recoverSubscription($invoice->refresh());
+
+        $this->assertNotNull($first->subscription_id);
+        $this->assertSame($first->subscription_id, $second->subscription_id);
+        $this->assertDatabaseCount('subscriptions', 1);
+        $this->assertDatabaseCount('subscription_period_events', 1);
+    }
+
+    public function test_unpaid_invoice_cannot_recover_subscription(): void
+    {
+        [$invoice] = $this->settleableInvoice();
+
+        $this->expectException(ValidationException::class);
+        app(InvoiceSettlementService::class)->recoverSubscription($invoice);
+
+        $this->assertDatabaseCount('subscriptions', 0);
     }
 
     public function test_pending_expired_and_failed_attempts_cannot_be_settled(): void

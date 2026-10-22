@@ -32,6 +32,20 @@ class SubscriptionResource extends JsonResource
                 'code' => $this->plan->code,
                 'name' => $this->plan->name,
             ]),
+            'latest_invoice' => $this->whenLoaded('latestInvoice', fn (): ?array => $this->latestInvoice ? [
+                'id' => $this->latestInvoice->id,
+                'invoice_number' => $this->latestInvoice->invoice_number,
+                'status' => $this->latestInvoice->status,
+                'amount' => $this->latestInvoice->amount,
+                'currency' => $this->latestInvoice->currency,
+                'paid_at' => $this->latestInvoice->paid_at?->toISOString(),
+            ] : null),
+            'activation' => $this->whenLoaded('latestPeriodEvent', fn (): array => [
+                'status' => $this->latestPeriodEvent ? 'completed' : 'not_recorded',
+                'error_code' => null,
+                'last_synced_at' => $this->latestPeriodEvent?->created_at?->toISOString(),
+                'event_type' => $this->latestPeriodEvent?->event_type,
+            ]),
             'period_events' => SubscriptionPeriodEventResource::collection(
                 $this->whenLoaded('periodEvents')
             ),

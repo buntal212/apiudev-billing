@@ -74,6 +74,8 @@ Route::prefix('v1/admin')
             ->only(['index', 'show']);
         Route::apiResource('invoices', InvoiceController::class)
             ->only(['index', 'store', 'show']);
+        Route::post('invoices/{invoice}/subscription/recover', [InvoiceController::class, 'recoverSubscription'])
+            ->middleware('throttle:admin-dana-gateway-write');
         Route::post('invoices/{invoice}/checkout', [InvoiceCheckoutController::class, 'store']);
         Route::apiResource('payment-attempts', PaymentAttemptController::class)
             ->only(['index', 'show']);

@@ -5,7 +5,9 @@ namespace Tests\Feature;
 use App\Models\Application;
 use App\Models\ApplicationCustomer;
 use App\Models\Invoice;
+use App\Models\PaymentAllocation;
 use App\Models\PaymentAttempt;
+use App\Models\SettlementEvent;
 use App\Models\Subscription;
 use App\Models\SubscriptionPlan;
 use App\Models\User;
@@ -86,6 +88,65 @@ class SubscriptionApiTest extends TestCase
 
         $this->getJson('/api/v1/admin/subscriptions')
             ->assertForbidden();
+    }
+
+    public function test_admin_can_recover_a_paid_invoice_without_creating_a_new_payment(): void
+    {
+        $invoice = Invoice::factory()->create([
+            'status' => Invoice::StatusPaid,
+            'paid_at' => now()->subMinute(),
+        ]);
+        $attempt = PaymentAttempt::factory()->create([
+            'invoice_id' => $invoice->id,
+            'attempt_number' => 1,
+            'provider' => 'dana',
+            'gateway_environment' => 'sandbox',
+            'gateway_payment_id' => 'gateway-'.fake()->uuid(),
+            'merchant_reference' => $invoice->invoice_number.'-A1',
+            'status' => PaymentAttempt::StatusSucceeded,
+            'amount' => $invoice->amount,
+            'currency' => $invoice->currency,
+        ]);
+        $settlementKey = 'settlement:payment-attempt:'.$attempt->id;
+        PaymentAllocation::query()->create([
+            'invoice_id' => $invoice->id,
+            'payment_attempt_id' => $attempt->id,
+            'amount' => $invoice->amount,
+            'currency' => $invoice->currency,
+            'allocated_at' => $invoice->paid_at,
+            'idempotency_key' => $settlementKey,
+        ]);
+        SettlementEvent::query()->create([
+            'invoice_id' => $invoice->id,
+            'payment_attempt_id' => $attempt->id,
+            'event_type' => SettlementEvent::EventSettlement,
+            'status' => SettlementEvent::StatusCompleted,
+            'idempotency_key' => $settlementKey,
+            'processed_at' => $invoice->paid_at,
+        ]);
+
+        Sanctum::actingAs($this->admin(), ['admin:access']);
+
+        $this->postJson("/api/v1/admin/invoices/{$invoice->id}/subscription/recover")
+            ->assertOk()
+            ->assertJsonPath('data.status', Invoice::StatusPaid)
+            ->assertJsonPath('data.subscription.status', Subscription::StatusActive);
+
+        $this->postJson("/api/v1/admin/invoices/{$invoice->id}/subscription/recover")
+            ->assertOk()
+            ->assertJsonPath('data.subscription.id', $invoice->fresh()->subscription_id);
+
+        $this->assertDatabaseCount('payment_attempts', 1);
+        $this->assertDatabaseCount('subscriptions', 1);
+        $this->assertDatabaseCount('subscription_period_events', 1);
+    }
+
+    public function test_recovery_requires_admin_authorization(): void
+    {
+        $invoice = Invoice::factory()->create(['status' => Invoice::StatusPaid]);
+
+        $this->postJson("/api/v1/admin/invoices/{$invoice->id}/subscription/recover")
+            ->assertUnauthorized();
     }
 
     private function admin(): User

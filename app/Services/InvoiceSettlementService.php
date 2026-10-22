@@ -10,6 +10,7 @@ use App\Models\SettlementEvent;
 use App\Models\Subscription;
 use Illuminate\Database\QueryException;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Validation\ValidationException;
 use Throwable;
 
 class InvoiceSettlementService
@@ -97,6 +98,15 @@ class InvoiceSettlementService
                         verifiedPaidAt: $verification->paidAt,
                         sourceId: (string) $allocation->getKey(),
                     );
+                } else {
+                    $this->subscriptionService->activateFromVerifiedPayment(
+                        invoice: $invoice,
+                        durationMonths: $invoice->duration_months,
+                        idempotencyKey: $settlementKey.':activation',
+                        sourceType: 'payment_allocation',
+                        verifiedPaidAt: $verification->paidAt,
+                        sourceId: (string) $allocation->getKey(),
+                    );
                 }
 
                 $event = SettlementEvent::query()
@@ -135,6 +145,91 @@ class InvoiceSettlementService
 
             throw $exception;
         }
+    }
+
+    /**
+     * Repair a paid invoice whose trusted settlement has no linked subscription.
+     *
+     * The allocation and completed settlement event are the proof that the
+     * payment was already verified. This endpoint never creates a checkout,
+     * payment attempt, or invoice and is safe to call repeatedly.
+     */
+    public function recoverSubscription(Invoice $invoice): Invoice
+    {
+        return DB::transaction(function () use ($invoice): Invoice {
+            $lockedInvoice = Invoice::query()
+                ->lockForUpdate()
+                ->findOrFail($invoice->getKey());
+
+            if ($lockedInvoice->status !== Invoice::StatusPaid) {
+                throw ValidationException::withMessages([
+                    'invoice' => ['Hanya invoice lunas yang dapat dipulihkan.'],
+                ]);
+            }
+
+            $allocation = PaymentAllocation::query()
+                ->where('invoice_id', $lockedInvoice->getKey())
+                ->lockForUpdate()
+                ->first();
+            if ($allocation === null) {
+                throw ValidationException::withMessages([
+                    'invoice' => ['Settlement terverifikasi untuk invoice tidak ditemukan.'],
+                ]);
+            }
+
+            $attempt = PaymentAttempt::query()
+                ->lockForUpdate()
+                ->findOrFail($allocation->payment_attempt_id);
+            $settlementKey = $this->settlementKey($attempt->getKey());
+            $settlementEvent = SettlementEvent::query()
+                ->where('idempotency_key', $settlementKey)
+                ->where('invoice_id', $lockedInvoice->getKey())
+                ->where('payment_attempt_id', $attempt->getKey())
+                ->lockForUpdate()
+                ->first();
+
+            if ($settlementEvent?->status !== SettlementEvent::StatusCompleted
+                || $allocation->idempotency_key !== $settlementKey
+                || $lockedInvoice->paid_at === null
+                || $attempt->invoice_id !== $lockedInvoice->getKey()
+                || $attempt->status !== PaymentAttempt::StatusSucceeded
+                || strtolower((string) $attempt->provider) !== 'dana'
+                || strtolower((string) $attempt->gateway_environment) !== 'sandbox'
+                || $attempt->gateway_payment_id === null
+                || $attempt->merchant_reference === null
+                || $this->amountMinor($allocation->getRawOriginal('amount')) !== $this->amountMinor($lockedInvoice->getRawOriginal('amount'))
+                || strtoupper((string) $allocation->currency) !== strtoupper((string) $lockedInvoice->currency)
+                || $this->amountMinor($attempt->getRawOriginal('amount')) !== $this->amountMinor($lockedInvoice->getRawOriginal('amount'))
+                || strtoupper((string) $attempt->currency) !== strtoupper((string) $lockedInvoice->currency)) {
+                throw ValidationException::withMessages([
+                    'invoice' => ['Data settlement tidak konsisten sehingga pemulihan dihentikan.'],
+                ]);
+            }
+
+            if ($lockedInvoice->subscription_id === null) {
+                $this->subscriptionService->activateFromVerifiedPayment(
+                    invoice: $lockedInvoice,
+                    durationMonths: $lockedInvoice->duration_months,
+                    idempotencyKey: $settlementKey.':activation',
+                    sourceType: 'payment_allocation',
+                    verifiedPaidAt: $allocation->allocated_at,
+                    sourceId: (string) $allocation->getKey(),
+                    notes: 'recovered_from_paid_invoice',
+                );
+            } else {
+                $subscription = Subscription::query()
+                    ->lockForUpdate()
+                    ->findOrFail($lockedInvoice->subscription_id);
+                if ($subscription->application_customer_id !== $lockedInvoice->application_customer_id
+                    || $subscription->subscription_plan_id !== $lockedInvoice->subscription_plan_id) {
+                    throw ValidationException::withMessages([
+                        'invoice' => ['Langganan terkait tidak sesuai dengan invoice.'],
+                    ]);
+                }
+            }
+
+            return $lockedInvoice->fresh();
+        });
     }
 
     private function assertVerifiedPayment(
