@@ -3,6 +3,8 @@
 use App\Http\Controllers\Api\V1\Admin\ApplicationController;
 use App\Http\Controllers\Api\V1\Admin\ApplicationCustomerController;
 use App\Http\Controllers\Api\V1\Admin\ApplicationIntegrationAuditController;
+use App\Http\Controllers\Api\V1\Admin\ApplicationIntegrationTestAuditController;
+use App\Http\Controllers\Api\V1\Admin\ApplicationIntegrationTestController;
 use App\Http\Controllers\Api\V1\Admin\ApplicationIntegrationTokenController;
 use App\Http\Controllers\Api\V1\Admin\ApplicationPaymentGatewayController;
 use App\Http\Controllers\Api\V1\Admin\DanaGatewayMerchantProvisioningController;
@@ -51,6 +53,16 @@ Route::prefix('v1/admin')
             ->middleware('throttle:admin-dana-gateway-read');
         Route::get('applications/{application}/integration-audits', [ApplicationIntegrationAuditController::class, 'index'])
             ->middleware('throttle:admin-dana-gateway-read');
+        Route::get('applications/{application}/integration-tests/audits', [ApplicationIntegrationTestAuditController::class, 'index'])
+            ->middleware('throttle:admin-integration-test');
+        Route::post('applications/{application}/integration-tests/customers', [ApplicationIntegrationTestController::class, 'store'])
+            ->middleware('throttle:admin-integration-test');
+        Route::get('applications/{application}/integration-tests/customers/{externalId}', [ApplicationIntegrationTestController::class, 'show'])
+            ->where('externalId', '[A-Za-z0-9._:-]{1,100}')
+            ->middleware('throttle:admin-integration-test');
+        Route::patch('applications/{application}/integration-tests/customers/{externalId}', [ApplicationIntegrationTestController::class, 'update'])
+            ->where('externalId', '[A-Za-z0-9._:-]{1,100}')
+            ->middleware('throttle:admin-integration-test');
         Route::post('applications/{application}/integration-tokens', [ApplicationIntegrationTokenController::class, 'store'])
             ->middleware('throttle:admin-dana-gateway-write');
         Route::delete('applications/{application}/integration-tokens/{integrationToken}', [ApplicationIntegrationTokenController::class, 'destroy'])

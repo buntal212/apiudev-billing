@@ -36,6 +36,9 @@ class ApplicationCustomerController extends Controller
             ->when(array_key_exists('is_active', $filters), function (Builder $query) use ($request): void {
                 $query->where('is_active', $request->boolean('is_active'));
             })
+            ->when(array_key_exists('is_test', $filters), function (Builder $query) use ($request): void {
+                $query->where('is_test', $request->boolean('is_test'));
+            })
             ->when($filters['source'] ?? null, function (Builder $query, string $source): void {
                 $query->where('source', $source);
             })

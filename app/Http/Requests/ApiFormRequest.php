@@ -57,6 +57,7 @@ abstract class ApiFormRequest extends FormRequest
             'external_customer_id' => 'ID pelanggan pada aplikasi',
             'due_at' => 'Tanggal jatuh tempo',
             'is_active' => 'Status aktif',
+            'is_test' => 'Data uji',
             'idempotency_key' => 'Kunci idempotensi',
             'invoice_id' => 'Invoice',
             'invoice_number' => 'Nomor invoice',

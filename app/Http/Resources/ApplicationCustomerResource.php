@@ -24,6 +24,7 @@ class ApplicationCustomerResource extends JsonResource
             'email' => $this->email,
             'phone_number' => $this->phone_number,
             'is_active' => $this->is_active,
+            'is_test' => $this->is_test,
             'source' => $this->source,
             'first_synced_at' => $this->first_synced_at?->toISOString(),
             'last_synced_at' => $this->last_synced_at?->toISOString(),

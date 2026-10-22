@@ -25,6 +25,7 @@ class ApplicationCustomerFactory extends Factory
             'email' => fake()->optional()->safeEmail(),
             'phone_number' => fake()->optional()->phoneNumber(),
             'is_active' => true,
+            'is_test' => false,
         ];
     }
 }

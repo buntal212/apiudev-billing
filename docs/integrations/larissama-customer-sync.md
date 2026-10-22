@@ -106,6 +106,31 @@ berarti pelanggan tidak ditemukan, `409` berarti konflik record manual, dan
    detail aplikasi. Buat token pengganti sebelum mencabut token lama saat
    rotasi.
 
+## Panel Uji Integrasi Pelanggan
+
+Admin dapat menguji kontrak pelanggan dari **Master Aplikasi → detail aplikasi
+→ Uji Integrasi Pelanggan**. Panel ini memakai endpoint admin yang dilindungi
+Sanctum dan limiter per admin, aplikasi, serta alamat sumber:
+
+- Kirim Pelanggan Uji membuat atau melakukan upsert pada ID berformat `UAT-*`.
+- Cek Pelanggan membaca data uji, sedangkan Perbarui Pelanggan Uji hanya
+  memperbarui record uji tersebut.
+- Uji Duplikasi mengirim ID yang sama dua kali dan memastikan tidak ada record
+  kedua. Lihat Riwayat Pengujian menampilkan audit aman beserta request ID.
+- Data panel ditandai `is_test=true`, tidak membuat invoice, payment attempt,
+  settlement, atau subscription, dan tidak dihapus otomatis.
+
+Pengujian panel adalah **admin internal**. Metadata `authentication_mode` pada
+respons bernilai `admin_internal`; keberhasilan panel tidak membuktikan bahwa
+Bearer token eksternal dapat digunakan oleh Larissama. Uji Bearer eksternal
+tetap harus dilakukan dari backend aplikasi memakai token yang telah dibuat,
+bukan dari browser atau dengan menyalin kredensial ke URL. Record produksi,
+record manual, dan record integrasi biasa tidak dapat diambil alih oleh panel.
+
+Jika panel dibuka dari tautan Master Pelanggan, gunakan filter **Data uji UAT**
+untuk membedakan record UAT dari pelanggan produksi. Semua aktivitas panel dapat
+ditelusuri pada audit aplikasi tanpa menyimpan token atau payload rahasia.
+
 ## Kontrak endpoint
 
 Semua URL berikut diawali `https://apiudev.udumbara.my.id` dan memakai header
@@ -243,6 +268,14 @@ hanya metadata response yang diperlukan.
 ## Checklist UAT Larissama
 
 - [ ] Admin membuat token dengan scope yang sesuai dan menyimpannya di server.
+- [ ] Admin membuka Detail Master Aplikasi → Uji Integrasi Pelanggan dan memakai
+      ID `UAT-*`.
+- [ ] Kirim ulang ID UAT yang sama menunjukkan `created=false` dan tetap satu
+      record; Uji Duplikasi tidak membuat data kedua.
+- [ ] Cek, Perbarui, dan Lihat Riwayat Pengujian menampilkan status, operasi,
+      waktu, request ID, serta error aman.
+- [ ] Hasil panel diberi label `admin_internal`; keberhasilannya tidak dianggap
+      sebagai bukti Bearer token eksternal.
 - [ ] Request POST pelanggan baru mendapat `201` dan muncul sebagai sumber
       `integration` di Master Pelanggan.
 - [ ] POST ulang ID yang sama mendapat `200` tanpa record kedua.

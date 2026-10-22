@@ -27,6 +27,7 @@ class ListApplicationCustomersRequest extends ApiFormRequest
             'application_id' => ['nullable', 'integer', 'exists:applications,id'],
             'search' => ['nullable', 'string', 'max:255'],
             'is_active' => ['nullable', 'boolean'],
+            'is_test' => ['nullable', 'boolean'],
             'source' => ['nullable', 'in:manual,integration'],
             'sort' => ['nullable', 'in:external_customer_id,name,email,created_at,updated_at'],
             'direction' => ['nullable', 'in:asc,desc'],

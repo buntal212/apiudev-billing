@@ -58,6 +58,18 @@ class AppServiceProvider extends ServiceProvider
                 .$request->ip());
         });
 
+        RateLimiter::for('admin-integration-test', function (Request $request): Limit {
+            $application = $request->route('application');
+            $applicationKey = is_object($application) && method_exists($application, 'getKey')
+                ? $application->getKey()
+                : (string) $application;
+
+            return Limit::perMinute(20)->by('admin-integration-test:'
+                .$request->user()?->getAuthIdentifier().':'
+                .$applicationKey.':'
+                .$request->ip());
+        });
+
         RateLimiter::for('integration-api', function (Request $request): array {
             $token = $request->attributes->get('integration_token');
             $tokenKey = is_object($token) && method_exists($token, 'getKey')

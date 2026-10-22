@@ -46,11 +46,13 @@ return Application::configure(basePath: dirname(__DIR__))
         );
 
         $exceptions->render(function (ValidationException $exception, Request $request): JsonResponse {
-            if (str_starts_with($request->path(), 'api/v1/integrations')) {
+            if (str_starts_with($request->path(), 'api/v1/integrations')
+                || str_contains($request->path(), '/integration-tests')) {
                 $token = $request->attributes->get('integration_token');
                 app(ApplicationIntegrationAuditService::class)->record(
                     request: $request,
-                    application: $request->attributes->get('integration_application'),
+                    application: $request->attributes->get('integration_application')
+                        ?: (is_object($request->route('application')) ? $request->route('application') : null),
                     token: is_object($token) ? $token : null,
                     operation: 'request.validation',
                     status: 'failed',
@@ -71,7 +73,8 @@ return Application::configure(basePath: dirname(__DIR__))
                 $token = $request->attributes->get('integration_token');
                 app(ApplicationIntegrationAuditService::class)->record(
                     request: $request,
-                    application: $request->attributes->get('integration_application'),
+                    application: $request->attributes->get('integration_application')
+                        ?: (is_object($request->route('application')) ? $request->route('application') : null),
                     token: is_object($token) ? $token : null,
                     operation: 'request.conflict',
                     status: 'failed',
@@ -129,13 +132,15 @@ return Application::configure(basePath: dirname(__DIR__))
                 ]);
             }
 
-            if ($status === 429 && str_starts_with($request->path(), 'api/v1/integrations')) {
+            if ($status === 429 && (str_starts_with($request->path(), 'api/v1/integrations')
+                || str_contains($request->path(), '/integration-tests'))) {
                 $token = $request->attributes->get('integration_token');
                 app(ApplicationIntegrationAuditService::class)->record(
                     request: $request,
-                    application: $request->attributes->get('integration_application'),
+                    application: $request->attributes->get('integration_application')
+                        ?: (is_object($request->route('application')) ? $request->route('application') : null),
                     token: is_object($token) ? $token : null,
-                    operation: 'rate_limit',
+                    operation: str_contains($request->path(), '/integration-tests') ? 'test.rate_limit' : 'rate_limit',
                     status: 'failed',
                     externalCustomerId: $request->route('externalId') ?: $request->input('external_customer_id'),
                     errorCode: 'rate_limited',
@@ -160,12 +165,14 @@ return Application::configure(basePath: dirname(__DIR__))
         });
 
         $exceptions->render(function (Throwable $exception, Request $request): JsonResponse {
-            if (str_starts_with($request->path(), 'api/v1/integrations')) {
+            if (str_starts_with($request->path(), 'api/v1/integrations')
+                || str_contains($request->path(), '/integration-tests')) {
                 try {
                     $token = $request->attributes->get('integration_token');
                     app(ApplicationIntegrationAuditService::class)->record(
                         request: $request,
-                        application: $request->attributes->get('integration_application'),
+                        application: $request->attributes->get('integration_application')
+                            ?: (is_object($request->route('application')) ? $request->route('application') : null),
                         token: is_object($token) ? $token : null,
                         operation: 'request.internal',
                         status: 'failed',
