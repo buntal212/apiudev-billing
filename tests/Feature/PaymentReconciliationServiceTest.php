@@ -9,6 +9,7 @@ use App\Models\PaymentReconciliationRun;
 use App\Models\Subscription;
 use App\Services\PaymentReconciliationService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Http\Client\Request as HttpRequest;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Str;
 use Tests\TestCase;
@@ -69,6 +70,157 @@ class PaymentReconciliationServiceTest extends TestCase
         $this->assertSame(PaymentAttempt::StatusPending, $attempt->fresh()->status);
         $this->assertDatabaseCount('payment_allocations', 0);
         $this->assertNotNull($result->retryAfterAt);
+    }
+
+    public function test_batch_only_selects_attempts_whose_retry_window_is_due(): void
+    {
+        $future = $this->attempt();
+        $this->reconciliationRun($future, [
+            'status' => PaymentReconciliationRun::StatusPending,
+            'retry_after_at' => now()->addMinute(),
+        ]);
+
+        $processing = $this->attempt();
+        $this->reconciliationRun($processing, [
+            'status' => PaymentReconciliationRun::StatusProcessing,
+            'started_at' => now()->subSeconds(30),
+        ]);
+
+        $exhausted = $this->attempt();
+        $this->reconciliationRun($exhausted, [
+            'attempt_number' => 3,
+            'status' => PaymentReconciliationRun::StatusRetryable,
+            'retry_after_at' => now()->subMinute(),
+        ]);
+
+        $due = $this->attempt();
+        $this->reconciliationRun($due, [
+            'status' => PaymentReconciliationRun::StatusRetryable,
+            'retry_after_at' => now()->subMinute(),
+        ]);
+
+        $new = $this->attempt();
+        $responses = [
+            (string) $due->gateway_payment_id => $this->gatewayPayment($due, 'pending'),
+            (string) $new->gateway_payment_id => $this->gatewayPayment($new, 'pending'),
+        ];
+        $requestedPaymentIds = [];
+        Http::fake(function (HttpRequest $request) use (&$requestedPaymentIds, $responses): mixed {
+            $path = trim((string) parse_url($request->url(), PHP_URL_PATH), '/');
+            $segments = explode('/', $path);
+            $paymentId = $segments[count($segments) - 2] ?? null;
+            $requestedPaymentIds[] = $paymentId;
+
+            return Http::response(['data' => $responses[$paymentId]], 200);
+        });
+
+        $processed = app(PaymentReconciliationService::class)->reconcilePending(10);
+
+        $this->assertSame(2, $processed);
+        $this->assertSame([
+            (string) $new->gateway_payment_id,
+            (string) $due->gateway_payment_id,
+        ], $requestedPaymentIds);
+        $this->assertDatabaseCount('payment_reconciliation_runs', 6);
+    }
+
+    public function test_new_attempt_is_not_starved_by_an_old_attempt_waiting_for_backoff(): void
+    {
+        $old = $this->attempt();
+        $this->reconciliationRun($old, [
+            'status' => PaymentReconciliationRun::StatusRetryable,
+            'retry_after_at' => now()->addMinutes(5),
+        ]);
+        $new = $this->attempt();
+        Http::fake($this->gatewayResponse($new, 'pending'));
+
+        $processed = app(PaymentReconciliationService::class)->reconcilePending(1);
+
+        $this->assertSame(1, $processed);
+        $this->assertDatabaseHas('payment_reconciliation_runs', [
+            'payment_attempt_id' => $new->getKey(),
+            'attempt_number' => 1,
+        ]);
+        $this->assertDatabaseCount('payment_reconciliation_runs', 2);
+        Http::assertSentCount(1);
+        Http::assertSent(fn (HttpRequest $request): bool => str_contains($request->url(), (string) $new->gateway_payment_id));
+    }
+
+    public function test_fresh_processing_run_cannot_be_claimed_twice(): void
+    {
+        $attempt = $this->attempt();
+        $this->reconciliationRun($attempt, [
+            'status' => PaymentReconciliationRun::StatusProcessing,
+            'started_at' => now()->subSeconds(30),
+        ]);
+        Http::fake($this->gatewayResponse($attempt, 'paid'));
+
+        $result = app(PaymentReconciliationService::class)->reconcile($attempt);
+
+        $this->assertSame('skipped', $result->status);
+        $this->assertDatabaseCount('payment_reconciliation_runs', 1);
+        Http::assertNothingSent();
+    }
+
+    public function test_exhausted_or_failed_runs_are_not_selected_again(): void
+    {
+        $exhausted = $this->attempt();
+        $this->reconciliationRun($exhausted, [
+            'attempt_number' => 3,
+            'status' => PaymentReconciliationRun::StatusRetryable,
+            'retry_after_at' => now()->subMinute(),
+        ]);
+        $failed = $this->attempt();
+        $this->reconciliationRun($failed, [
+            'status' => PaymentReconciliationRun::StatusFailed,
+            'error_code' => 'gateway_request_rejected',
+            'finished_at' => now()->subMinute(),
+        ]);
+        Http::fake();
+
+        $processed = app(PaymentReconciliationService::class)->reconcilePending(10);
+
+        $this->assertSame(0, $processed);
+        Http::assertNothingSent();
+        $this->assertSame('skipped', app(PaymentReconciliationService::class)->reconcile($failed)->status);
+    }
+
+    public function test_due_attempts_use_their_configured_merchant_credentials(): void
+    {
+        config()->set('services.dana_gateway.merchant_api_keys', [
+            'sandbox' => [
+                'udev-demo' => 'merchant-one-key',
+                'udev-second' => 'merchant-two-key',
+            ],
+        ]);
+        config()->set('services.dana_gateway.merchants', [
+            'sandbox' => [
+                'udev-demo' => ['name' => 'UDEV Demo', 'is_active' => true],
+                'udev-second' => ['name' => 'UDEV Second', 'is_active' => true],
+            ],
+        ]);
+
+        $first = $this->attempt(['gateway_merchant_code' => 'udev-demo']);
+        $second = $this->attempt(['gateway_merchant_code' => 'udev-second']);
+        $responses = [
+            (string) $first->gateway_payment_id => $this->gatewayPayment($first, 'pending'),
+            (string) $second->gateway_payment_id => $this->gatewayPayment($second, 'pending'),
+        ];
+        $authorizationByPayment = [];
+        Http::fake(function (HttpRequest $request) use (&$authorizationByPayment, $responses): mixed {
+            $path = trim((string) parse_url($request->url(), PHP_URL_PATH), '/');
+            $segments = explode('/', $path);
+            $paymentId = $segments[count($segments) - 2] ?? null;
+            $authorizationByPayment[$paymentId] = $request->header('Authorization')[0] ?? null;
+
+            return Http::response(['data' => $responses[$paymentId]], 200);
+        });
+
+        $processed = app(PaymentReconciliationService::class)->reconcilePending(2);
+
+        $this->assertSame(2, $processed);
+        $this->assertSame('Bearer merchant-one-key', $authorizationByPayment[$first->gateway_payment_id]);
+        $this->assertSame('Bearer merchant-two-key', $authorizationByPayment[$second->gateway_payment_id]);
     }
 
     public function test_failed_and_expired_gateway_statuses_do_not_settle(): void
@@ -253,6 +405,18 @@ class PaymentReconciliationServiceTest extends TestCase
         ]);
 
         return $attempt->fresh('invoice.plan');
+    }
+
+    /** @param array<string, mixed> $overrides */
+    private function reconciliationRun(PaymentAttempt $attempt, array $overrides = []): PaymentReconciliationRun
+    {
+        return PaymentReconciliationRun::query()->create(array_merge([
+            'payment_attempt_id' => $attempt->getKey(),
+            'attempt_number' => 1,
+            'status' => PaymentReconciliationRun::StatusProcessing,
+            'idempotency_key' => 'reconciliation:test:'.$attempt->getKey().':'.Str::random(8),
+            'started_at' => now(),
+        ], $overrides));
     }
 
     private function attemptWithMapping(): PaymentAttempt

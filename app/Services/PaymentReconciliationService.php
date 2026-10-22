@@ -5,6 +5,7 @@ namespace App\Services;
 use App\Models\PaymentAttempt;
 use App\Models\PaymentReconciliationRun;
 use Carbon\CarbonImmutable;
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\QueryException;
 use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Support\Arr;
@@ -58,14 +59,35 @@ class PaymentReconciliationService
     public function reconcilePending(?int $limit = null): int
     {
         $limit = max(1, min(100, $limit ?? (int) config('services.dana_reconciliation.batch_limit', 25)));
-        $attemptIds = PaymentAttempt::query()
-            ->where('provider', 'dana')
+        $now = now()->toImmutable();
+        $baseQuery = fn (): Builder => PaymentAttempt::query()
+            ->whereRaw('LOWER(provider) = ?', ['dana'])
             ->where('gateway_environment', 'sandbox')
             ->whereNotNull('gateway_payment_id')
-            ->whereIn('status', [PaymentAttempt::StatusInitiated, PaymentAttempt::StatusPending])
+            ->whereIn('status', [PaymentAttempt::StatusInitiated, PaymentAttempt::StatusPending]);
+
+        // Prioritaskan attempt yang belum pernah direkonsiliasi agar backlog lama
+        // tidak menghalangi transaksi baru ketika batch terbatas.
+        $newAttemptIds = $baseQuery()
+            ->whereDoesntHave('reconciliationRuns')
             ->orderBy('id')
             ->limit($limit)
             ->pluck('id');
+
+        $attemptIds = $newAttemptIds;
+        $remaining = $limit - $newAttemptIds->count();
+        if ($remaining > 0) {
+            $retryAttemptIds = $baseQuery()
+                ->whereHas('latestReconciliationRun', function (Builder $query) use ($now): void {
+                    $query->where('attempt_number', '<', $this->maxAttempts());
+                    $this->scopeDueRun($query, $now);
+                })
+                ->orderBy('id')
+                ->limit($remaining)
+                ->pluck('id');
+
+            $attemptIds = $attemptIds->concat($retryAttemptIds)->take($limit);
+        }
 
         foreach ($attemptIds as $attemptId) {
             $attempt = PaymentAttempt::query()->find($attemptId);
@@ -297,20 +319,9 @@ class PaymentReconciliationService
                     ->first();
 
                 if ($latest !== null) {
-                    if (in_array($latest->status, [
-                        PaymentReconciliationRun::StatusPending,
-                        PaymentReconciliationRun::StatusRetryable,
-                    ], true) && $latest->retry_after_at?->isFuture()) {
-                        return null;
-                    }
-
-                    if ($latest->status === PaymentReconciliationRun::StatusProcessing
-                        && $latest->started_at?->gt(now()->subSeconds($this->processingTimeoutSeconds()))) {
-                        return null;
-                    }
-
+                    $now = now()->toImmutable();
                     if ($latest->attempt_number >= $this->maxAttempts()
-                        && $latest->status !== PaymentReconciliationRun::StatusProcessing) {
+                        || ! $this->isRunDue($latest, $now)) {
                         return null;
                     }
                 }
@@ -328,6 +339,44 @@ class PaymentReconciliationService
         } catch (QueryException) {
             return null;
         }
+    }
+
+    private function scopeDueRun(Builder $query, CarbonImmutable $now): void
+    {
+        $query->where(function (Builder $query) use ($now): void {
+            $query
+                ->where(function (Builder $query) use ($now): void {
+                    $query
+                        ->whereIn('status', [
+                            PaymentReconciliationRun::StatusPending,
+                            PaymentReconciliationRun::StatusRetryable,
+                        ])
+                        ->where(function (Builder $query) use ($now): void {
+                            $query->whereNull('retry_after_at')
+                                ->orWhere('retry_after_at', '<=', $now);
+                        });
+                })
+                ->orWhere(function (Builder $query) use ($now): void {
+                    $query
+                        ->where('status', PaymentReconciliationRun::StatusProcessing)
+                        ->where(function (Builder $query) use ($now): void {
+                            $query->whereNull('started_at')
+                                ->orWhere('started_at', '<=', $now->subSeconds($this->processingTimeoutSeconds()));
+                        });
+                });
+        });
+    }
+
+    private function isRunDue(PaymentReconciliationRun $run, CarbonImmutable $now): bool
+    {
+        return match ($run->status) {
+            PaymentReconciliationRun::StatusPending,
+            PaymentReconciliationRun::StatusRetryable => $run->retry_after_at === null
+                || ! $run->retry_after_at->isFuture(),
+            PaymentReconciliationRun::StatusProcessing => $run->started_at === null
+                || ! $run->started_at->gt($now->subSeconds($this->processingTimeoutSeconds())),
+            default => false,
+        };
     }
 
     /** @param array<string, mixed> $gatewayPayment */
