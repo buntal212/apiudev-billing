@@ -1,3 +1,4 @@
+
 <?php
 
 use Illuminate\Database\Migrations\Migration;
@@ -10,23 +11,47 @@ return new class extends Migration
     {
         Schema::create('application_integration_tokens', function (Blueprint $table): void {
             $table->id();
-            $table->foreignId('application_id')->constrained('applications')->restrictOnDelete();
+
+            $table->foreignId('application_id')
+                ->constrained('applications')
+                ->restrictOnDelete();
+
             $table->string('name', 100);
             $table->char('token_hash', 64)->unique();
             $table->string('token_prefix', 16);
             $table->json('scopes');
+
             $table->timestamp('expires_at')->nullable();
             $table->timestamp('revoked_at')->nullable();
             $table->timestamp('last_used_at')->nullable();
             $table->timestamps();
 
-            $table->index(['application_id', 'revoked_at', 'expires_at'], 'app_integration_token_active_idx');
+            $table->index(
+                ['application_id', 'revoked_at', 'expires_at'],
+                'app_integration_token_active_idx'
+            );
         });
 
         Schema::create('application_integration_audits', function (Blueprint $table): void {
             $table->id();
-            $table->foreignId('application_id')->nullable()->constrained('applications')->nullOnDelete();
-            $table->foreignId('application_integration_token_id')->nullable()->constrained('application_integration_tokens')->nullOnDelete();
+
+            $table->foreignId('application_id')
+                ->nullable()
+                ->constrained('applications')
+                ->nullOnDelete();
+
+            // Nama foreign key dibuat pendek agar kompatibel dengan MySQL.
+            $table->foreignId('application_integration_token_id')
+                ->nullable();
+
+            $table->foreign(
+                'application_integration_token_id',
+                'aia_token_fk'
+            )
+                ->references('id')
+                ->on('application_integration_tokens')
+                ->nullOnDelete();
+
             $table->string('external_customer_id', 100)->nullable();
             $table->string('operation', 80);
             $table->string('status', 30);
@@ -35,9 +60,20 @@ return new class extends Migration
             $table->json('safe_details')->nullable();
             $table->timestamps();
 
-            $table->index(['application_id', 'created_at'], 'app_integration_audit_application_created_idx');
-            $table->index(['application_integration_token_id', 'created_at'], 'app_integration_audit_token_created_idx');
-            $table->index(['external_customer_id', 'created_at'], 'app_integration_audit_external_created_idx');
+            $table->index(
+                ['application_id', 'created_at'],
+                'app_integration_audit_application_created_idx'
+            );
+
+            $table->index(
+                ['application_integration_token_id', 'created_at'],
+                'app_integration_audit_token_created_idx'
+            );
+
+            $table->index(
+                ['external_customer_id', 'created_at'],
+                'app_integration_audit_external_created_idx'
+            );
         });
     }
 
