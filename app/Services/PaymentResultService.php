@@ -6,6 +6,7 @@ use App\Models\PaymentAttempt;
 use Carbon\CarbonImmutable;
 use Illuminate\Database\Eloquent\ModelNotFoundException;
 use Illuminate\Support\Arr;
+use Illuminate\Validation\ValidationException;
 
 class PaymentResultService
 {
@@ -13,6 +14,7 @@ class PaymentResultService
         private readonly DanaGatewayClient $gatewayClient,
         private readonly DanaGatewayMerchantResolver $merchantResolver,
         private readonly PaymentAttemptService $paymentAttemptService,
+        private readonly InvoiceSettlementService $invoiceSettlementService,
     ) {}
 
     public function find(string $gatewayPaymentId): PaymentAttempt
@@ -34,6 +36,10 @@ class PaymentResultService
             $gatewayPayment = $this->gatewayClient->findPayment($merchant, $gatewayPaymentId);
             $this->validateGatewayPayment($paymentAttempt, $gatewayPayment);
             $paymentAttempt = $this->synchronize($paymentAttempt, $gatewayPayment);
+
+            if (($gatewayPayment['status'] ?? null) === 'paid') {
+                $this->settleVerifiedPayment($paymentAttempt, $gatewayPayment);
+            }
         }
 
         return $paymentAttempt->fresh('invoice.plan.application');
@@ -60,7 +66,7 @@ class PaymentResultService
             ? $this->gatewayTimestamp($gatewayPayment['paid_at'] ?? null)
             : null;
 
-        return $this->paymentAttemptService->transitionStatus(
+        $updatedAttempt = $this->paymentAttemptService->transitionStatus(
             $paymentAttempt,
             $status,
             $this->stringOrNull($gatewayPayment['provider_order_id'] ?? null),
@@ -68,6 +74,47 @@ class PaymentResultService
             null,
             $completedAt,
         );
+
+        if ($status === PaymentAttempt::StatusSucceeded) {
+            $metadata = is_array($updatedAttempt->metadata) ? $updatedAttempt->metadata : [];
+            $metadata['gateway_verification'] = [
+                'provider' => $updatedAttempt->provider,
+                'gateway_payment_id' => $updatedAttempt->gateway_payment_id,
+                'verified_at' => now()->toISOString(),
+                'gateway_paid_at' => $gatewayPayment['paid_at'] ?? null,
+            ];
+            $updatedAttempt->update(['metadata' => $metadata]);
+        }
+
+        return $updatedAttempt;
+    }
+
+    /** @param array<string, mixed> $gatewayPayment */
+    private function settleVerifiedPayment(PaymentAttempt $paymentAttempt, array $gatewayPayment): void
+    {
+        $paidAt = $this->gatewayTimestamp($gatewayPayment['paid_at'] ?? null);
+        if ($paidAt === null) {
+            return;
+        }
+
+        try {
+            $this->invoiceSettlementService->settle(
+                $paymentAttempt,
+                VerifiedGatewayPayment::paid(
+                    provider: $paymentAttempt->provider,
+                    gatewayPaymentId: (string) $gatewayPayment['id'],
+                    merchantOrderId: (string) $gatewayPayment['merchant_order_id'],
+                    amountMinor: (int) $gatewayPayment['amount_minor'],
+                    currency: (string) $gatewayPayment['currency'],
+                    merchantCode: (string) $paymentAttempt->gateway_merchant_code,
+                    environment: (string) $paymentAttempt->gateway_environment,
+                    paidAt: $paidAt,
+                ),
+            );
+        } catch (SettlementRejectedException|ValidationException) {
+            // Status publik tetap berasal dari gateway terverifikasi; settlement ambigu
+            // dicatat oleh engine untuk pemulihan tanpa mengubahnya menjadi lunas lokal.
+        }
     }
 
     /** @param array<string, mixed> $gatewayPayment */

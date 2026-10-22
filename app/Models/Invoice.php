@@ -8,6 +8,7 @@ use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
+use Illuminate\Database\Eloquent\Relations\HasOne;
 
 #[Fillable(['invoice_number', 'application_customer_id', 'subscription_plan_id', 'subscription_id', 'amount', 'currency', 'duration_months', 'idempotency_key', 'status', 'issued_at', 'due_at', 'paid_at', 'cancelled_at', 'metadata'])]
 class Invoice extends Model
@@ -53,6 +54,22 @@ class Invoice extends Model
     public function paymentAttempts(): HasMany
     {
         return $this->hasMany(PaymentAttempt::class);
+    }
+
+    /**
+     * @return HasOne<PaymentAllocation, $this>
+     */
+    public function paymentAllocation(): HasOne
+    {
+        return $this->hasOne(PaymentAllocation::class);
+    }
+
+    /**
+     * @return HasMany<SettlementEvent, $this>
+     */
+    public function settlementEvents(): HasMany
+    {
+        return $this->hasMany(SettlementEvent::class);
     }
 
     /**

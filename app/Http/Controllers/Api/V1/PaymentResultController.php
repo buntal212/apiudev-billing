@@ -33,13 +33,21 @@ class PaymentResultController extends Controller
     private function publicStatus(PaymentAttempt $paymentAttempt): string
     {
         return match ($paymentAttempt->status) {
-            PaymentAttempt::StatusSucceeded => 'paid',
+            PaymentAttempt::StatusSucceeded => $this->isGatewayVerified($paymentAttempt) ? 'paid' : 'pending',
             PaymentAttempt::StatusInitiated, PaymentAttempt::StatusPending => 'pending',
             PaymentAttempt::StatusFailed => 'failed',
             PaymentAttempt::StatusExpired => 'expired',
             PaymentAttempt::StatusCancelled => 'cancelled',
             default => 'pending',
         };
+    }
+
+    private function isGatewayVerified(PaymentAttempt $paymentAttempt): bool
+    {
+        return is_array($paymentAttempt->metadata)
+            && is_array($paymentAttempt->metadata['gateway_verification'] ?? null)
+            && is_string($paymentAttempt->metadata['gateway_verification']['verified_at'] ?? null)
+            && $paymentAttempt->metadata['gateway_verification']['verified_at'] !== '';
     }
 
     private function validatedReturnUrl(mixed $url): ?string

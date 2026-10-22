@@ -2,7 +2,9 @@
 
 namespace Tests\Feature;
 
+use App\Models\ApplicationPaymentGateway;
 use App\Models\PaymentAttempt;
+use App\Models\Subscription;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Str;
@@ -74,6 +76,42 @@ class PaymentResultApiTest extends TestCase
         ]);
     }
 
+    public function test_verified_paid_gateway_result_settles_invoice_and_renews_subscription(): void
+    {
+        $paymentAttempt = $this->paymentAttempt();
+        $invoice = $paymentAttempt->invoice;
+        $invoice->update(['amount' => '10000.00']);
+        $subscription = Subscription::factory()->create([
+            'application_customer_id' => $invoice->application_customer_id,
+            'subscription_plan_id' => $invoice->subscription_plan_id,
+            'expires_at' => now()->addMonth(),
+        ]);
+        $invoice->update(['subscription_id' => $subscription->id]);
+        ApplicationPaymentGateway::query()->create([
+            'application_id' => $invoice->plan->application_id,
+            'provider' => 'dana',
+            'environment' => 'sandbox',
+            'gateway_merchant_code' => 'udev-demo',
+            'is_active' => true,
+        ]);
+        $previousExpiry = $subscription->fresh()->expires_at->toImmutable();
+
+        Http::fake([
+            "https://gateway.test/api/v1/payments/{$paymentAttempt->gateway_payment_id}/status" => Http::response([
+                'data' => $this->gatewayPayment($paymentAttempt, 'paid'),
+            ]),
+        ]);
+
+        $this->getJson("/api/v1/payment-results/{$paymentAttempt->gateway_payment_id}")
+            ->assertOk()
+            ->assertJsonPath('data.status', 'paid');
+
+        $this->assertSame('paid', $invoice->fresh()->status);
+        $this->assertSame(1, $invoice->fresh()->paymentAllocation()->count());
+        $this->assertTrue($subscription->fresh()->expires_at->equalTo($previousExpiry->addMonth()));
+        $this->assertDatabaseCount('subscription_period_events', 1);
+    }
+
     public function test_unknown_or_malformed_reference_does_not_disclose_payment_data(): void
     {
         $this->getJson('/api/v1/payment-results/'.Str::ulid())
@@ -98,6 +136,7 @@ class PaymentResultApiTest extends TestCase
 
         $this->getJson("/api/v1/payment-results/{$paymentAttempt->gateway_payment_id}")
             ->assertOk()
+            ->assertJsonPath('data.status', 'pending')
             ->assertJsonPath('data.return_url', 'https://larissama.example.test/billing');
 
         $application->update(['application_url' => 'http://untrusted.example.test']);
