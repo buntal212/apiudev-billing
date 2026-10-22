@@ -83,6 +83,7 @@ class InvoiceController extends Controller
             'plan',
             'subscription',
             'paymentAttempts.latestReconciliationRun',
+            'paymentAttempts.checkoutOutbox',
             'paymentAttempts.paymentAllocation',
             'paymentAttempts.settlementEvents',
         ]));

@@ -30,10 +30,24 @@ class CheckoutService
 
     public function retryCheckout(PaymentAttempt $paymentAttempt): PaymentAttempt
     {
-        $outbox = CheckoutOutboxMessage::query()
-            ->where('payment_attempt_id', $paymentAttempt->getKey())
-            ->firstOrFail();
-        $this->dispatch($outbox->getKey());
+        $outboxId = DB::transaction(function () use ($paymentAttempt): int {
+            $attempt = PaymentAttempt::query()
+                ->lockForUpdate()
+                ->findOrFail($paymentAttempt->getKey());
+            $invoice = Invoice::query()
+                ->with('plan')
+                ->lockForUpdate()
+                ->findOrFail($attempt->invoice_id);
+            $outbox = CheckoutOutboxMessage::query()
+                ->where('payment_attempt_id', $attempt->getKey())
+                ->lockForUpdate()
+                ->first();
+
+            $this->assertRetryAllowed($attempt, $invoice, $outbox);
+
+            return (int) $outbox->getKey();
+        });
+        $this->dispatch($outboxId);
 
         return PaymentAttempt::query()->findOrFail($paymentAttempt->getKey());
     }
@@ -291,6 +305,77 @@ class CheckoutService
         }
 
         $this->amountMinor($invoice->getRawOriginal('amount'));
+    }
+
+    private function assertRetryAllowed(
+        PaymentAttempt $attempt,
+        Invoice $invoice,
+        ?CheckoutOutboxMessage $outbox,
+    ): void {
+        if (! in_array($attempt->status, [PaymentAttempt::StatusInitiated, PaymentAttempt::StatusPending], true)) {
+            throw ValidationException::withMessages([
+                'payment_attempt' => ['Payment attempt dengan status saat ini tidak dapat diulang.'],
+            ]);
+        }
+
+        if (strtolower((string) $attempt->provider) !== 'dana'
+            || strtolower((string) $attempt->gateway_environment) !== 'sandbox'
+            || ! is_string($attempt->gateway_merchant_code)
+            || $attempt->gateway_merchant_code === ''
+            || ! is_string($attempt->merchant_reference)
+            || $attempt->merchant_reference === '') {
+            throw ValidationException::withMessages([
+                'payment_attempt' => ['Identitas checkout Sandbox tidak valid.'],
+            ]);
+        }
+
+        $this->assertInvoiceCanStartCheckout($invoice);
+
+        $expectedMerchantReference = $invoice->invoice_number.'-A'.$attempt->attempt_number;
+        if ($attempt->merchant_reference !== $expectedMerchantReference
+            || strtoupper((string) $attempt->currency) !== strtoupper((string) $invoice->currency)
+            || $this->amountMinor($attempt->getRawOriginal('amount')) !== $this->amountMinor($invoice->getRawOriginal('amount'))) {
+            throw ValidationException::withMessages([
+                'payment_attempt' => ['Referensi, nominal, atau currency checkout tidak cocok dengan invoice.'],
+            ]);
+        }
+
+        if ($invoice->plan === null) {
+            throw ValidationException::withMessages([
+                'payment_attempt' => ['Paket invoice tidak ditemukan untuk memvalidasi merchant.'],
+            ]);
+        }
+
+        $mapping = ApplicationPaymentGateway::query()
+            ->where('application_id', $invoice->plan->application_id)
+            ->where('provider', 'dana')
+            ->where('environment', 'sandbox')
+            ->where('gateway_merchant_code', $attempt->gateway_merchant_code)
+            ->where('is_active', true)
+            ->first();
+
+        if ($mapping === null || $mapping->environment !== $attempt->gateway_environment) {
+            throw ValidationException::withMessages([
+                'payment_attempt' => ['Mapping merchant checkout tidak lagi tersedia atau tidak cocok.'],
+            ]);
+        }
+
+        if ($outbox === null || $outbox->idempotency_key !== 'dana-checkout-attempt-'.$attempt->getKey()) {
+            throw ValidationException::withMessages([
+                'payment_attempt' => ['Outbox checkout tidak ditemukan atau tidak valid.'],
+            ]);
+        }
+
+        if (! in_array($outbox->status, [
+            CheckoutOutboxMessage::StatusFailed,
+            CheckoutOutboxMessage::StatusPending,
+            CheckoutOutboxMessage::StatusProcessing,
+            CheckoutOutboxMessage::StatusCompleted,
+        ], true)) {
+            throw ValidationException::withMessages([
+                'payment_attempt' => ['Status outbox checkout tidak dapat diulang.'],
+            ]);
+        }
     }
 
     private function amountMinor(string $amount): int

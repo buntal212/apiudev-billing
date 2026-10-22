@@ -55,6 +55,16 @@ class PaymentAttemptApiTest extends TestCase
             ->assertJsonPath('message', 'Anda tidak memiliki izin untuk mengakses halaman ini.');
     }
 
+    public function test_checkout_retry_action_requires_admin_authorization(): void
+    {
+        $paymentAttempt = PaymentAttempt::factory()->create();
+        Sanctum::actingAs(User::factory()->create(), ['admin:access']);
+
+        $this->postJson("/api/v1/admin/payment-attempts/{$paymentAttempt->id}/checkout/retry")
+            ->assertForbidden()
+            ->assertJsonPath('message', 'Anda tidak memiliki izin untuk mengakses halaman ini.');
+    }
+
     private function admin(): User
     {
         return User::factory()->create(['is_admin' => true]);

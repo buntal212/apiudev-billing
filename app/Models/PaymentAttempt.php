@@ -53,6 +53,14 @@ class PaymentAttempt extends Model
     }
 
     /**
+     * @return HasOne<CheckoutOutboxMessage, $this>
+     */
+    public function checkoutOutbox(): HasOne
+    {
+        return $this->hasOne(CheckoutOutboxMessage::class);
+    }
+
+    /**
      * @return HasMany<PaymentReconciliationRun, $this>
      */
     public function reconciliationRuns(): HasMany

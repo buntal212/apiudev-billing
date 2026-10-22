@@ -6,6 +6,7 @@ use App\Http\Controllers\Controller;
 use App\Http\Requests\ListPaymentAttemptsRequest;
 use App\Http\Resources\PaymentAttemptResource;
 use App\Models\PaymentAttempt;
+use App\Services\CheckoutService;
 use App\Services\PaymentReconciliationService;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Http\Resources\Json\AnonymousResourceCollection;
@@ -20,6 +21,7 @@ class PaymentAttemptController extends Controller
         $paymentAttempts = PaymentAttempt::query()
             ->with([
                 'invoice.subscription',
+                'checkoutOutbox',
                 'latestReconciliationRun',
                 'paymentAllocation',
                 'settlementEvents',
@@ -57,6 +59,7 @@ class PaymentAttemptController extends Controller
 
         return new PaymentAttemptResource($paymentAttempt->load([
             'invoice.subscription',
+            'checkoutOutbox',
             'latestReconciliationRun',
             'paymentAllocation',
             'settlementEvents',
@@ -72,6 +75,25 @@ class PaymentAttemptController extends Controller
 
         return new PaymentAttemptResource($paymentAttempt->fresh()->load([
             'invoice.subscription',
+            'checkoutOutbox',
+            'latestReconciliationRun',
+            'paymentAllocation',
+            'settlementEvents',
+        ]));
+    }
+
+    public function retryCheckout(
+        PaymentAttempt $paymentAttempt,
+        CheckoutService $checkoutService,
+    ): PaymentAttemptResource {
+        $this->authorize('update', $paymentAttempt);
+        $this->authorize('update', $paymentAttempt->invoice);
+
+        $attempt = $checkoutService->retryCheckout($paymentAttempt);
+
+        return new PaymentAttemptResource($attempt->load([
+            'invoice.subscription',
+            'checkoutOutbox',
             'latestReconciliationRun',
             'paymentAllocation',
             'settlementEvents',

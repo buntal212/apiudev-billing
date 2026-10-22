@@ -21,6 +21,7 @@ class PaymentAttemptResource extends JsonResource
             'provider' => $this->provider,
             'merchant_reference' => $this->merchant_reference,
             'provider_reference' => $this->provider_reference,
+            'gateway_payment_id' => $this->gateway_payment_id,
             'amount' => $this->amount,
             'currency' => $this->currency,
             'status' => $this->status,
@@ -29,6 +30,15 @@ class PaymentAttemptResource extends JsonResource
             'failure_code' => $this->failure_code,
             'failure_message' => $this->failure_message,
             'metadata' => $this->metadata,
+            'checkout_url' => $this->checkout_url,
+            'checkout_expires_at' => $this->checkout_expires_at?->toISOString(),
+            'checkout' => $this->whenLoaded('checkoutOutbox', fn (): ?array => $this->checkoutOutbox ? [
+                'status' => $this->checkoutOutbox->status,
+                'attempts' => $this->checkoutOutbox->attempts,
+                'error_code' => $this->checkoutOutbox->error_code,
+                'available_at' => $this->checkoutOutbox->available_at?->toISOString(),
+                'locked_at' => $this->checkoutOutbox->locked_at?->toISOString(),
+            ] : null),
             'reconciliation' => $this->whenLoaded('latestReconciliationRun', fn (): ?array => $this->latestReconciliationRun ? [
                 'status' => $this->latestReconciliationRun->status,
                 'gateway_status' => $this->latestReconciliationRun->gateway_status,

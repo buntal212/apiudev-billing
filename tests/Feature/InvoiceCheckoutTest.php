@@ -172,6 +172,99 @@ class InvoiceCheckoutTest extends TestCase
         $this->assertDatabaseHas('checkout_outbox_messages', ['payment_attempt_id' => 2, 'status' => CheckoutOutboxMessage::StatusFailed]);
     }
 
+    public function test_admin_can_retry_failed_checkout_with_the_same_attempt_and_idempotency_key(): void
+    {
+        [$invoice] = $this->invoiceWithGateway();
+        $retry = false;
+        $observed = [];
+        Http::fake(function (HttpRequest $request) use (&$retry, &$observed): mixed {
+            if ($request->method() === 'GET') {
+                return Http::response(['data' => []]);
+            }
+
+            if (! $retry) {
+                return Http::response(['data' => []]);
+            }
+
+            $attempt = PaymentAttempt::query()->sole();
+            $observed[] = [
+                'method' => $request->method(),
+                'merchant_reference' => $request->data()['merchant_order_id'] ?? null,
+                'idempotency_key' => $request->header('Idempotency-Key')[0] ?? null,
+            ];
+
+            return Http::response(['data' => $this->gatewayPayment($attempt, 'gateway-retry-001')]);
+        });
+
+        $this->actingAdmin()
+            ->postJson("/api/v1/admin/invoices/{$invoice->id}/checkout", [], ['Idempotency-Key' => 'checkout-retry-source-001'])
+            ->assertStatus(502);
+
+        $attempt = PaymentAttempt::query()->sole();
+        $outbox = CheckoutOutboxMessage::query()->sole();
+        $merchantReference = $attempt->merchant_reference;
+        $outboxIdempotencyKey = $outbox->idempotency_key;
+        $retry = true;
+
+        $retryResponse = $this->actingAdmin()
+            ->postJson("/api/v1/admin/payment-attempts/{$attempt->id}/checkout/retry");
+        $retryResponse
+            ->assertOk()
+            ->assertJsonPath('data.id', $attempt->id)
+            ->assertJsonPath('data.checkout.status', CheckoutOutboxMessage::StatusCompleted)
+            ->assertJsonPath('data.gateway_payment_id', 'gateway-retry-001');
+
+        $attempt->refresh();
+        $this->assertSame($merchantReference, $attempt->merchant_reference);
+        $this->assertSame($outboxIdempotencyKey, CheckoutOutboxMessage::query()->sole()->idempotency_key);
+        $this->assertSame($merchantReference, $observed[0]['merchant_reference']);
+        $this->assertSame($outboxIdempotencyKey, $observed[0]['idempotency_key']);
+
+        $this->actingAdmin()
+            ->postJson("/api/v1/admin/payment-attempts/{$attempt->id}/checkout/retry")
+            ->assertOk()
+            ->assertJsonPath('data.gateway_payment_id', 'gateway-retry-001');
+        Http::assertSentCount(4);
+        $this->assertDatabaseCount('payment_attempts', 1);
+    }
+
+    public function test_retry_rejects_attempt_with_foreign_merchant_mapping_or_final_status(): void
+    {
+        [$invoice] = $this->invoiceWithGateway();
+        $attempt = PaymentAttempt::factory()->create([
+            'invoice_id' => $invoice->id,
+            'attempt_number' => 1,
+            'provider' => 'dana',
+            'merchant_reference' => $invoice->invoice_number.'-A1',
+            'gateway_merchant_code' => 'foreign-merchant',
+            'gateway_environment' => 'sandbox',
+            'amount' => $invoice->amount,
+            'currency' => $invoice->currency,
+            'status' => PaymentAttempt::StatusInitiated,
+        ]);
+        CheckoutOutboxMessage::query()->create([
+            'payment_attempt_id' => $attempt->id,
+            'idempotency_key' => 'dana-checkout-attempt-'.$attempt->id,
+            'status' => CheckoutOutboxMessage::StatusFailed,
+            'attempts' => 2,
+            'error_code' => 'gateway_response_invalid',
+        ]);
+        Http::fake();
+
+        $this->actingAdmin()
+            ->postJson("/api/v1/admin/payment-attempts/{$attempt->id}/checkout/retry")
+            ->assertUnprocessable()
+            ->assertJsonValidationErrors('payment_attempt');
+        Http::assertNothingSent();
+
+        $attempt->update(['status' => PaymentAttempt::StatusSucceeded]);
+        $this->actingAdmin()
+            ->postJson("/api/v1/admin/payment-attempts/{$attempt->id}/checkout/retry")
+            ->assertUnprocessable()
+            ->assertJsonValidationErrors('payment_attempt');
+        Http::assertNothingSent();
+    }
+
     public function test_endpoint_rejects_frontend_controlled_payment_fields(): void
     {
         [$invoice] = $this->invoiceWithGateway();
