@@ -61,6 +61,7 @@ abstract class ApiFormRequest extends FormRequest
             'invoice_id' => 'Invoice',
             'invoice_number' => 'Nomor invoice',
             'name' => 'Nama',
+            'owner_name' => 'Nama pemilik',
             'page' => 'Nomor halaman',
             'password' => 'Kata sandi',
             'per_page' => 'Jumlah data per halaman',

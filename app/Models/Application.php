@@ -39,6 +39,22 @@ class Application extends Model
     }
 
     /**
+     * @return HasMany<ApplicationIntegrationToken, $this>
+     */
+    public function integrationTokens(): HasMany
+    {
+        return $this->hasMany(ApplicationIntegrationToken::class);
+    }
+
+    /**
+     * @return HasMany<ApplicationIntegrationAudit, $this>
+     */
+    public function integrationAudits(): HasMany
+    {
+        return $this->hasMany(ApplicationIntegrationAudit::class);
+    }
+
+    /**
      * @return array<string, string>
      */
     protected function casts(): array

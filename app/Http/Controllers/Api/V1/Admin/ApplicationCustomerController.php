@@ -22,6 +22,7 @@ class ApplicationCustomerController extends Controller
         $filters = $request->validated();
         $customers = ApplicationCustomer::query()
             ->with('application')
+            ->withCount(['invoices', 'subscriptions'])
             ->when($filters['application_id'] ?? null, function (Builder $query, int $applicationId): void {
                 $query->where('application_id', $applicationId);
             })
@@ -34,6 +35,9 @@ class ApplicationCustomerController extends Controller
             })
             ->when(array_key_exists('is_active', $filters), function (Builder $query) use ($request): void {
                 $query->where('is_active', $request->boolean('is_active'));
+            })
+            ->when($filters['source'] ?? null, function (Builder $query, string $source): void {
+                $query->where('source', $source);
             })
             ->orderBy($filters['sort'] ?? 'created_at', $filters['direction'] ?? 'desc')
             ->orderBy('id')
@@ -58,7 +62,11 @@ class ApplicationCustomerController extends Controller
     {
         $this->authorize('view', $applicationCustomer);
 
-        return new ApplicationCustomerResource($applicationCustomer->load('application'));
+        return new ApplicationCustomerResource($applicationCustomer->load([
+            'application',
+            'invoices.paymentAttempts.latestReconciliationRun',
+            'subscriptions.plan',
+        ])->loadCount(['invoices', 'subscriptions']));
     }
 
     public function update(UpdateApplicationCustomerRequest $request, ApplicationCustomer $applicationCustomer): ApplicationCustomerResource

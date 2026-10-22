@@ -1,6 +1,10 @@
 <?php
 
+use App\Exceptions\IntegrationConflictException;
+use App\Http\Middleware\AuthenticateApplicationIntegration;
 use App\Http\Middleware\EnsureAdmin;
+use App\Http\Middleware\EnsureIntegrationScope;
+use App\Services\ApplicationIntegrationAuditService;
 use Illuminate\Auth\Access\AuthorizationException;
 use Illuminate\Auth\AuthenticationException;
 use Illuminate\Console\Scheduling\Schedule;
@@ -32,6 +36,8 @@ return Application::configure(basePath: dirname(__DIR__))
         $middleware->alias([
             'admin' => EnsureAdmin::class,
             'abilities' => CheckAbilities::class,
+            'integration.auth' => AuthenticateApplicationIntegration::class,
+            'integration.scope' => EnsureIntegrationScope::class,
         ]);
     })
     ->withExceptions(function (Exceptions $exceptions): void {
@@ -40,10 +46,44 @@ return Application::configure(basePath: dirname(__DIR__))
         );
 
         $exceptions->render(function (ValidationException $exception, Request $request): JsonResponse {
+            if (str_starts_with($request->path(), 'api/v1/integrations')) {
+                $token = $request->attributes->get('integration_token');
+                app(ApplicationIntegrationAuditService::class)->record(
+                    request: $request,
+                    application: $request->attributes->get('integration_application'),
+                    token: is_object($token) ? $token : null,
+                    operation: 'request.validation',
+                    status: 'failed',
+                    externalCustomerId: $request->route('externalId') ?: $request->input('external_customer_id'),
+                    errorCode: 'validation_failed',
+                    safeDetails: ['fields' => array_keys($exception->errors())],
+                );
+            }
+
             return response()->json([
                 'message' => 'Data yang dikirim belum valid. Periksa kembali isian Anda.',
                 'errors' => $exception->errors(),
             ], $exception->status);
+        });
+
+        $exceptions->render(function (IntegrationConflictException $exception, Request $request): JsonResponse {
+            if (str_starts_with($request->path(), 'api/v1/integrations')) {
+                $token = $request->attributes->get('integration_token');
+                app(ApplicationIntegrationAuditService::class)->record(
+                    request: $request,
+                    application: $request->attributes->get('integration_application'),
+                    token: is_object($token) ? $token : null,
+                    operation: 'request.conflict',
+                    status: 'failed',
+                    externalCustomerId: $request->route('externalId') ?: $request->input('external_customer_id'),
+                    errorCode: $exception->safeCode,
+                );
+            }
+
+            return response()->json([
+                'message' => $exception->getMessage(),
+                'error_code' => $exception->safeCode,
+            ], 409);
         });
 
         $exceptions->render(function (AuthenticationException $exception, Request $request): JsonResponse {
@@ -89,6 +129,20 @@ return Application::configure(basePath: dirname(__DIR__))
                 ]);
             }
 
+            if ($status === 429 && str_starts_with($request->path(), 'api/v1/integrations')) {
+                $token = $request->attributes->get('integration_token');
+                app(ApplicationIntegrationAuditService::class)->record(
+                    request: $request,
+                    application: $request->attributes->get('integration_application'),
+                    token: is_object($token) ? $token : null,
+                    operation: 'rate_limit',
+                    status: 'failed',
+                    externalCustomerId: $request->route('externalId') ?: $request->input('external_customer_id'),
+                    errorCode: 'rate_limited',
+                    safeDetails: ['retry_after' => $exception->getHeaders()['Retry-After'] ?? null],
+                );
+            }
+
             // ThrottleRequests menyediakan Retry-After, tetapi membuat respons
             // JSON baru di sini sebelumnya menghilangkan header tersebut.
             // Teruskan hanya metadata rate-limit yang aman agar klien dapat
@@ -106,6 +160,23 @@ return Application::configure(basePath: dirname(__DIR__))
         });
 
         $exceptions->render(function (Throwable $exception, Request $request): JsonResponse {
+            if (str_starts_with($request->path(), 'api/v1/integrations')) {
+                try {
+                    $token = $request->attributes->get('integration_token');
+                    app(ApplicationIntegrationAuditService::class)->record(
+                        request: $request,
+                        application: $request->attributes->get('integration_application'),
+                        token: is_object($token) ? $token : null,
+                        operation: 'request.internal',
+                        status: 'failed',
+                        externalCustomerId: $request->route('externalId') ?: $request->input('external_customer_id'),
+                        errorCode: 'internal_error',
+                    );
+                } catch (Throwable) {
+                    // Jangan mengganti respons utama jika audit storage bermasalah.
+                }
+            }
+
             return response()->json([
                 'message' => 'Layanan sedang mengalami gangguan. Silakan coba kembali.',
             ], 500);

@@ -57,5 +57,21 @@ class AppServiceProvider extends ServiceProvider
                 .$paymentAttemptKey.':'
                 .$request->ip());
         });
+
+        RateLimiter::for('integration-api', function (Request $request): array {
+            $token = $request->attributes->get('integration_token');
+            $tokenKey = is_object($token) && method_exists($token, 'getKey')
+                ? $token->getKey()
+                : 'anonymous';
+            $application = $request->attributes->get('integration_application');
+            $applicationKey = is_object($application) && method_exists($application, 'getKey')
+                ? $application->getKey()
+                : 'anonymous';
+
+            return [
+                Limit::perMinute(60)->by('integration-api:token:'.$applicationKey.':'.$tokenKey),
+                Limit::perMinute(120)->by('integration-api:ip:'.$request->ip()),
+            ];
+        });
     }
 }

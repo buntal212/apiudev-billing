@@ -21,6 +21,12 @@ class ApplicationController extends Controller
 
         $filters = $request->validated();
         $applications = Application::query()
+            ->withCount([
+                'customers',
+                'customers as integration_customers_count' => function (Builder $query): void {
+                    $query->where('source', 'integration');
+                },
+            ])
             ->when($filters['search'] ?? null, function (Builder $query, string $search): void {
                 $query->where(function (Builder $query) use ($search): void {
                     $query->where('code', 'like', "%{$search}%")
@@ -54,7 +60,16 @@ class ApplicationController extends Controller
     {
         $this->authorize('view', $application);
 
-        return new ApplicationResource($application);
+        return new ApplicationResource(
+            $application->loadCount([
+                'customers',
+                'integrationTokens',
+                'customers as integration_customers_count' => function (Builder $query): void {
+                    $query->where('source', 'integration');
+                },
+            ])
+                ->loadMax('customers', 'last_synced_at'),
+        );
     }
 
     public function update(UpdateApplicationRequest $request, Application $application): ApplicationResource

@@ -32,6 +32,7 @@ class StoreApplicationCustomerRequest extends ApiFormRequest
                     ->where('application_id', $this->integer('application_id')),
             ],
             'name' => ['required', 'string', 'max:255'],
+            'owner_name' => ['nullable', 'string', 'max:255'],
             'email' => ['nullable', 'email', 'max:255'],
             'phone_number' => ['nullable', 'string', 'max:30'],
             'is_active' => ['required', 'boolean'],

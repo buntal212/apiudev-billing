@@ -2,6 +2,8 @@
 
 use App\Http\Controllers\Api\V1\Admin\ApplicationController;
 use App\Http\Controllers\Api\V1\Admin\ApplicationCustomerController;
+use App\Http\Controllers\Api\V1\Admin\ApplicationIntegrationAuditController;
+use App\Http\Controllers\Api\V1\Admin\ApplicationIntegrationTokenController;
 use App\Http\Controllers\Api\V1\Admin\ApplicationPaymentGatewayController;
 use App\Http\Controllers\Api\V1\Admin\DanaGatewayMerchantProvisioningController;
 use App\Http\Controllers\Api\V1\Admin\InvoiceCheckoutController;
@@ -10,6 +12,7 @@ use App\Http\Controllers\Api\V1\Admin\PaymentAttemptController;
 use App\Http\Controllers\Api\V1\Admin\SubscriptionController;
 use App\Http\Controllers\Api\V1\Admin\SubscriptionPlanController;
 use App\Http\Controllers\Api\V1\Auth\AuthController;
+use App\Http\Controllers\Api\V1\Integration\IntegrationCustomerController;
 use App\Http\Controllers\Api\V1\PaymentResultController;
 use Illuminate\Support\Facades\Route;
 
@@ -26,11 +29,32 @@ Route::prefix('v1/auth')->group(function (): void {
     });
 });
 
+Route::prefix('v1/integrations')
+    ->middleware(['integration.auth', 'throttle:integration-api'])
+    ->group(function (): void {
+        Route::post('customers', [IntegrationCustomerController::class, 'store'])
+            ->middleware('integration.scope:customers:write');
+        Route::get('customers/{externalId}', [IntegrationCustomerController::class, 'show'])
+            ->where('externalId', '[A-Za-z0-9._:-]{1,100}')
+            ->middleware('integration.scope:customers:read');
+        Route::patch('customers/{externalId}', [IntegrationCustomerController::class, 'update'])
+            ->where('externalId', '[A-Za-z0-9._:-]{1,100}')
+            ->middleware('integration.scope:customers:write');
+    });
+
 Route::prefix('v1/admin')
     ->middleware(['auth:sanctum', 'abilities:admin:access', 'admin'])
     ->group(function (): void {
         Route::apiResource('applications', ApplicationController::class)
             ->only(['index', 'store', 'show', 'update']);
+        Route::get('applications/{application}/integration-tokens', [ApplicationIntegrationTokenController::class, 'index'])
+            ->middleware('throttle:admin-dana-gateway-read');
+        Route::get('applications/{application}/integration-audits', [ApplicationIntegrationAuditController::class, 'index'])
+            ->middleware('throttle:admin-dana-gateway-read');
+        Route::post('applications/{application}/integration-tokens', [ApplicationIntegrationTokenController::class, 'store'])
+            ->middleware('throttle:admin-dana-gateway-write');
+        Route::delete('applications/{application}/integration-tokens/{integrationToken}', [ApplicationIntegrationTokenController::class, 'destroy'])
+            ->middleware('throttle:admin-dana-gateway-write');
         Route::get('payment-gateways/merchants', [ApplicationPaymentGatewayController::class, 'merchants']);
         Route::apiResource('payment-gateways', ApplicationPaymentGatewayController::class)
             ->only(['index', 'store', 'update']);

@@ -39,6 +39,7 @@ class UpdateApplicationCustomerRequest extends ApiFormRequest
                     ->ignore($applicationCustomer),
             ],
             'name' => ['sometimes', 'required', 'string', 'max:255'],
+            'owner_name' => ['sometimes', 'nullable', 'string', 'max:255'],
             'email' => ['sometimes', 'nullable', 'email', 'max:255'],
             'phone_number' => ['sometimes', 'nullable', 'string', 'max:30'],
             'is_active' => ['sometimes', 'required', 'boolean'],

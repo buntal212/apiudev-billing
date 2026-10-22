@@ -1,0 +1,154 @@
+openapi: 3.1.0
+info:
+  title: UDEV Billing Customer Integration
+  version: 1.0.0
+  description: Kontrak server-to-server sinkronisasi pelanggan multi-aplikasi. Upsert idempotent menggunakan pasangan application_id dari token dan external_customer_id.
+servers:
+  - url: https://apiudev.udumbara.my.id/api/v1
+security:
+  - integrationBearer: []
+paths:
+  /integrations/customers:
+    post:
+      summary: Upsert pelanggan aplikasi
+      security:
+        - integrationBearer: [customers:write]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CustomerWrite'
+            example:
+              external_customer_id: larissama-125
+              name: Warung Maju Jaya
+              owner_name: Budi
+              email: budi@example.com
+              phone: '081234567890'
+              status: active
+      responses:
+        '201':
+          description: Pelanggan baru dibuat
+          content: { application/json: { schema: { $ref: '#/components/schemas/CustomerResponse' } } }
+        '200':
+          description: Pelanggan diperbarui
+          content: { application/json: { schema: { $ref: '#/components/schemas/CustomerResponse' } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/Validation' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+  /integrations/customers/{externalId}:
+    parameters:
+      - $ref: '#/components/parameters/ExternalId'
+    get:
+      summary: Baca pelanggan aplikasi
+      security:
+        - integrationBearer: [customers:read]
+      responses:
+        '200':
+          description: Pelanggan ditemukan
+          content: { application/json: { schema: { $ref: '#/components/schemas/CustomerResponse' } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { description: Pelanggan tidak ditemukan }
+        '429': { $ref: '#/components/responses/RateLimited' }
+    patch:
+      summary: Perbarui pelanggan yang sudah ada
+      security:
+        - integrationBearer: [customers:write]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CustomerPatch'
+      responses:
+        '200':
+          description: Pelanggan diperbarui
+          content: { application/json: { schema: { $ref: '#/components/schemas/CustomerResponse' } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { description: Pelanggan tidak ditemukan }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/Validation' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+components:
+  securitySchemes:
+    integrationBearer:
+      type: http
+      scheme: bearer
+      bearerFormat: UDEV integration token
+  parameters:
+    ExternalId:
+      name: externalId
+      in: path
+      required: true
+      schema: { type: string, pattern: '^[A-Za-z0-9._:-]{1,100}$' }
+  schemas:
+    CustomerWrite:
+      type: object
+      required: [external_customer_id, name, status]
+      additionalProperties: false
+      properties:
+        external_customer_id: { type: string, maxLength: 100 }
+        name: { type: string, maxLength: 255 }
+        owner_name: { type: [string, 'null'], maxLength: 255 }
+        email: { type: [string, 'null'], format: email, maxLength: 255 }
+        phone: { type: [string, 'null'], maxLength: 50 }
+        status: { type: string, enum: [active, inactive] }
+    CustomerPatch:
+      type: object
+      additionalProperties: false
+      minProperties: 1
+      properties:
+        name: { type: string, maxLength: 255 }
+        owner_name: { type: [string, 'null'], maxLength: 255 }
+        email: { type: [string, 'null'], format: email, maxLength: 255 }
+        phone: { type: [string, 'null'], maxLength: 50 }
+        status: { type: string, enum: [active, inactive] }
+    CustomerResponse:
+      type: object
+      properties:
+        data:
+          type: object
+          required: [id, application_id, external_customer_id, name, is_active]
+          properties:
+            id: { type: integer }
+            application_id: { type: integer }
+            external_customer_id: { type: string }
+            name: { type: string }
+            owner_name: { type: [string, 'null'] }
+            email: { type: [string, 'null'], format: email }
+            phone_number: { type: [string, 'null'] }
+            is_active: { type: boolean }
+            source: { type: string, enum: [manual, integration] }
+            sync_status: { type: string }
+            first_synced_at: { type: [string, 'null'], format: date-time }
+            last_synced_at: { type: [string, 'null'], format: date-time }
+            sync_error_code: { type: [string, 'null'] }
+    ErrorResponse:
+      type: object
+      properties:
+        message: { type: string }
+        error_code: { type: string }
+        errors: { type: object, additionalProperties: { type: array, items: { type: string } } }
+  responses:
+    Unauthorized:
+      description: Token tidak valid, dicabut, atau kedaluwarsa
+      content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } }
+    Forbidden:
+      description: Scope tidak mencukupi
+      content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } }
+    Conflict:
+      description: Konflik dengan pelanggan manual
+      content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } }
+    Validation:
+      description: Payload tidak valid atau mengandung field billing
+      content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } }
+    RateLimited:
+      description: Batas request tercapai; tunggu header Retry-After.
+      headers:
+        Retry-After:
+          schema: { type: integer, minimum: 1 }
+      content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } }

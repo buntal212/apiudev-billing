@@ -9,7 +9,7 @@ use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 
-#[Fillable(['application_id', 'external_customer_id', 'name', 'email', 'phone_number', 'is_active'])]
+#[Fillable(['application_id', 'external_customer_id', 'name', 'owner_name', 'email', 'phone_number', 'is_active', 'source', 'first_synced_at', 'last_synced_at', 'sync_status', 'sync_error_code'])]
 class ApplicationCustomer extends Model
 {
     /** @use HasFactory<ApplicationCustomerFactory> */
@@ -46,6 +46,8 @@ class ApplicationCustomer extends Model
     {
         return [
             'is_active' => 'boolean',
+            'first_synced_at' => 'datetime',
+            'last_synced_at' => 'datetime',
         ];
     }
 }
