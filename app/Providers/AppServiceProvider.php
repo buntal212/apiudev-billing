@@ -45,5 +45,17 @@ class AppServiceProvider extends ServiceProvider
         RateLimiter::for('admin-sandbox-payment-result', function (Request $request): Limit {
             return Limit::perMinute(30)->by('admin-sandbox-payment-result:'.$request->user()?->getAuthIdentifier().':'.$request->ip());
         });
+
+        RateLimiter::for('admin-payment-reconciliation', function (Request $request): Limit {
+            $paymentAttempt = $request->route('paymentAttempt');
+            $paymentAttemptKey = is_object($paymentAttempt) && method_exists($paymentAttempt, 'getKey')
+                ? $paymentAttempt->getKey()
+                : (string) $paymentAttempt;
+
+            return Limit::perMinute(5)->by('admin-payment-reconciliation:'
+                .$request->user()?->getAuthIdentifier().':'
+                .$paymentAttemptKey.':'
+                .$request->ip());
+        });
     }
 }

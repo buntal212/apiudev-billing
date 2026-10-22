@@ -53,6 +53,22 @@ class PaymentAttempt extends Model
     }
 
     /**
+     * @return HasMany<PaymentReconciliationRun, $this>
+     */
+    public function reconciliationRuns(): HasMany
+    {
+        return $this->hasMany(PaymentReconciliationRun::class);
+    }
+
+    /**
+     * @return HasOne<PaymentReconciliationRun, $this>
+     */
+    public function latestReconciliationRun(): HasOne
+    {
+        return $this->hasOne(PaymentReconciliationRun::class)->latestOfMany('id');
+    }
+
+    /**
      * @return array<string, string>
      */
     protected function casts(): array

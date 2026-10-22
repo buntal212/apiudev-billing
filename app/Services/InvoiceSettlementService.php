@@ -8,7 +8,6 @@ use App\Models\PaymentAllocation;
 use App\Models\PaymentAttempt;
 use App\Models\SettlementEvent;
 use App\Models\Subscription;
-use Carbon\CarbonImmutable;
 use Illuminate\Database\QueryException;
 use Illuminate\Support\Facades\DB;
 use Throwable;
@@ -90,11 +89,12 @@ class InvoiceSettlementService
                         $this->reject('subscription_scope_mismatch', 'Langganan tidak sesuai dengan invoice.');
                     }
 
-                    $this->subscriptionService->extendSubscription(
+                    $this->subscriptionService->renewFromVerifiedPayment(
                         subscription: $subscription,
                         durationMonths: $invoice->duration_months,
                         idempotencyKey: $settlementKey.':renewal',
                         sourceType: 'payment_allocation',
+                        verifiedPaidAt: $verification->paidAt,
                         sourceId: (string) $allocation->getKey(),
                     );
                 }
@@ -143,10 +143,6 @@ class InvoiceSettlementService
         VerifiedGatewayPayment $verification,
     ): void {
         $this->assertVerificationMatchesAttempt($attempt, $invoice, $verification);
-
-        if ($verification->paidAt->greaterThan(CarbonImmutable::instance($invoice->due_at))) {
-            $this->reject('invoice_overdue_payment', 'Pembayaran setelah jatuh tempo memerlukan keputusan pemulihan.');
-        }
 
         if ($verification->provider === 'dana' && $verification->environment !== 'sandbox') {
             $this->reject('gateway_environment_not_allowed', 'Settlement DANA hanya diizinkan pada Sandbox.');

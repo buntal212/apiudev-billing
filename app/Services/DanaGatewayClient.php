@@ -77,9 +77,17 @@ class DanaGatewayClient
     private function decodeSuccessfulResponse(Response $response): array
     {
         if (! $response->successful()) {
+            $status = $response->status();
+            $retryAfterSeconds = $this->retryAfterSeconds($response);
+
             throw new DanaGatewayException(
                 'Gateway DANA menolak atau belum dapat memproses permintaan.',
-                $response->status() === 429 || $response->serverError(),
+                $status === 429 || $response->serverError(),
+                $status,
+                $retryAfterSeconds,
+                $status === 429
+                    ? 'gateway_rate_limited'
+                    : ($response->serverError() ? 'gateway_unavailable' : 'gateway_request_rejected'),
             );
         }
 
@@ -89,5 +97,24 @@ class DanaGatewayClient
         }
 
         return $body;
+    }
+
+    private function retryAfterSeconds(Response $response): ?int
+    {
+        $retryAfter = trim((string) $response->header('Retry-After'));
+        if ($retryAfter === '') {
+            return null;
+        }
+
+        if (ctype_digit($retryAfter)) {
+            return (int) $retryAfter;
+        }
+
+        $timestamp = strtotime($retryAfter);
+        if ($timestamp === false) {
+            return null;
+        }
+
+        return max(0, $timestamp - now()->timestamp);
     }
 }

@@ -6,6 +6,7 @@ use App\Http\Controllers\Controller;
 use App\Http\Requests\ListPaymentAttemptsRequest;
 use App\Http\Resources\PaymentAttemptResource;
 use App\Models\PaymentAttempt;
+use App\Services\PaymentReconciliationService;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Http\Resources\Json\AnonymousResourceCollection;
 
@@ -17,7 +18,12 @@ class PaymentAttemptController extends Controller
 
         $filters = $request->validated();
         $paymentAttempts = PaymentAttempt::query()
-            ->with('invoice')
+            ->with([
+                'invoice.subscription',
+                'latestReconciliationRun',
+                'paymentAllocation',
+                'settlementEvents',
+            ])
             ->when($filters['application_id'] ?? null, function (Builder $query, int $applicationId): void {
                 $query->whereHas('invoice.customer', function (Builder $query) use ($applicationId): void {
                     $query->where('application_id', $applicationId);
@@ -49,6 +55,26 @@ class PaymentAttemptController extends Controller
     {
         $this->authorize('view', $paymentAttempt);
 
-        return new PaymentAttemptResource($paymentAttempt->load('invoice'));
+        return new PaymentAttemptResource($paymentAttempt->load([
+            'invoice.subscription',
+            'latestReconciliationRun',
+            'paymentAllocation',
+            'settlementEvents',
+        ]));
+    }
+
+    public function reconcile(
+        PaymentAttempt $paymentAttempt,
+        PaymentReconciliationService $reconciliationService,
+    ): PaymentAttemptResource {
+        $this->authorize('update', $paymentAttempt);
+        $reconciliationService->reconcile($paymentAttempt);
+
+        return new PaymentAttemptResource($paymentAttempt->fresh()->load([
+            'invoice.subscription',
+            'latestReconciliationRun',
+            'paymentAllocation',
+            'settlementEvents',
+        ]));
     }
 }

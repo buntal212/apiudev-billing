@@ -78,6 +78,13 @@ class InvoiceController extends Controller
     {
         $this->authorize('view', $invoice);
 
-        return new InvoiceResource($invoice->load(['customer', 'plan', 'subscription', 'paymentAttempts']));
+        return new InvoiceResource($invoice->load([
+            'customer',
+            'plan',
+            'subscription',
+            'paymentAttempts.latestReconciliationRun',
+            'paymentAttempts.paymentAllocation',
+            'paymentAttempts.settlementEvents',
+        ]));
     }
 }

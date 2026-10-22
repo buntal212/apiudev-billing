@@ -4,6 +4,8 @@ namespace Tests\Feature;
 
 use App\Models\Application;
 use App\Models\ApplicationCustomer;
+use App\Models\Invoice;
+use App\Models\PaymentAttempt;
 use App\Models\Subscription;
 use App\Models\SubscriptionPlan;
 use App\Models\User;
@@ -49,6 +51,26 @@ class SubscriptionApiTest extends TestCase
             ->assertOk()
             ->assertJsonPath('data.id', $subscription->id)
             ->assertJsonPath('data.status', Subscription::StatusActive);
+    }
+
+    public function test_subscription_detail_includes_related_invoices_and_payment_attempts(): void
+    {
+        $subscription = Subscription::factory()->create();
+        $invoice = Invoice::factory()->create([
+            'application_customer_id' => $subscription->application_customer_id,
+            'subscription_plan_id' => $subscription->subscription_plan_id,
+            'subscription_id' => $subscription->id,
+        ]);
+        $attempt = PaymentAttempt::factory()->create([
+            'invoice_id' => $invoice->id,
+            'merchant_reference' => $invoice->invoice_number.'-A1',
+        ]);
+        Sanctum::actingAs($this->admin(), ['admin:access']);
+
+        $this->getJson("/api/v1/admin/subscriptions/{$subscription->id}")
+            ->assertOk()
+            ->assertJsonPath('data.invoices.0.id', $invoice->id)
+            ->assertJsonPath('data.invoices.0.payment_attempts.0.id', $attempt->id);
     }
 
     public function test_subscriptions_require_an_admin_token(): void

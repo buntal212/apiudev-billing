@@ -147,4 +147,121 @@ class SubscriptionService
             throw $exception;
         }
     }
+
+    /**
+     * Renewal policy is anchored to the verified gateway paid_at, never a redirect time:
+     * active periods continue from their current expiry; expired or out-of-order periods
+     * start at paid_at; a period already elapsed by delayed reconciliation remains expired.
+     */
+    public function renewFromVerifiedPayment(
+        Subscription $subscription,
+        int $durationMonths,
+        string $idempotencyKey,
+        string $sourceType,
+        DateTimeInterface $verifiedPaidAt,
+        ?string $sourceId = null,
+        ?string $notes = null,
+    ): SubscriptionPeriodEvent {
+        if ($durationMonths < 1) {
+            throw ValidationException::withMessages([
+                'duration_months' => ['Durasi perpanjangan minimal 1 bulan.'],
+            ]);
+        }
+
+        $verifiedPaidAt = CarbonImmutable::instance($verifiedPaidAt);
+        if ($verifiedPaidAt->isFuture()) {
+            throw ValidationException::withMessages([
+                'paid_at' => ['Waktu pembayaran terverifikasi tidak boleh berada di masa depan.'],
+            ]);
+        }
+
+        try {
+            return DB::transaction(function () use (
+                $subscription,
+                $durationMonths,
+                $idempotencyKey,
+                $sourceType,
+                $verifiedPaidAt,
+                $sourceId,
+                $notes,
+            ): SubscriptionPeriodEvent {
+                $existingEvent = SubscriptionPeriodEvent::query()
+                    ->where('idempotency_key', $idempotencyKey)
+                    ->lockForUpdate()
+                    ->first();
+
+                if ($existingEvent) {
+                    return $existingEvent;
+                }
+
+                $lockedSubscription = Subscription::query()
+                    ->lockForUpdate()
+                    ->findOrFail($subscription->getKey());
+
+                if ($lockedSubscription->status === Subscription::StatusCancelled) {
+                    throw ValidationException::withMessages([
+                        'subscription' => ['Langganan yang dibatalkan tidak dapat diperpanjang otomatis.'],
+                    ]);
+                }
+
+                if (! in_array($lockedSubscription->status, [
+                    Subscription::StatusActive,
+                    Subscription::StatusExpired,
+                ], true)) {
+                    throw ValidationException::withMessages([
+                        'subscription' => ['Status langganan tidak memenuhi syarat untuk settlement.'],
+                    ]);
+                }
+
+                $continuesActivePeriod = $lockedSubscription->status === Subscription::StatusActive
+                    && $lockedSubscription->expires_at->greaterThan($verifiedPaidAt);
+                $periodStart = $continuesActivePeriod
+                    ? $lockedSubscription->expires_at->toImmutable()
+                    : $verifiedPaidAt;
+                $newExpiresAt = $periodStart->addMonthsNoOverflow($durationMonths);
+                $nextStatus = $newExpiresAt->isFuture()
+                    ? Subscription::StatusActive
+                    : Subscription::StatusExpired;
+                $eventNotes = trim(implode(';', array_filter([
+                    $notes,
+                    'verified_paid_at='.$verifiedPaidAt->toISOString(),
+                    'period_start='.$periodStart->toISOString(),
+                    $continuesActivePeriod ? 'period_rule=continue_active_expiry' : 'period_rule=start_at_verified_paid_at',
+                ])));
+
+                $periodEvent = SubscriptionPeriodEvent::create([
+                    'subscription_id' => $lockedSubscription->id,
+                    'event_type' => 'renewal',
+                    'previous_expires_at' => $lockedSubscription->expires_at,
+                    'new_expires_at' => $newExpiresAt,
+                    'source_type' => $sourceType,
+                    'source_id' => $sourceId,
+                    'idempotency_key' => $idempotencyKey,
+                    'notes' => $eventNotes,
+                    'created_at' => now(),
+                ]);
+
+                $updates = [
+                    'expires_at' => $newExpiresAt,
+                    'status' => $nextStatus,
+                ];
+                if (! $continuesActivePeriod) {
+                    $updates['starts_at'] = $periodStart;
+                }
+                $lockedSubscription->update($updates);
+
+                return $periodEvent;
+            });
+        } catch (QueryException $exception) {
+            $existingEvent = SubscriptionPeriodEvent::query()
+                ->where('idempotency_key', $idempotencyKey)
+                ->first();
+
+            if ($existingEvent) {
+                return $existingEvent;
+            }
+
+            throw $exception;
+        }
+    }
 }

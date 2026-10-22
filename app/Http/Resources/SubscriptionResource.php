@@ -35,6 +35,9 @@ class SubscriptionResource extends JsonResource
             'period_events' => SubscriptionPeriodEventResource::collection(
                 $this->whenLoaded('periodEvents')
             ),
+            'invoices' => InvoiceResource::collection(
+                $this->whenLoaded('invoices')
+            ),
             'created_at' => $this->created_at?->toISOString(),
             'updated_at' => $this->updated_at?->toISOString(),
         ];

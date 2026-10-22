@@ -77,4 +77,6 @@ Route::prefix('v1/admin')
         Route::post('invoices/{invoice}/checkout', [InvoiceCheckoutController::class, 'store']);
         Route::apiResource('payment-attempts', PaymentAttemptController::class)
             ->only(['index', 'show']);
+        Route::post('payment-attempts/{paymentAttempt}/reconcile', [PaymentAttemptController::class, 'reconcile'])
+            ->middleware('throttle:admin-payment-reconciliation');
     });

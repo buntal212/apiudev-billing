@@ -142,22 +142,88 @@ class InvoiceSettlementServiceTest extends TestCase
         $this->assertSame(Invoice::StatusPending, $other[0]->fresh()->status);
     }
 
-    public function test_late_payment_is_rejected_until_a_late_payment_policy_exists(): void
+    public function test_overdue_verified_payment_is_settled_without_reopening_other_invoice_statuses(): void
     {
         [$invoice, $attempt] = $this->settleableInvoice(['due_at' => now()->subMinute()]);
 
-        try {
-            app(InvoiceSettlementService::class)->settle(
-                $attempt,
-                $this->verification($attempt, paidAt: now()),
-            );
-            self::fail('Pembayaran terlambat seharusnya menunggu kebijakan pemulihan.');
-        } catch (SettlementRejectedException $exception) {
-            self::assertSame('invoice_overdue_payment', $exception->safeCode);
-        }
+        $result = app(InvoiceSettlementService::class)->settle(
+            $attempt,
+            $this->verification($attempt, paidAt: now()),
+        );
 
-        $this->assertSame(Invoice::StatusPending, $invoice->fresh()->status);
-        $this->assertDatabaseCount('payment_allocations', 0);
+        $this->assertFalse($result->alreadySettled);
+        $this->assertSame(Invoice::StatusPaid, $invoice->fresh()->status);
+        $this->assertDatabaseCount('payment_allocations', 1);
+    }
+
+    public function test_overdue_payment_extends_active_subscription_from_current_expiry(): void
+    {
+        [$invoice, $attempt, $subscription] = $this->settleableInvoice(
+            ['due_at' => now()->subDay()],
+            withSubscription: true,
+        );
+        $previousExpiry = $subscription->expires_at->toImmutable();
+        $previousStart = $subscription->starts_at->toImmutable();
+
+        app(InvoiceSettlementService::class)->settle(
+            $attempt,
+            $this->verification($attempt, paidAt: now()),
+        );
+
+        $subscription->refresh();
+        $this->assertTrue($subscription->expires_at->equalTo($previousExpiry->addMonth()));
+        $this->assertTrue($subscription->starts_at->equalTo($previousStart));
+        $this->assertSame(Subscription::StatusActive, $subscription->status);
+    }
+
+    public function test_expired_subscription_starts_at_verified_payment_time(): void
+    {
+        [$invoice, $attempt, $subscription] = $this->settleableInvoice(
+            ['due_at' => now()->subDays(3)],
+            withSubscription: true,
+        );
+        $paidAt = now()->subHours(2);
+        $subscription->update([
+            'status' => Subscription::StatusExpired,
+            'starts_at' => now()->subMonths(2),
+            'expires_at' => $paidAt->copy()->subDay(),
+        ]);
+
+        app(InvoiceSettlementService::class)->settle(
+            $attempt,
+            $this->verification($attempt, paidAt: $paidAt),
+        );
+
+        $subscription->refresh();
+        $this->assertSame($paidAt->format('Y-m-d H:i:s'), $subscription->starts_at->format('Y-m-d H:i:s'));
+        $this->assertSame($paidAt->addMonth()->format('Y-m-d H:i:s'), $subscription->expires_at->format('Y-m-d H:i:s'));
+        $this->assertSame(Subscription::StatusActive, $subscription->status);
+        $this->assertSame(Invoice::StatusPaid, $invoice->fresh()->status);
+    }
+
+    public function test_delayed_reconciliation_preserves_verified_period_even_when_it_has_already_elapsed(): void
+    {
+        [$invoice, $attempt, $subscription] = $this->settleableInvoice(
+            ['due_at' => now()->subMonths(3)],
+            withSubscription: true,
+        );
+        $paidAt = now()->subMonths(2);
+        $subscription->update([
+            'status' => Subscription::StatusExpired,
+            'starts_at' => now()->subMonths(4),
+            'expires_at' => $paidAt->copy()->subDay(),
+        ]);
+
+        app(InvoiceSettlementService::class)->settle(
+            $attempt,
+            $this->verification($attempt, paidAt: $paidAt),
+        );
+
+        $subscription->refresh();
+        $this->assertSame($paidAt->format('Y-m-d H:i:s'), $subscription->starts_at->format('Y-m-d H:i:s'));
+        $this->assertSame($paidAt->addMonth()->format('Y-m-d H:i:s'), $subscription->expires_at->format('Y-m-d H:i:s'));
+        $this->assertSame(Subscription::StatusExpired, $subscription->status);
+        $this->assertSame(Invoice::StatusPaid, $invoice->fresh()->status);
     }
 
     public function test_customer_from_another_application_cannot_be_settled(): void

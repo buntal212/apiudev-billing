@@ -44,6 +44,13 @@ class SubscriptionController extends Controller
     {
         $this->authorize('view', $subscription);
 
-        return new SubscriptionResource($subscription->load(['customer', 'plan', 'periodEvents']));
+        return new SubscriptionResource($subscription->load([
+            'customer',
+            'plan',
+            'periodEvents',
+            'invoices.paymentAttempts.latestReconciliationRun',
+            'invoices.paymentAttempts.paymentAllocation',
+            'invoices.paymentAttempts.settlementEvents',
+        ]));
     }
 }

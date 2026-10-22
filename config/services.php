@@ -47,6 +47,14 @@ return [
         'merchants' => json_decode((string) env('DANA_GATEWAY_MERCHANTS', '{}'), true) ?: [],
     ],
 
+    'dana_reconciliation' => [
+        'max_attempts' => (int) env('DANA_RECONCILIATION_MAX_ATTEMPTS', 5),
+        'batch_limit' => (int) env('DANA_RECONCILIATION_BATCH_LIMIT', 25),
+        'base_backoff_seconds' => (int) env('DANA_RECONCILIATION_BASE_BACKOFF_SECONDS', 15),
+        'max_backoff_seconds' => (int) env('DANA_RECONCILIATION_MAX_BACKOFF_SECONDS', 900),
+        'processing_timeout_seconds' => (int) env('DANA_RECONCILIATION_PROCESSING_TIMEOUT_SECONDS', 120),
+    ],
+
     'dana_merchant_provisioning' => [
         'base_url' => env('DANA_MERCHANT_PROVISIONING_BASE_URL'),
         'service_token' => env('DANA_MERCHANT_PROVISIONING_SERVICE_TOKEN'),
