@@ -42,14 +42,16 @@ Route::prefix('v1/admin')
                 Route::get('{merchantId}/sandbox-tester/validation', [DanaGatewayMerchantProvisioningController::class, 'validateDanaSandboxTester'])->whereNumber('merchantId');
                 Route::get('{merchantId}/sandbox-tester/transactions', [DanaGatewayMerchantProvisioningController::class, 'danaSandboxTestHistory'])->whereNumber('merchantId');
                 Route::get('{merchantId}/sandbox-tester/transactions/{paymentId}/status', [DanaGatewayMerchantProvisioningController::class, 'danaSandboxTestTransactionStatus'])->whereNumber('merchantId')->whereUlid('paymentId');
-                Route::get('{merchantId}/sandbox-tester/payments', [DanaGatewayMerchantProvisioningController::class, 'danaSandboxPayments'])->whereNumber('merchantId');
-                Route::get('{merchantId}/sandbox-tester/payments/summary', [DanaGatewayMerchantProvisioningController::class, 'danaSandboxPaymentSummary'])->whereNumber('merchantId');
-                Route::get('{merchantId}/sandbox-tester/payments/{paymentId}', [DanaGatewayMerchantProvisioningController::class, 'danaSandboxPaymentDetail'])->whereNumber('merchantId')->whereUlid('paymentId');
-                Route::get('{merchantId}/sandbox-tester/payments/{paymentId}/webhooks', [DanaGatewayMerchantProvisioningController::class, 'danaSandboxPaymentWebhooks'])->whereNumber('merchantId')->whereUlid('paymentId');
                 Route::get('{merchantId}/api-keys', [DanaGatewayMerchantProvisioningController::class, 'apiKeys'])->whereNumber('merchantId');
                 Route::get('{merchantId}/api-key-issuances', [DanaGatewayMerchantProvisioningController::class, 'issuances'])->whereNumber('merchantId');
                 Route::get('{merchantId}/api-key-issuances/{issuanceId}', [DanaGatewayMerchantProvisioningController::class, 'issuanceStatus'])->whereNumber(['merchantId', 'issuanceId']);
                 Route::get('{merchantId}', [DanaGatewayMerchantProvisioningController::class, 'show'])->whereNumber('merchantId');
+            });
+            Route::middleware('throttle:admin-sandbox-audit-read')->group(function (): void {
+                Route::get('{merchantId}/sandbox-tester/payments', [DanaGatewayMerchantProvisioningController::class, 'danaSandboxPayments'])->whereNumber('merchantId');
+                Route::get('{merchantId}/sandbox-tester/payments/summary', [DanaGatewayMerchantProvisioningController::class, 'danaSandboxPaymentSummary'])->whereNumber('merchantId');
+                Route::get('{merchantId}/sandbox-tester/payments/{paymentId}', [DanaGatewayMerchantProvisioningController::class, 'danaSandboxPaymentDetail'])->whereNumber('merchantId')->whereUlid('paymentId');
+                Route::get('{merchantId}/sandbox-tester/payments/{paymentId}/webhooks', [DanaGatewayMerchantProvisioningController::class, 'danaSandboxPaymentWebhooks'])->whereNumber('merchantId')->whereUlid('paymentId');
             });
             Route::middleware('throttle:admin-sandbox-payment-result')->group(function (): void {
                 Route::get('sandbox-payment-results/{context}', [DanaGatewayMerchantProvisioningController::class, 'sandboxPaymentResult'])->where('context', '[A-Za-z0-9_-]{43}');

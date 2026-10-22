@@ -362,7 +362,7 @@ class DanaMerchantProvisioningClient
             409 => new DanaMerchantProvisioningException('Permintaan provisioning merchant berkonflik dengan data yang sudah ada.', 409, false, 409),
             422 => new DanaMerchantProvisioningException('Data provisioning merchant ditolak oleh gateway.', 422, false, 422),
             401, 403 => new DanaMerchantProvisioningException('Autentikasi provisioning merchant gateway gagal.', 502, false, $response->status()),
-            429 => new DanaMerchantProvisioningException('Gateway provisioning merchant sedang membatasi permintaan. Coba lagi nanti.', 503, true, 429),
+            429 => new DanaMerchantProvisioningException('Gateway provisioning merchant sedang membatasi permintaan. Coba lagi nanti.', 503, true, 429, $response->header('Retry-After')),
             default => new DanaMerchantProvisioningException('Gateway provisioning merchant sedang mengalami gangguan.', 503, true, $response->status()),
         };
     }

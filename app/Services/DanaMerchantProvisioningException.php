@@ -11,6 +11,7 @@ class DanaMerchantProvisioningException extends RuntimeException
         public readonly int $status,
         public readonly bool $retryable,
         public readonly ?int $gatewayStatus = null,
+        public readonly ?string $retryAfter = null,
     ) {
         parent::__construct($message);
     }

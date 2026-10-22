@@ -30,6 +30,10 @@ class AppServiceProvider extends ServiceProvider
             return Limit::perMinute(10)->by('admin-dana-gateway-read:'.$request->user()?->getAuthIdentifier().':'.$request->ip());
         });
 
+        RateLimiter::for('admin-sandbox-audit-read', function (Request $request): Limit {
+            return Limit::perMinute(30)->by('admin-sandbox-audit-read:'.$request->user()?->getAuthIdentifier().':'.$request->ip());
+        });
+
         RateLimiter::for('admin-dana-gateway-write', function (Request $request): Limit {
             return Limit::perMinute(5)->by('admin-dana-gateway-write:'.$request->user()?->getAuthIdentifier().':'.$request->ip());
         });

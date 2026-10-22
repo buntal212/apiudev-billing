@@ -238,14 +238,21 @@ class DanaSandboxTesterApiTest extends TestCase
             'idempotency_fingerprint' => hash('sha256', 'payment-history-test'),
             'expires_at' => now()->subMinute(),
         ]);
+        $webhookPages = [];
         Http::fake([
             "https://dana-gateway.test/api/v1/internal/merchants/{$merchant->gateway_merchant_id}/payment-audit/summary*" => Http::response([
                 'data' => ['total' => 1, 'paid' => 1, 'pending' => 0, 'failed_or_expired' => 0, 'paid_amounts' => [['currency' => 'IDR', 'paid_amount_minor' => 10000]]],
             ]),
-            "https://dana-gateway.test/api/v1/internal/merchants/{$merchant->gateway_merchant_id}/payments/{$paymentId}/webhooks*" => Http::response([
-                'data' => [['received_at' => '2026-10-17T10:01:00+07:00', 'processed_at' => '2026-10-17T10:01:01+07:00', 'signature_valid' => true, 'processing_status' => 'processed', 'error_code' => null, 'provider_event_id' => null]],
-                'meta' => ['current_page' => 1, 'per_page' => 15, 'total' => 1, 'last_page' => 1],
-            ]),
+            "https://dana-gateway.test/api/v1/internal/merchants/{$merchant->gateway_merchant_id}/payments/{$paymentId}/webhooks*" => function (Request $request) use (&$webhookPages) {
+                parse_str((string) parse_url($request->url(), PHP_URL_QUERY), $query);
+                $page = (int) ($query['page'] ?? 1);
+                $webhookPages[] = $page;
+
+                return Http::response([
+                    'data' => [['received_at' => '2026-10-17T10:01:00+07:00', 'processed_at' => '2026-10-17T10:01:01+07:00', 'signature_valid' => true, 'processing_status' => 'processed', 'error_code' => null, 'provider_event_id' => null]],
+                    'meta' => ['current_page' => $page, 'per_page' => 15, 'total' => 2, 'last_page' => 2],
+                ]);
+            },
             "https://dana-gateway.test/api/v1/internal/merchants/{$merchant->gateway_merchant_id}/payment-audit*" => Http::response([
                 'data' => [$this->auditPayment($paymentId, 'paid')],
                 'meta' => ['current_page' => 1, 'per_page' => 15, 'total' => 1, 'last_page' => 1],
@@ -277,8 +284,60 @@ class DanaSandboxTesterApiTest extends TestCase
             ->assertJsonPath('data.0.signature_valid', true)
             ->assertJsonMissingPath('data.0.payload_sha256');
 
+        $this->getJson("{$paymentsUrl}/{$paymentId}/webhooks?page=2&per_page=25")
+            ->assertOk()
+            ->assertJsonPath('meta.current_page', 2);
+
+        $this->assertSame([1, 2], $webhookPages);
+
         Sanctum::actingAs(User::factory()->create(['is_admin' => true]), ['admin:access']);
         $this->getJson("{$paymentsUrl}/{$paymentId}")->assertForbidden();
+    }
+
+    public function test_gateway_audit_retry_after_is_forwarded_safely(): void
+    {
+        $merchant = $this->sandboxProvisionedMerchant();
+        $paymentId = '01K7A2M3N4P5Q6R7S8T9V0W1X2';
+        $admin = User::factory()->create(['is_admin' => true]);
+        DanaSandboxResultContext::query()->create([
+            'admin_user_id' => $admin->id,
+            'gateway_merchant_id' => $merchant->gateway_merchant_id,
+            'gateway_payment_id' => $paymentId,
+            'context_hash' => hash('sha256', 'audit-retry-after-context'),
+            'idempotency_fingerprint' => hash('sha256', 'audit-retry-after-test'),
+            'expires_at' => now()->addMinutes(20),
+        ]);
+        Http::fake([
+            "https://dana-gateway.test/api/v1/internal/merchants/{$merchant->gateway_merchant_id}/payments/{$paymentId}/audit" => Http::response([
+                'message' => 'upstream throttle detail',
+            ], 429, ['Retry-After' => '17']),
+        ]);
+
+        Sanctum::actingAs($admin, ['admin:access']);
+
+        $this->getJson("/api/v1/admin/dana-gateway-merchants/{$merchant->gateway_merchant_id}/sandbox-tester/payments/{$paymentId}")
+            ->assertStatus(503)
+            ->assertHeader('Retry-After', '17')
+            ->assertJsonPath('message', 'Gateway provisioning merchant sedang membatasi permintaan. Coba lagi nanti.')
+            ->assertDontSee('upstream throttle detail');
+    }
+
+    public function test_sandbox_audit_bucket_is_bounded_and_isolated_per_admin(): void
+    {
+        $merchant = $this->sandboxProvisionedMerchant();
+        $url = "/api/v1/admin/dana-gateway-merchants/{$merchant->gateway_merchant_id}/sandbox-tester/payments";
+        $this->actingAdmin();
+
+        foreach (range(1, 30) as $attempt) {
+            $this->getJson($url)->assertOk();
+        }
+
+        $this->getJson($url)
+            ->assertTooManyRequests()
+            ->assertHeader('Retry-After');
+
+        Sanctum::actingAs(User::factory()->create(['is_admin' => true]), ['admin:access']);
+        $this->getJson($url)->assertOk();
     }
 
     /** @return array<string, mixed> */

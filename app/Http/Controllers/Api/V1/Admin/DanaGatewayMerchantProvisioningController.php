@@ -330,7 +330,10 @@ class DanaGatewayMerchantProvisioningController extends Controller
         if (! $this->ownsSandboxPayment($merchantId, $paymentId, $request)) {
             return response()->json(['message' => 'Transaksi Sandbox tidak dapat diakses oleh admin ini.'], 403);
         }
-        $validated = $request->validate(['per_page' => ['nullable', 'integer', 'min:1', 'max:100']]);
+        $validated = $request->validate([
+            'page' => ['nullable', 'integer', 'min:1'],
+            'per_page' => ['nullable', 'integer', 'min:1', 'max:100'],
+        ]);
         try {
             $result = $client->paymentAuditWebhooks($merchantId, $paymentId, $validated);
             return response()->json(['data' => $result['webhooks'], 'meta' => $result['meta']])->header('Cache-Control', 'no-store');
@@ -530,7 +533,13 @@ class DanaGatewayMerchantProvisioningController extends Controller
 
     private function gatewayError(DanaMerchantProvisioningException $exception): JsonResponse
     {
-        return response()->json(['message' => $exception->getMessage()], $exception->status);
+        $response = response()->json(['message' => $exception->getMessage()], $exception->status);
+
+        if ($exception->retryAfter !== null) {
+            $response->headers->set('Retry-After', $exception->retryAfter);
+        }
+
+        return $response;
     }
 
     private function sandboxPaymentResultResponse(int $merchantId, string $paymentId, DanaMerchantProvisioningClient $client): JsonResponse

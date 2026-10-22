@@ -7,6 +7,7 @@ use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Http\Client\Request as HttpRequest;
+use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 use Laravel\Sanctum\Sanctum;
@@ -239,6 +240,10 @@ class DanaGatewayMerchantProvisioningApiTest extends TestCase
             ->assertTooManyRequests()
             ->assertHeader('Retry-After');
 
+        // Admin berbeda tidak mewarisi kuota admin sebelumnya pada IP yang sama.
+        $this->actingAdmin();
+        $this->getJson('/api/v1/admin/dana-gateway-merchants')->assertOk();
+
         Log::shouldHaveReceived('warning')
             ->once()
             ->with('Admin API request throttled.', Mockery::on(function (array $context): bool {
@@ -248,6 +253,22 @@ class DanaGatewayMerchantProvisioningApiTest extends TestCase
                     && array_key_exists('occurred_at', $context)
                     && ! array_key_exists('token', $context);
             }));
+    }
+
+    public function test_sandbox_audit_routes_use_their_own_read_bucket(): void
+    {
+        $routes = app('router')->getRoutes();
+        $auditRoute = $routes->match(Request::create(
+            '/api/v1/admin/dana-gateway-merchants/101/sandbox-tester/payments/01K7A2M3N4P5Q6R7S8T9V0W1X2/webhooks',
+            'GET',
+        ));
+
+        $middleware = $auditRoute->middleware();
+
+        $this->assertContains('throttle:admin-sandbox-audit-read', $middleware);
+        $this->assertNotContains('throttle:admin-dana-gateway-read', $middleware);
+        $this->assertContains('auth:sanctum', $middleware);
+        $this->assertContains('admin', $middleware);
     }
 
     /** @return array{code: string, name: string, email: string, environment: string} */
