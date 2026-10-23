@@ -54,6 +54,7 @@ jobs:
             --exclude='/.deploy/'
             --exclude='/.well-known/'
             --exclude='/.user.ini'
+            --exclude='/public/.user.ini'
           )
 
           fail() { echo "::error::$*"; exit 1; }
