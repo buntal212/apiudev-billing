@@ -7,6 +7,7 @@ use App\Http\Controllers\Api\V1\Admin\ApplicationIntegrationTestAuditController;
 use App\Http\Controllers\Api\V1\Admin\ApplicationIntegrationTestController;
 use App\Http\Controllers\Api\V1\Admin\ApplicationIntegrationTokenController;
 use App\Http\Controllers\Api\V1\Admin\ApplicationPaymentGatewayController;
+use App\Http\Controllers\Api\V1\Admin\BillingGatewayTransactionController;
 use App\Http\Controllers\Api\V1\Admin\DanaGatewayMerchantProvisioningController;
 use App\Http\Controllers\Api\V1\Admin\InvoiceCheckoutController;
 use App\Http\Controllers\Api\V1\Admin\InvoiceController;
@@ -68,6 +69,10 @@ Route::prefix('v1/admin')
         Route::delete('applications/{application}/integration-tokens/{integrationToken}', [ApplicationIntegrationTokenController::class, 'destroy'])
             ->middleware('throttle:admin-dana-gateway-write');
         Route::get('payment-gateways/merchants', [ApplicationPaymentGatewayController::class, 'merchants']);
+        Route::get('payment-gateway/billing-transactions', [BillingGatewayTransactionController::class, 'index'])
+            ->middleware('throttle:admin-dana-gateway-read');
+        Route::get('payment-gateway/billing-transactions/{paymentAttempt}', [BillingGatewayTransactionController::class, 'show'])
+            ->middleware('throttle:admin-dana-gateway-read');
         Route::apiResource('payment-gateways', ApplicationPaymentGatewayController::class)
             ->only(['index', 'store', 'update']);
         Route::prefix('dana-gateway-merchants')->group(function (): void {
