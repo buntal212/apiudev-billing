@@ -2,26 +2,23 @@
 
 return [
 
-    /*
-    |--------------------------------------------------------------------------
-    | Cross-Origin Resource Sharing (CORS) Configuration
-    |--------------------------------------------------------------------------
-    |
-    | Here you may configure your settings for cross-origin resource sharing
-    | or "CORS". This determines what cross-origin operations may execute
-    | in web browsers. You are free to adjust these settings as needed.
-    |
-    | To learn more: https://developer.mozilla.org/en-US/docs/Web/HTTP/CORS
-    |
-    */
-
     'paths' => ['api/*', 'sanctum/csrf-cookie'],
 
-    'allowed_methods' => ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+    'allowed_methods' => [
+        'GET',
+        'POST',
+        'PUT',
+        'PATCH',
+        'DELETE',
+        'OPTIONS',
+    ],
 
     'allowed_origins' => array_values(array_unique(array_filter([
         'https://udev.udumbara.my.id',
-        ...explode(',', env('CORS_ALLOWED_ORIGINS', 'http://localhost:9000')),
+        ...array_map(
+            'trim',
+            explode(',', env('CORS_ALLOWED_ORIGINS', 'http://localhost:9000'))
+        ),
     ]))),
 
     'allowed_origins_patterns' => [],
@@ -30,6 +27,8 @@ return [
         'Accept',
         'Authorization',
         'Content-Type',
+        'Cache-Control',
+        'Pragma',
         'Idempotency-Key',
         'Origin',
         'X-Requested-With',
@@ -37,7 +36,7 @@ return [
 
     'exposed_headers' => [],
 
-    'max_age' => 0,
+    'max_age' => 600,
 
     'supports_credentials' => false,
 
