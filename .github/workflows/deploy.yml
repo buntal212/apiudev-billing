@@ -82,17 +82,18 @@ jobs:
           report_storage() {
             label=$1
             echo "=== Storage report: $label ==="
-            df -h "$APP_DIR"
+            df -h "$APP_DIR" || echo 'WARNING: Disk capacity cannot be reported.'
             printf 'Active application (without deployment work): '
-            du -sh --exclude='.deploy' "$APP_DIR"
+            du -sh --exclude='.deploy' "$APP_DIR" 2>/dev/null || echo 'unavailable'
             printf 'Staging: '
-            du -sh "$STAGING_ROOT" 2>/dev/null || true
+            du -sh "$STAGING_ROOT" 2>/dev/null || echo 'unavailable'
             printf 'Backups: '
-            du -sh "$BACKUP_ROOT" 2>/dev/null || true
+            du -sh "$BACKUP_ROOT" 2>/dev/null || echo 'unavailable'
             printf 'Stored backups: '
-            find -P "$BACKUP_ROOT" -mindepth 1 -maxdepth 1 -type d -printf '.' 2>/dev/null | wc -c
+            backup_count="$(find -P "$BACKUP_ROOT" -mindepth 1 -maxdepth 1 -type d -printf '.' 2>/dev/null | wc -c || true)"
+            printf '%s\n' "$backup_count"
             printf 'Runner workspace: '
-            du -sh "$GITHUB_WORKSPACE"
+            du -sh "$GITHUB_WORKSPACE" 2>/dev/null || echo 'unavailable'
           }
 
           audit_layout() {
@@ -183,15 +184,30 @@ jobs:
             clear_generated_cache "$target_dir"
 
             echo "=== Verifying Laravel bootstrap in $target_dir ==="
-            "$PHP_BIN" artisan about --only=environment --no-interaction
+            if ! "$PHP_BIN" artisan about --only=environment --no-interaction; then
+              echo "::error title=Laravel bootstrap::Laravel cannot bootstrap in $target_dir."
+              return 1
+            fi
 
             echo "=== Discovering Laravel packages in $target_dir ==="
-            "$PHP_BIN" artisan package:discover --ansi --no-interaction
+            if ! "$PHP_BIN" artisan package:discover --ansi --no-interaction; then
+              echo "::error title=Laravel package discovery::Package discovery failed in $target_dir."
+              return 1
+            fi
 
             echo "=== Building Laravel caches in $target_dir ==="
-            "$PHP_BIN" artisan config:clear --no-interaction
-            "$PHP_BIN" artisan config:cache --no-interaction
-            "$PHP_BIN" artisan route:cache --no-interaction
+            if ! "$PHP_BIN" artisan config:clear --no-interaction; then
+              echo "::error title=Laravel config clear::config:clear failed in $target_dir."
+              return 1
+            fi
+            if ! "$PHP_BIN" artisan config:cache --no-interaction; then
+              echo "::error title=Laravel config cache::config:cache failed in $target_dir."
+              return 1
+            fi
+            if ! "$PHP_BIN" artisan route:cache --no-interaction; then
+              echo "::error title=Laravel route cache::route:cache failed in $target_dir."
+              return 1
+            fi
 
             echo "=== Verifying billing gateway routes in $target_dir ==="
             route_list="$("$PHP_BIN" artisan route:list --path=payment-gateway/billing-transactions --json --no-interaction)"
@@ -287,7 +303,10 @@ jobs:
           prepare_laravel "$STAGING_DIR"
 
           echo "=== Creating hard-linked rollback backup ==="
-          rsync -a --link-dest="$APP_DIR" "${excluded_paths[@]}" "$APP_DIR/" "$BACKUP_DIR/"
+          if ! rsync -a --link-dest="$APP_DIR" "${excluded_paths[@]}" "$APP_DIR/" "$BACKUP_DIR/"; then
+            echo '::error title=Rollback backup::Rollback backup could not be created; the active release was not changed.'
+            exit 1
+          fi
 
           # Nothing in the active application is changed until staging has passed all
           # Composer, Artisan, and route checks above.
@@ -295,7 +314,10 @@ jobs:
           activated=1
 
           echo "=== Activating prepared Laravel release ==="
-          rsync -a --delete "${excluded_paths[@]}" "$STAGING_DIR/" "$APP_DIR/"
+          if ! rsync -a --delete "${excluded_paths[@]}" "$STAGING_DIR/" "$APP_DIR/"; then
+            echo '::error title=Release activation::Prepared release could not be activated; rollback will run.'
+            exit 1
+          fi
 
           # Caches are intentionally excluded from rsync and rebuilt only at the
           # final path, avoiding stale absolute paths and protected cache files.
