@@ -2,7 +2,8 @@ name: Deploy API UDEV Billing
 
 on:
   push:
-    branches: [main]
+    branches:
+      - main
   workflow_dispatch:
 
 permissions:
@@ -23,12 +24,14 @@ jobs:
         uses: actions/checkout@v4
         with:
           clean: true
+          persist-credentials: false
 
       - name: Deploy source Laravel
         shell: bash
         env:
           APP_DIR: /www/wwwroot/apiudev.udumbara.my.id
           PHP_BIN: /www/server/php/83/bin/php
+
         run: |
           set -Eeuo pipefail
           umask 027
@@ -36,14 +39,15 @@ jobs:
           DEPLOY_ROOT="$APP_DIR/.deploy"
           STAGING_ROOT="$DEPLOY_ROOT/staging"
           BACKUP_ROOT="$DEPLOY_ROOT/backups"
+
           RELEASE_ID="${GITHUB_SHA}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
-          STAGING_DIR=''
+          STAGING_DIR=""
           BACKUP_DIR="$BACKUP_ROOT/$RELEASE_ID"
+
           ACTIVATION_STARTED=0
           BACKUP_READY=0
           DEPLOY_OK=0
 
-          # All persistent paths stay in place. Generated cache is never copied.
           EXCLUDES=(
             --exclude='/.env'
             --exclude='/.env.*'
@@ -54,130 +58,293 @@ jobs:
             --exclude='/.user.ini'
           )
 
+          echo "=== UDEV BILLING DEPLOYMENT ==="
+          echo "Commit: $GITHUB_SHA"
+          echo "Run ID: $GITHUB_RUN_ID"
+
           log_disk() {
-            echo '=== Disk usage ==='
+            echo "=== Disk usage ==="
             df -h "$APP_DIR" || true
-            du -sh "$STAGING_ROOT" "$BACKUP_ROOT" 2>/dev/null || true
+
+            echo "=== Deployment storage ==="
+            du -sh "$STAGING_ROOT" "$BACKUP_ROOT" \
+              2>/dev/null || true
           }
 
           safe_remove() {
-            local candidate="$1" parent="$2" parent_real candidate_real
-            [[ -d "$candidate" && ! -L "$candidate" ]] || return 1
-            parent_real="$(realpath -e -- "$parent")" || return 1
-            candidate_real="$(realpath -e -- "$candidate")" || return 1
-            [[ "$(dirname -- "$candidate_real")" == "$parent_real" ]] || return 1
+            local candidate="$1"
+            local parent="$2"
+            local parent_real
+            local candidate_real
+
+            [[ -d "$candidate" ]] || return 1
+            [[ ! -L "$candidate" ]] || return 1
+
+            parent_real="$(realpath -e -- "$parent")" \
+              || return 1
+
+            candidate_real="$(realpath -e -- "$candidate")" \
+              || return 1
+
+            [[ "$(dirname -- "$candidate_real")" == "$parent_real" ]] \
+              || return 1
+
             rm -rf --one-file-system -- "$candidate"
           }
 
-          # Do not touch production cache while staging or backing up.
           build_cache() {
             local target="$1"
+
             (
               cd "$target"
+
               mkdir -p bootstrap/cache
-              [[ ! -L bootstrap/cache ]] || { echo 'Cache directory is a symlink'; exit 1; }
-              "$PHP_BIN" artisan package:discover --no-interaction
-              "$PHP_BIN" artisan config:clear --no-interaction
-              "$PHP_BIN" artisan config:cache --no-interaction
-              "$PHP_BIN" artisan route:cache --no-interaction
-              "$PHP_BIN" artisan route:list --path=payment-gateway/billing-transactions --no-interaction \
+
+              if [[ -L bootstrap/cache ]]; then
+                echo "::error::Cache directory is a symlink"
+                exit 1
+              fi
+
+              "$PHP_BIN" artisan package:discover \
+                --no-interaction
+
+              "$PHP_BIN" artisan config:clear \
+                --no-interaction
+
+              "$PHP_BIN" artisan config:cache \
+                --no-interaction
+
+              "$PHP_BIN" artisan route:cache \
+                --no-interaction
+
+              "$PHP_BIN" artisan route:list \
+                --path=payment-gateway/billing-transactions \
+                --no-interaction \
                 | grep -F 'billing-transactions'
             )
           }
 
           rollback() {
-            echo '::warning::Restoring previous application files'
-            if [[ "$BACKUP_READY" != 1 || ! -d "$BACKUP_DIR" ]]; then
-              echo '::error::No complete rollback backup is available'
+            echo "::warning::Restoring previous application"
+
+            if [[ "$BACKUP_READY" != 1 ]]; then
+              echo "::error::Rollback backup unavailable"
               return 1
             fi
-            # Cache is excluded, so unreadable generated files cannot break rollback.
-            rsync -a --delete "${EXCLUDES[@]}" "$BACKUP_DIR/" "$APP_DIR/" || return 1
-            # Never delete production cache in an attempt to repair permissions.
-            # The previous cache remains; rebuilding it is best-effort only.
-            if ! build_cache "$APP_DIR"; then
-              echo '::warning::Rollback files restored, but cache rebuild needs manual attention'
+
+            if [[ ! -d "$BACKUP_DIR" ]]; then
+              echo "::error::Rollback directory missing"
+              return 1
             fi
+
+            rsync -a --delete \
+              "${EXCLUDES[@]}" \
+              "$BACKUP_DIR/" "$APP_DIR/" \
+              || return 1
+
+            if ! build_cache "$APP_DIR"; then
+              echo "::error::Rollback cache rebuild failed"
+              return 1
+            fi
+
+            echo "=== Previous application restored ==="
           }
 
           finish() {
             local result=$?
+
             trap - EXIT ERR
             set +e
+
+            if [[ "$result" -ne 0 ]]; then
+              echo "::error::Deployment failed"
+            fi
+
             if [[ "$result" -ne 0 && "$ACTIVATION_STARTED" == 1 ]]; then
-              rollback || echo '::error::Automatic rollback failed; manual recovery required'
+              rollback || \
+                echo "::error::Manual recovery required"
             fi
+
             if [[ -n "$STAGING_DIR" && -d "$STAGING_DIR" ]]; then
-              safe_remove "$STAGING_DIR" "$STAGING_ROOT" || \
-                echo '::warning::Could not clean this run staging directory'
+              echo "=== Cleaning current staging ==="
+
+              safe_remove "$STAGING_DIR" "$STAGING_ROOT" \
+                || echo "::warning::Staging cleanup failed"
             fi
-            # An incomplete backup must never count as a valid rollback.
-            if [[ "$DEPLOY_OK" != 1 && "$BACKUP_READY" != 1 && -d "$BACKUP_DIR" ]]; then
-              safe_remove "$BACKUP_DIR" "$BACKUP_ROOT" || true
+
+            if [[ "$DEPLOY_OK" != 1 && "$BACKUP_READY" != 1 ]]; then
+              if [[ -d "$BACKUP_DIR" ]]; then
+                safe_remove "$BACKUP_DIR" "$BACKUP_ROOT" \
+                  || true
+              fi
             fi
+
             log_disk
             exit "$result"
           }
+
           trap finish EXIT
 
-          echo '=== Checking requirements ==='
-          for bin in rsync composer realpath df du find sort; do command -v "$bin" >/dev/null; done
-          [[ -x "$PHP_BIN" && -f artisan && -f composer.json && -f composer.lock ]]
-          [[ -d "$APP_DIR" && ! -L "$APP_DIR" && -f "$APP_DIR/.env" && -d "$APP_DIR/storage" ]]
-          [[ ! -L "$APP_DIR/bootstrap/cache" ]]
+          echo "=== Checking requirements ==="
+
+          for bin in rsync composer realpath df du find sort mktemp; do
+            if ! command -v "$bin" >/dev/null 2>&1; then
+              echo "::error::Required command missing: $bin"
+              exit 1
+            fi
+          done
+
+          if [[ ! -x "$PHP_BIN" ]]; then
+            echo "::error::PHP executable missing: $PHP_BIN"
+            exit 1
+          fi
+
+          for file in artisan composer.json composer.lock; do
+            if [[ ! -f "$file" ]]; then
+              echo "::error::Missing source file: $file"
+              exit 1
+            fi
+          done
+
+          if [[ ! -d "$APP_DIR" || -L "$APP_DIR" ]]; then
+            echo "::error::Invalid application directory: $APP_DIR"
+            exit 1
+          fi
+
+          if [[ ! -f "$APP_DIR/.env" ]]; then
+            echo "::error::Production .env missing"
+            exit 1
+          fi
+
+          if [[ ! -d "$APP_DIR/storage" ]]; then
+            echo "::error::Production storage missing"
+            exit 1
+          fi
+
+          if [[ ! -d "$APP_DIR/bootstrap/cache" ]]; then
+            echo "::error::Production cache directory missing"
+            exit 1
+          fi
+
+          if [[ -L "$APP_DIR/bootstrap/cache" ]]; then
+            echo "::error::Production cache directory is a symlink"
+            exit 1
+          fi
+
           mkdir -p "$STAGING_ROOT" "$BACKUP_ROOT"
-          [[ ! -L "$DEPLOY_ROOT" && ! -L "$STAGING_ROOT" && ! -L "$BACKUP_ROOT" ]]
+
+          for path in "$DEPLOY_ROOT" "$STAGING_ROOT" "$BACKUP_ROOT"; do
+            if [[ -L "$path" ]]; then
+              echo "::error::Deployment path is a symlink: $path"
+              exit 1
+            fi
+          done
+
+          if [[ ! -w "$APP_DIR/bootstrap/cache" ]]; then
+            echo "::error::Runner cannot write Laravel cache directory"
+            exit 1
+          fi
+
+          if find "$APP_DIR/bootstrap/cache" \
+            -maxdepth 1 -type f ! -writable \
+            -print -quit | grep -q .; then
+            echo "::error::Runner cannot update generated Laravel cache files"
+            exit 1
+          fi
+
+          echo "=== Requirements passed ==="
           log_disk
 
-          echo '=== Preparing staging ==='
+          echo "=== Preparing staging ==="
+
           STAGING_DIR="$(mktemp -d "$STAGING_ROOT/${RELEASE_ID}.XXXXXX")"
+
           rsync -a \
             --exclude='/.git/' \
             --exclude='/.github/' \
             --exclude='/vendor/' \
             "${EXCLUDES[@]}" \
             ./ "$STAGING_DIR/"
-          cp --preserve=mode,timestamps "$APP_DIR/.env" "$STAGING_DIR/.env"
+
+          cp --preserve=mode,timestamps \
+            "$APP_DIR/.env" \
+            "$STAGING_DIR/.env"
+
           ln -s "$APP_DIR/storage" "$STAGING_DIR/storage"
 
-          echo '=== Installing Composer dependencies ==='
+          echo "=== Installing Composer dependencies ==="
+
           (
             cd "$STAGING_DIR"
+
             "$PHP_BIN" "$(command -v composer)" install \
-              --no-dev --prefer-dist --no-interaction \
-              --optimize-autoloader --no-scripts
+              --no-dev \
+              --prefer-dist \
+              --no-interaction \
+              --optimize-autoloader \
+              --no-scripts
           )
+
+          echo "=== Validating staged Laravel ==="
           build_cache "$STAGING_DIR"
 
-          echo '=== Creating rollback backup (excluding Laravel cache) ==='
-          # No --link-dest to active app: the backup must be independent of
-          # files that can be modified in place during or after activation.
-          # This copies vendor as well, preserving an immediately usable rollback.
-          rsync -a "${EXCLUDES[@]}" "$APP_DIR/" "$BACKUP_DIR/"
-          [[ -f "$BACKUP_DIR/artisan" && -f "$BACKUP_DIR/composer.json" && -d "$BACKUP_DIR/vendor" ]]
+          echo "=== Creating rollback backup ==="
+
+          # Generated Laravel cache is excluded.
+          # Backup is independent from active files.
+
+          rsync -a \
+            "${EXCLUDES[@]}" \
+            "$APP_DIR/" "$BACKUP_DIR/"
+
+          if [[ ! -f "$BACKUP_DIR/artisan" ]]; then
+            echo "::error::Rollback artisan missing"
+            exit 1
+          fi
+
+          if [[ ! -f "$BACKUP_DIR/composer.json" ]]; then
+            echo "::error::Rollback composer.json missing"
+            exit 1
+          fi
+
+          if [[ ! -d "$BACKUP_DIR/vendor" ]]; then
+            echo "::error::Rollback vendor missing"
+            exit 1
+          fi
+
           BACKUP_READY=1
 
-          echo '=== Activating prepared release ==='
+          echo "=== Activating prepared release ==="
           ACTIVATION_STARTED=1
-          # Excluding bootstrap/cache avoids the permission-denied files.
-          rsync -a --delete "${EXCLUDES[@]}" "$STAGING_DIR/" "$APP_DIR/"
 
-          # Existing generated cache might be owned by the webserver. Do not
-          # overwrite it via rsync. If rebuilding fails, rollback is attempted.
+          rsync -a --delete \
+            "${EXCLUDES[@]}" \
+            "$STAGING_DIR/" "$APP_DIR/"
+
+          echo "=== Rebuilding production Laravel cache ==="
           build_cache "$APP_DIR"
+
           ACTIVATION_STARTED=0
           DEPLOY_OK=1
-          echo '=== Deployment successful ==='
 
-          echo '=== Retaining latest two complete backups ==='
-          # Only run retention after success; never remove the current backup.
+          echo "=== Deployment successful ==="
+
+          echo "=== Retaining latest two complete backups ==="
+
           mapfile -t OLD_BACKUPS < <(
-            find -P "$BACKUP_ROOT" -mindepth 1 -maxdepth 1 -type d \
-              -printf '%T@ %p\n' | sort -rn | awk 'NR > 2 { $1=""; sub(/^ /, ""); print }'
+            find -P "$BACKUP_ROOT" \
+              -mindepth 1 -maxdepth 1 -type d \
+              -printf '%T@ %p\n' \
+              | sort -rn \
+              | awk 'NR > 2 { $1=""; sub(/^ /, ""); print }'
           )
+
           for old in "${OLD_BACKUPS[@]}"; do
             [[ "$old" != "$BACKUP_DIR" ]] || continue
-            safe_remove "$old" "$BACKUP_ROOT" || \
-              echo "::warning::Could not remove old backup: $old"
+
+            safe_remove "$old" "$BACKUP_ROOT" \
+              || echo "::warning::Could not remove backup: $old"
           done
-          echo '=== Cleanup completed ==='
+
+          echo "=== Cleanup completed ==="
+          log_disk
