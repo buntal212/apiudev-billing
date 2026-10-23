@@ -218,6 +218,7 @@ jobs:
           restore_previous_release() {
             status=$?
             trap - ERR
+            echo "::error title=Release activation::Activation or final Laravel preparation failed: $BASH_COMMAND"
 
             if [ "$activated" -eq 1 ]; then
               echo "ERROR: Activation failed; restoring the previous release."
@@ -238,6 +239,14 @@ jobs:
               fi
             fi
 
+            exit "$status"
+          }
+
+          report_pre_activation_failure() {
+            status=$?
+            failed_command=$BASH_COMMAND
+            trap - ERR
+            echo "::error title=Deployment preparation::Preparation failed before activation: $failed_command"
             exit "$status"
           }
 
@@ -270,6 +279,7 @@ jobs:
           mkdir -p "$STAGING_ROOT" "$BACKUP_ROOT"
           STAGING_DIR="$(mktemp -d "$STAGING_ROOT/${RELEASE_ID}.XXXXXX")"
           trap cleanup_current_staging EXIT
+          trap report_pre_activation_failure ERR
           audit_layout
 
           echo "=== Preparing isolated Laravel release ==="
