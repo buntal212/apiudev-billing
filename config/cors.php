@@ -17,13 +17,23 @@ return [
 
     'paths' => ['api/*', 'sanctum/csrf-cookie'],
 
-    'allowed_methods' => ['*'],
+    'allowed_methods' => ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
 
-    'allowed_origins' => array_values(array_filter(explode(',', env('CORS_ALLOWED_ORIGINS', 'http://localhost:9000')))),
+    'allowed_origins' => array_values(array_unique(array_filter([
+        'https://udev.udumbara.my.id',
+        ...explode(',', env('CORS_ALLOWED_ORIGINS', 'http://localhost:9000')),
+    ]))),
 
     'allowed_origins_patterns' => [],
 
-    'allowed_headers' => ['*'],
+    'allowed_headers' => [
+        'Accept',
+        'Authorization',
+        'Content-Type',
+        'Idempotency-Key',
+        'Origin',
+        'X-Requested-With',
+    ],
 
     'exposed_headers' => [],
 

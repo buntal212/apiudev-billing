@@ -79,6 +79,9 @@ jobs:
 
           if [ -f .env ]; then
             echo "Production .env found."
+            echo "=== Refreshing Laravel configuration cache ==="
+            "$PHP_BIN" artisan config:clear
+            "$PHP_BIN" artisan config:cache
           else
             echo "Production .env not created yet."
             echo "Laravel initialization will be completed later."
