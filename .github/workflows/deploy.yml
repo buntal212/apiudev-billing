@@ -22,12 +22,15 @@ jobs:
     steps:
       - name: Checkout source
         uses: actions/checkout@v4
+        with:
+          clean: true
 
       - name: Deploy source Laravel
         shell: bash
         env:
           APP_DIR: /www/wwwroot/apiudev.udumbara.my.id
           PHP_BIN: /www/server/php/83/bin/php
+          APPLICATION_ROOT: /www/wwwroot/apiudev-billing
         run: |
           set -Eeuo pipefail
 
@@ -35,7 +38,10 @@ jobs:
           test -f artisan
           test -f composer.json
           test -f composer.lock
-
+          command -v df
+          command -v du
+          command -v find
+          command -v realpath
           command -v rsync
           command -v composer
           test -x "$PHP_BIN"
@@ -46,52 +52,88 @@ jobs:
           DEPLOY_DIR="$APP_DIR/.deploy"
           STAGING_ROOT="$DEPLOY_DIR/staging"
           BACKUP_ROOT="$DEPLOY_DIR/backups"
-          mkdir -p "$STAGING_ROOT" "$BACKUP_ROOT"
-
           RELEASE_ID="${GITHUB_SHA}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
-          STAGING_DIR="$(mktemp -d "$STAGING_ROOT/${RELEASE_ID}.XXXXXX")"
+          STAGING_DIR=''
           BACKUP_DIR="$BACKUP_ROOT/$RELEASE_ID"
+          cleaned_paths=0
+          cleaned_bytes=0
           activated=0
 
           excluded_paths=(
             --exclude='.env'
             --exclude='.env.*'
             --exclude='storage/'
+            --exclude='bootstrap/cache/'
             --exclude='.deploy/'
             --exclude='.well-known/'
             --exclude='.user.ini'
           )
 
-          restore_previous_release() {
-            status=$?
-            trap - ERR
+          print_path_status() {
+            path=$1
 
-            if [ "$activated" -eq 1 ]; then
-              echo "ERROR: Activation failed; restoring the previous release."
-              set +e
-              rsync -a --delete "${excluded_paths[@]}" "$BACKUP_DIR/" "$APP_DIR/"
-              restore_status=$?
-              set -e
-
-              if [ "$restore_status" -ne 0 ]; then
-                echo "ERROR: Automatic rollback also failed. The previous release is in $BACKUP_DIR."
-              else
-                echo "Previous release restored."
-              fi
+            if [ -e "$path" ]; then
+              printf 'present: %s\n' "$path"
+            else
+              printf 'absent: %s\n' "$path"
             fi
-
-            exit "$status"
           }
 
-          ensure_cache_directory() {
-            target_dir=$1
-            mkdir -p "$target_dir/bootstrap/cache"
-            test -d "$target_dir/bootstrap/cache"
-            test -w "$target_dir/bootstrap/cache"
+          report_storage() {
+            label=$1
+            echo "=== Storage report: $label ==="
+            df -h "$APP_DIR"
+            printf 'Active application (without deployment work): '
+            du -sh --exclude='.deploy' "$APP_DIR"
+            printf 'Staging: '
+            du -sh "$STAGING_ROOT" 2>/dev/null || true
+            printf 'Backups: '
+            du -sh "$BACKUP_ROOT" 2>/dev/null || true
+            printf 'Stored backups: '
+            find -P "$BACKUP_ROOT" -mindepth 1 -maxdepth 1 -type d -printf '.' 2>/dev/null | wc -c
+            printf 'Runner workspace: '
+            du -sh "$GITHUB_WORKSPACE"
+          }
+
+          audit_layout() {
+            echo "=== Deployment layout audit ==="
+            print_path_status "$APP_DIR"
+            print_path_status "$APPLICATION_ROOT"
+            print_path_status "$APPLICATION_ROOT/releases"
+            print_path_status "$APPLICATION_ROOT/shared"
+            print_path_status "$DEPLOY_DIR"
+            print_path_status "$GITHUB_WORKSPACE"
+            report_storage 'before deployment'
+          }
+
+          assert_direct_child_directory() {
+            candidate=$1
+            parent=$2
+            parent_real="$(realpath -e "$parent")"
+            candidate_real="$(realpath -e "$candidate")"
+
+            test "$(dirname "$candidate_real")" = "$parent_real"
+            test ! -L "$candidate"
+          }
+
+          remove_deployment_directory() {
+            candidate=$1
+            parent=$2
+
+            if ! assert_direct_child_directory "$candidate" "$parent"; then
+              echo "WARNING: Refusing to clean unexpected deployment path: $candidate"
+              return 1
+            fi
+
+            candidate_bytes="$(du -sb "$candidate" | awk '{print $1}')"
+            rm -rf --one-file-system -- "$candidate"
+            cleaned_paths=$((cleaned_paths + 1))
+            cleaned_bytes=$((cleaned_bytes + candidate_bytes))
           }
 
           clear_generated_cache() {
             target_dir=$1
+
             find "$target_dir/bootstrap/cache" -maxdepth 1 -type f \( \
               -name 'config.php' -o \
               -name 'events.php' -o \
@@ -99,6 +141,38 @@ jobs:
               -name 'routes-*.php' -o \
               -name 'services.php' \
             \) -delete
+          }
+
+          ensure_cache_directory() {
+            target_dir=$1
+            cache_dir="$target_dir/bootstrap/cache"
+            mkdir -p "$cache_dir"
+            test ! -L "$cache_dir"
+
+            cache_is_writable=true
+            if ! test -w "$cache_dir"; then
+              cache_is_writable=false
+            elif find "$cache_dir" -maxdepth 1 -type f ! -writable -print -quit | grep -q .; then
+              cache_is_writable=false
+            fi
+
+            if [ "$cache_is_writable" = false ]; then
+              echo "WARNING: Repairing ownership only for generated Laravel cache: $cache_dir"
+              if ! command -v sudo >/dev/null || ! sudo -n true; then
+                echo "ERROR: $cache_dir is not writable by the deployment user, and passwordless sudo is unavailable."
+                return 1
+              fi
+
+              sudo -n chown -R "$(id -un):$(id -gn)" "$cache_dir"
+              sudo -n chmod -R u+rwX "$cache_dir"
+            fi
+
+            test -d "$cache_dir"
+            test -w "$cache_dir"
+            if find "$cache_dir" -maxdepth 1 -type f ! -writable -print -quit | grep -q .; then
+              echo "ERROR: Generated Laravel cache files remain unwritable: $cache_dir"
+              return 1
+            fi
           }
 
           prepare_laravel() {
@@ -125,8 +199,64 @@ jobs:
             printf '%s' "$route_list" | grep -Fq 'paymentAttempt'
           }
 
-          echo "=== Preparing isolated Laravel release ==="
+          restore_previous_release() {
+            status=$?
+            trap - ERR
 
+            if [ "$activated" -eq 1 ]; then
+              echo "ERROR: Activation failed; restoring the previous release."
+              set +e
+              rsync -a --delete "${excluded_paths[@]}" "$BACKUP_DIR/" "$APP_DIR/"
+              restore_status=$?
+
+              if [ "$restore_status" -eq 0 ]; then
+                prepare_laravel "$APP_DIR"
+                restore_status=$?
+              fi
+
+              set -e
+              if [ "$restore_status" -ne 0 ]; then
+                echo "ERROR: Automatic rollback needs intervention. The previous code remains in $BACKUP_DIR."
+              else
+                echo "Previous release restored."
+              fi
+            fi
+
+            exit "$status"
+          }
+
+          cleanup_current_staging() {
+            status=$?
+            trap - EXIT
+            set +e
+
+            if [ -n "$STAGING_DIR" ] && [ -d "$STAGING_DIR" ]; then
+              echo "=== Cleaning current staging directory ==="
+              remove_deployment_directory "$STAGING_DIR" "$STAGING_ROOT" || true
+            fi
+
+            echo "=== Cleanup summary ==="
+            printf 'Cleaned paths: %s\n' "$cleaned_paths"
+            printf 'Cleaned bytes: %s\n' "$cleaned_bytes"
+            report_storage 'after cleanup'
+            exit "$status"
+          }
+
+          retain_valid_backups() {
+            mapfile -t backup_dirs < <(find -P "$BACKUP_ROOT" -mindepth 1 -maxdepth 1 -type d -printf '%T@ %p\n' | sort -rn | awk 'NR > 2 {print $2}')
+
+            for backup_dir in "${backup_dirs[@]}"; do
+              remove_deployment_directory "$backup_dir" "$BACKUP_ROOT" || \
+                echo "WARNING: Failed to remove expired deployment backup: $backup_dir"
+            done
+          }
+
+          mkdir -p "$STAGING_ROOT" "$BACKUP_ROOT"
+          STAGING_DIR="$(mktemp -d "$STAGING_ROOT/${RELEASE_ID}.XXXXXX")"
+          trap cleanup_current_staging EXIT
+          audit_layout
+
+          echo "=== Preparing isolated Laravel release ==="
           rsync -a \
             --exclude='.git/' \
             --exclude='.github/' \
@@ -146,7 +276,6 @@ jobs:
           ensure_cache_directory "$STAGING_DIR"
 
           echo "=== Installing Composer dependencies in staging ==="
-
           cd "$STAGING_DIR"
           "$PHP_BIN" "$(command -v composer)" install \
             --no-dev \
@@ -157,9 +286,8 @@ jobs:
 
           prepare_laravel "$STAGING_DIR"
 
-          echo "=== Backing up active application files ==="
-          mkdir -p "$BACKUP_DIR"
-          rsync -a --delete "${excluded_paths[@]}" "$APP_DIR/" "$BACKUP_DIR/"
+          echo "=== Creating hard-linked rollback backup ==="
+          rsync -a --link-dest="$APP_DIR" "${excluded_paths[@]}" "$APP_DIR/" "$BACKUP_DIR/"
 
           # Nothing in the active application is changed until staging has passed all
           # Composer, Artisan, and route checks above.
@@ -169,10 +297,16 @@ jobs:
           echo "=== Activating prepared Laravel release ==="
           rsync -a --delete "${excluded_paths[@]}" "$STAGING_DIR/" "$APP_DIR/"
 
-          # Caches built in staging can contain absolute staging paths. Regenerate
-          # them only after the application files are active at their final path.
+          # Caches are intentionally excluded from rsync and rebuilt only at the
+          # final path, avoiding stale absolute paths and protected cache files.
           prepare_laravel "$APP_DIR"
 
           activated=0
           trap - ERR
+
+          retain_valid_backups
+          remove_deployment_directory "$STAGING_DIR" "$STAGING_ROOT" || \
+            echo "WARNING: Current staging cleanup failed; it will be retried by a later run."
+          STAGING_DIR=''
+
           echo "=== Laravel deployment successful ==="
