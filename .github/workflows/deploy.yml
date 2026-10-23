@@ -29,7 +29,7 @@ jobs:
           APP_DIR: /www/wwwroot/apiudev.udumbara.my.id
           PHP_BIN: /www/server/php/83/bin/php
         run: |
-          set -euo pipefail
+          set -Eeuo pipefail
 
           echo "=== Checking requirements ==="
           test -f artisan
@@ -39,8 +39,93 @@ jobs:
           command -v rsync
           command -v composer
           test -x "$PHP_BIN"
+          test -d "$APP_DIR"
+          test -f "$APP_DIR/.env"
+          test -d "$APP_DIR/storage"
 
-          echo "=== Synchronizing source ==="
+          DEPLOY_DIR="$APP_DIR/.deploy"
+          STAGING_ROOT="$DEPLOY_DIR/staging"
+          BACKUP_ROOT="$DEPLOY_DIR/backups"
+          mkdir -p "$STAGING_ROOT" "$BACKUP_ROOT"
+
+          RELEASE_ID="${GITHUB_SHA}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          STAGING_DIR="$(mktemp -d "$STAGING_ROOT/${RELEASE_ID}.XXXXXX")"
+          BACKUP_DIR="$BACKUP_ROOT/$RELEASE_ID"
+          activated=0
+
+          excluded_paths=(
+            --exclude='.env'
+            --exclude='.env.*'
+            --exclude='storage/'
+            --exclude='.deploy/'
+            --exclude='.well-known/'
+            --exclude='.user.ini'
+          )
+
+          restore_previous_release() {
+            status=$?
+            trap - ERR
+
+            if [ "$activated" -eq 1 ]; then
+              echo "ERROR: Activation failed; restoring the previous release."
+              set +e
+              rsync -a --delete "${excluded_paths[@]}" "$BACKUP_DIR/" "$APP_DIR/"
+              restore_status=$?
+              set -e
+
+              if [ "$restore_status" -ne 0 ]; then
+                echo "ERROR: Automatic rollback also failed. The previous release is in $BACKUP_DIR."
+              else
+                echo "Previous release restored."
+              fi
+            fi
+
+            exit "$status"
+          }
+
+          ensure_cache_directory() {
+            target_dir=$1
+            mkdir -p "$target_dir/bootstrap/cache"
+            test -d "$target_dir/bootstrap/cache"
+            test -w "$target_dir/bootstrap/cache"
+          }
+
+          clear_generated_cache() {
+            target_dir=$1
+            find "$target_dir/bootstrap/cache" -maxdepth 1 -type f \( \
+              -name 'config.php' -o \
+              -name 'events.php' -o \
+              -name 'packages.php' -o \
+              -name 'routes-*.php' -o \
+              -name 'services.php' \
+            \) -delete
+          }
+
+          prepare_laravel() {
+            target_dir=$1
+            cd "$target_dir"
+
+            ensure_cache_directory "$target_dir"
+            clear_generated_cache "$target_dir"
+
+            echo "=== Verifying Laravel bootstrap in $target_dir ==="
+            "$PHP_BIN" artisan about --only=environment --no-interaction
+
+            echo "=== Discovering Laravel packages in $target_dir ==="
+            "$PHP_BIN" artisan package:discover --ansi --no-interaction
+
+            echo "=== Building Laravel caches in $target_dir ==="
+            "$PHP_BIN" artisan config:clear --no-interaction
+            "$PHP_BIN" artisan config:cache --no-interaction
+            "$PHP_BIN" artisan route:cache --no-interaction
+
+            echo "=== Verifying billing gateway routes in $target_dir ==="
+            route_list="$("$PHP_BIN" artisan route:list --path=payment-gateway/billing-transactions --json --no-interaction)"
+            printf '%s' "$route_list" | grep -Fq 'billing-transactions'
+            printf '%s' "$route_list" | grep -Fq 'paymentAttempt'
+          }
+
+          echo "=== Preparing isolated Laravel release ==="
 
           rsync -a \
             --exclude='.git/' \
@@ -52,12 +137,17 @@ jobs:
             --exclude='bootstrap/cache/' \
             --exclude='.well-known/' \
             --exclude='.user.ini' \
-            ./ "$APP_DIR/"
+            ./ "$STAGING_DIR/"
 
-          cd "$APP_DIR"
+          # The production environment is read only for staging: it is never logged,
+          # overwritten, or removed by this workflow.
+          cp --preserve=mode,timestamps "$APP_DIR/.env" "$STAGING_DIR/.env"
+          ln -s "$APP_DIR/storage" "$STAGING_DIR/storage"
+          ensure_cache_directory "$STAGING_DIR"
 
-          echo "=== Installing Composer dependencies ==="
+          echo "=== Installing Composer dependencies in staging ==="
 
+          cd "$STAGING_DIR"
           "$PHP_BIN" "$(command -v composer)" install \
             --no-dev \
             --prefer-dist \
@@ -65,26 +155,24 @@ jobs:
             --optimize-autoloader \
             --no-scripts
 
-          echo "=== Preparing Laravel storage ==="
+          prepare_laravel "$STAGING_DIR"
 
-          mkdir -p \
-            storage/app/public \
-            storage/framework/cache/data \
-            storage/framework/sessions \
-            storage/framework/views \
-            storage/logs \
-            bootstrap/cache
+          echo "=== Backing up active application files ==="
+          mkdir -p "$BACKUP_DIR"
+          rsync -a --delete "${excluded_paths[@]}" "$APP_DIR/" "$BACKUP_DIR/"
 
-          echo "=== Checking application environment ==="
+          # Nothing in the active application is changed until staging has passed all
+          # Composer, Artisan, and route checks above.
+          trap restore_previous_release ERR
+          activated=1
 
-          if [ -f .env ]; then
-            echo "Production .env found."
-            echo "=== Refreshing Laravel configuration cache ==="
-            "$PHP_BIN" artisan config:clear
-            "$PHP_BIN" artisan config:cache
-          else
-            echo "Production .env not created yet."
-            echo "Laravel initialization will be completed later."
-          fi
+          echo "=== Activating prepared Laravel release ==="
+          rsync -a --delete "${excluded_paths[@]}" "$STAGING_DIR/" "$APP_DIR/"
 
-          echo "=== Source deployment successful ==="
+          # Caches built in staging can contain absolute staging paths. Regenerate
+          # them only after the application files are active at their final path.
+          prepare_laravel "$APP_DIR"
+
+          activated=0
+          trap - ERR
+          echo "=== Laravel deployment successful ==="
