@@ -33,6 +33,7 @@ jobs:
           APPLICATION_ROOT: /www/wwwroot/apiudev-billing
         run: |
           set -Eeuo pipefail
+          trap 'status=$?; failed_command=$BASH_COMMAND; echo "::error title=Deployment preflight::Preflight failed: $failed_command"; exit "$status"' ERR
 
           echo "=== Checking requirements ==="
           test -f artisan
