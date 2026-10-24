@@ -15,10 +15,10 @@ class SubscriptionPlanIntegrationApiTest extends TestCase
 {
     use RefreshDatabase;
 
-    public function test_token_with_subscription_plan_scope_can_list_only_its_active_plans(): void
+    public function test_valid_token_without_scopes_can_list_only_its_active_plans(): void
     {
         [$application, , $plaintext] = $this->integrationToken([
-            'scopes' => [ApplicationIntegrationToken::ScopeSubscriptionPlansRead],
+            'scopes' => [],
         ]);
         $visiblePlan = SubscriptionPlan::factory()->create([
             'application_id' => $application->id,
@@ -64,7 +64,7 @@ class SubscriptionPlanIntegrationApiTest extends TestCase
     public function test_empty_plan_list_returns_ok_with_an_empty_data_array(): void
     {
         [, , $plaintext] = $this->integrationToken([
-            'scopes' => [ApplicationIntegrationToken::ScopeSubscriptionPlansRead],
+            'scopes' => [],
         ]);
 
         $this->withToken($plaintext)
@@ -77,14 +77,14 @@ class SubscriptionPlanIntegrationApiTest extends TestCase
     public function test_missing_invalid_expired_and_revoked_tokens_are_unauthorized(): void
     {
         [, , $validToken] = $this->integrationToken([
-            'scopes' => [ApplicationIntegrationToken::ScopeSubscriptionPlansRead],
+            'scopes' => [],
         ]);
         [, , $expiredToken] = $this->integrationToken([
-            'scopes' => [ApplicationIntegrationToken::ScopeSubscriptionPlansRead],
+            'scopes' => [],
             'expires_at' => now()->subMinute(),
         ]);
         [, $revokedModel, $revokedToken] = $this->integrationToken([
-            'scopes' => [ApplicationIntegrationToken::ScopeSubscriptionPlansRead],
+            'scopes' => [],
         ]);
         $revokedModel->update(['revoked_at' => now()]);
 
@@ -95,7 +95,7 @@ class SubscriptionPlanIntegrationApiTest extends TestCase
         $this->withToken($validToken)->getJson('/api/v1/integrations/subscription-plans')->assertOk();
     }
 
-    public function test_token_without_subscription_plan_scope_is_forbidden(): void
+    public function test_legacy_scopes_do_not_limit_a_valid_application_token(): void
     {
         [, , $token] = $this->integrationToken([
             'scopes' => [ApplicationIntegrationToken::ScopeCustomersRead],
@@ -103,13 +103,13 @@ class SubscriptionPlanIntegrationApiTest extends TestCase
 
         $this->withToken($token)
             ->getJson('/api/v1/integrations/subscription-plans')
-            ->assertForbidden();
+            ->assertOk();
     }
 
     public function test_endpoint_does_not_change_billing_or_subscription_plan_data(): void
     {
         [$application, , $token] = $this->integrationToken([
-            'scopes' => [ApplicationIntegrationToken::ScopeSubscriptionPlansRead],
+            'scopes' => [],
         ]);
         $plan = SubscriptionPlan::factory()->create(['application_id' => $application->id]);
         $originalPlan = $plan->only(['code', 'name', 'description', 'duration_days', 'price', 'currency', 'is_active']);

@@ -21,7 +21,7 @@ class ApplicationIntegrationTokenService
             ApplicationIntegrationToken::ScopeSubscriptionPlansRead,
         ];
         $scopes = array_values(array_unique($scopes));
-        if ($scopes === [] || array_diff($scopes, $allowedScopes) !== []) {
+        if (array_diff($scopes, $allowedScopes) !== []) {
             throw ValidationException::withMessages([
                 'scopes' => ['Scope token integrasi tidak valid.'],
             ]);

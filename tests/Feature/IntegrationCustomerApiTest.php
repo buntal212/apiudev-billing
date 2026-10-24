@@ -5,6 +5,7 @@ namespace Tests\Feature;
 use App\Models\Application;
 use App\Models\ApplicationCustomer;
 use App\Models\ApplicationIntegrationToken;
+use App\Models\SubscriptionPlan;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\RateLimiter;
@@ -109,30 +110,42 @@ class IntegrationCustomerApiTest extends TestCase
             ->assertJsonPath('error_code', 'manual_customer_conflict');
     }
 
-    public function test_invalid_expired_revoked_and_wrong_scope_tokens_are_rejected(): void
+    public function test_invalid_expired_and_revoked_tokens_are_rejected(): void
     {
         [$application, , $validToken] = $this->integrationToken();
         [, , $expiredToken] = $this->integrationToken(['expires_at' => now()->subMinute()]);
         [, $revokedModel, $revokedToken] = $this->integrationToken();
         $revokedModel->update(['revoked_at' => now()]);
-        [, , $readOnlyToken] = $this->integrationToken(['scopes' => [ApplicationIntegrationToken::ScopeCustomersRead]]);
 
         $this->withToken('invalid-token')->getJson('/api/v1/integrations/customers/125')->assertUnauthorized();
         $this->withToken($expiredToken)->getJson('/api/v1/integrations/customers/125')->assertUnauthorized();
         $this->withToken($revokedToken)->getJson('/api/v1/integrations/customers/125')->assertUnauthorized();
-        $this->withToken($readOnlyToken)
-            ->postJson('/api/v1/integrations/customers', [
-                'external_customer_id' => 'scope-1',
-                'name' => 'Scope',
-                'status' => 'active',
-            ])
-            ->assertForbidden();
-
         $this->withToken($validToken)->getJson('/api/v1/admin/application-customers')->assertUnauthorized();
         $this->assertDatabaseHas('application_integration_audits', ['error_code' => 'invalid_token']);
         $this->assertDatabaseHas('application_integration_audits', ['error_code' => 'token_expired']);
         $this->assertDatabaseHas('application_integration_audits', ['error_code' => 'token_revoked']);
-        $this->assertDatabaseHas('application_integration_audits', ['error_code' => 'missing_scope']);
+    }
+
+    public function test_a_single_valid_application_token_can_access_customers_and_subscription_plans_without_scopes(): void
+    {
+        [$application, , $plaintext] = $this->integrationToken(['scopes' => []]);
+        SubscriptionPlan::factory()->create([
+            'application_id' => $application->id,
+            'duration_days' => 30,
+        ]);
+
+        $this->withToken($plaintext)
+            ->postJson('/api/v1/integrations/customers', [
+                'external_customer_id' => 'single-token-customer',
+                'name' => 'Pelanggan Token Tunggal',
+                'status' => 'active',
+            ])
+            ->assertCreated();
+
+        $this->withToken($plaintext)
+            ->getJson('/api/v1/integrations/subscription-plans')
+            ->assertOk()
+            ->assertJsonPath('meta.total', 1);
     }
 
     public function test_payload_cannot_change_billing_fields_and_rate_limit_is_bounded(): void

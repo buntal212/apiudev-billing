@@ -19,7 +19,7 @@ class StoreApplicationIntegrationTokenRequest extends ApiFormRequest
     {
         return [
             'name' => ['required', 'string', 'max:100'],
-            'scopes' => ['required', 'array', 'min:1'],
+            'scopes' => ['nullable', 'array'],
             'scopes.*' => ['string', 'in:'.implode(',', [
                 ApplicationIntegrationToken::ScopeCustomersRead,
                 ApplicationIntegrationToken::ScopeCustomersWrite,

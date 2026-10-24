@@ -31,9 +31,10 @@ Accept: application/json
 Content-Type: application/json
 ```
 
-Token terikat pada satu aplikasi dan dapat memiliki scope `customers:read`,
-`customers:write`, dan/atau `subscription-plans:read`. Token yang dicabut atau
-kedaluwarsa ditolak. Batas request
+Token terikat pada satu aplikasi dan dapat digunakan untuk seluruh endpoint
+integrasi yang diizinkan bagi aplikasi tersebut. Scope lama tetap tersimpan
+sebagai metadata kompatibilitas, tetapi tidak membatasi endpoint integrasi.
+Token yang dicabut atau kedaluwarsa ditolak. Batas request
 adalah 60 request per menit per token/aplikasi, dengan perlindungan tambahan 120
 request per menit per alamat sumber; hormati `Retry-After` untuk respons `429`
 dan jangan melakukan retry tanpa batas.
@@ -78,7 +79,7 @@ aman (operasi, status, ID eksternal, request ID, dan kode error); bearer token,
 API key, dan payload rahasia tidak pernah disimpan.
 
 `201` berarti pelanggan baru dibuat, `200` berarti upsert/update berhasil,
-`401` berarti token tidak valid/aktif, `403` berarti scope tidak cukup, `404`
+`401` berarti token tidak valid/aktif, `403` berarti aplikasi tidak aktif, `404`
 berarti pelanggan tidak ditemukan, `409` berarti konflik record manual, dan
 `422` berarti payload tidak valid.
 
@@ -98,9 +99,9 @@ berarti pelanggan tidak ditemukan, `409` berarti konflik record manual, dan
 
 1. Buka **Master Aplikasi** di UDEV.
 2. Buka detail aplikasi Larissama dan pastikan aplikasi aktif.
-3. Buat token, beri nama, pilih scope minimum yang diperlukan (untuk master
-   paket Larissama pilih `subscription-plans:read`), lalu tentukan expiry bila
-   diperlukan.
+3. Buat satu token untuk aplikasi Larissama, beri nama, lalu tentukan expiry
+   bila diperlukan. Scope pada data token lama tidak memengaruhi akses
+   endpoint integrasi.
 4. Salin plaintext token pada dialog. Token lengkap tidak dapat dilihat lagi.
 5. Kirim token melalui secret manager ke backend Larissama, bukan melalui
    browser atau chat biasa.
@@ -138,11 +139,11 @@ ditelusuri pada audit aplikasi tanpa menyimpan token atau payload rahasia.
 Semua URL berikut diawali `https://apiudev.udumbara.my.id` dan memakai header
 Bearer pada bagian autentikasi.
 
-| Method | Path | Scope | Perilaku |
+| Method | Path | Otorisasi | Perilaku |
 | --- | --- | --- | --- |
-| POST | `/api/v1/integrations/customers` | `customers:write` | Upsert berdasarkan `application_id` dari token + `external_customer_id`; `201` baru, `200` sudah ada. |
-| GET | `/api/v1/integrations/customers/{externalId}` | `customers:read` | Hanya membaca pelanggan aplikasi token. |
-| PATCH | `/api/v1/integrations/customers/{externalId}` | `customers:write` | Update parsial; ID yang belum ada menghasilkan `404`, tidak membuat record. |
+| POST | `/api/v1/integrations/customers` | Bearer token aplikasi valid | Upsert berdasarkan `application_id` dari token + `external_customer_id`; `201` baru, `200` sudah ada. |
+| GET | `/api/v1/integrations/customers/{externalId}` | Bearer token aplikasi valid | Hanya membaca pelanggan aplikasi token. |
+| PATCH | `/api/v1/integrations/customers/{externalId}` | Bearer token aplikasi valid | Update parsial; ID yang belum ada menghasilkan `404`, tidak membuat record. |
 
 Contoh response sukses (field sesuai resource UDEV):
 
@@ -251,8 +252,8 @@ hanya metadata response yang diperlukan.
 
 - **401**: token salah, belum dikirim, dicabut, atau kedaluwarsa. Buat token
   baru; jangan mengulang request tanpa memperbaiki secret.
-- **403**: scope tidak mencukupi atau aplikasi tidak aktif. Periksa scope dan
-  status aplikasi di UDEV.
+- **403**: aplikasi tidak aktif untuk integrasi. Periksa status aplikasi di
+  UDEV.
 - **404**: ID eksternal belum ada untuk GET/PATCH. Gunakan POST untuk upsert.
 - **409**: ID sudah dimiliki pelanggan manual. Hentikan retry dan minta mapping
   admin; jangan overwrite otomatis.
@@ -269,7 +270,7 @@ hanya metadata response yang diperlukan.
 
 ## Checklist UAT Larissama
 
-- [ ] Admin membuat token dengan scope yang sesuai dan menyimpannya di server.
+- [ ] Admin membuat satu token aplikasi dan menyimpannya di server.
 - [ ] Admin membuka Detail Master Aplikasi → Uji Integrasi Pelanggan dan memakai
       ID `UAT-*`.
 - [ ] Kirim ulang ID UAT yang sama menunjukkan `created=false` dan tetap satu
@@ -283,8 +284,8 @@ hanya metadata response yang diperlukan.
 - [ ] POST ulang ID yang sama mendapat `200` tanpa record kedua.
 - [ ] PATCH memperbarui data dan GET membaca hasil terbaru.
 - [ ] Token aplikasi lain tidak dapat membaca ID Larissama.
-- [ ] Token dicabut/kedaluwarsa menghasilkan `401`; scope salah menghasilkan
-      `403`.
+- [ ] Token dicabut/kedaluwarsa menghasilkan `401`; aplikasi tidak aktif
+      menghasilkan `403`.
 - [ ] Gangguan UDEV tidak menghapus data pelanggan lokal dan queue dapat pulih.
 - [ ] `429` menghormati `Retry-After` dan jumlah retry terbatas.
 - [ ] Tidak ada invoice, settlement, pembayaran, atau subscription yang berubah
@@ -308,7 +309,7 @@ menulis data billing apa pun.
 | Endpoint | `/api/v1/integrations/subscription-plans` |
 | Metode | `GET` |
 | Autentikasi | `Authorization: Bearer {APPLICATION_TOKEN}` |
-| Scope wajib | `subscription-plans:read` |
+| Otorisasi | Bearer token aplikasi valid |
 
 Identitas aplikasi selalu ditentukan dari token integrasi yang tervalidasi.
 Jangan mengirim atau mempercayai `application_id` dari request untuk memilih
@@ -356,8 +357,8 @@ tidak ditampilkan.
 
 Jika tidak ada paket yang cocok, respons tetap `200` dengan `data` kosong dan
 metadata pagination, bukan `404`. `401` berarti token tidak ada/tidak
-valid/kedaluwarsa/dicabut, `403` berarti scope tidak ada atau aplikasi tidak
-aktif, dan `429` meminta klien menunggu `Retry-After`. Kesalahan internal
+valid/kedaluwarsa/dicabut, `403` berarti aplikasi tidak aktif, dan `429`
+meminta klien menunggu `Retry-After`. Kesalahan internal
 menggunakan respons JSON aman `500`.
 
 Contoh Laravel HTTP Client di backend Larissama:
@@ -375,10 +376,9 @@ $response->throw();
 $packages = $response->json('data', []);
 ```
 
-Gunakan token khusus aplikasi Larissama yang dibuat melalui **Master Aplikasi
-→ Detail Aplikasi → Token integrasi aplikasi** dan pilih hanya scope
-`subscription-plans:read` bila token hanya dipakai untuk katalog. Token lama
-tidak memperoleh scope ini otomatis: buat token baru atau otorisasi ulang token
-sesuai prosedur admin. Simpan secret hanya pada konfigurasi backend/secret
+Gunakan satu token khusus aplikasi Larissama yang dibuat melalui **Master
+Aplikasi → Detail Aplikasi → Token integrasi aplikasi**. Nilai scope pada token
+lama tetap dipertahankan sebagai metadata dan tidak perlu diubah agar token
+tetap dapat mengakses endpoint integrasi. Simpan secret hanya pada konfigurasi backend/secret
 manager Larissama; jangan pernah meneruskannya ke Quasar, JavaScript browser,
 `localStorage`, URL, atau log.

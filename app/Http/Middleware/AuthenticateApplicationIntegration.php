@@ -10,7 +10,7 @@ use Symfony\Component\HttpFoundation\Response;
 
 class AuthenticateApplicationIntegration
 {
-    public function handle(Request $request, Closure $next, string ...$requiredScopes): Response
+    public function handle(Request $request, Closure $next): Response
     {
         $auditService = app(ApplicationIntegrationAuditService::class);
         $plaintext = $request->bearerToken();
@@ -82,22 +82,6 @@ class AuthenticateApplicationIntegration
             );
 
             return response()->json(['message' => 'Aplikasi tidak aktif untuk integrasi.'], Response::HTTP_FORBIDDEN);
-        }
-
-        foreach ($requiredScopes as $scope) {
-            if (! $token->hasScope($scope)) {
-                $auditService->record(
-                    request: $request,
-                    application: $token->application,
-                    token: $token,
-                    operation: 'token.authorization',
-                    status: 'failed',
-                    errorCode: 'missing_scope',
-                    safeDetails: ['required_scope' => $scope],
-                );
-
-                return response()->json(['message' => 'Token integrasi tidak memiliki scope yang diperlukan.'], Response::HTTP_FORBIDDEN);
-            }
         }
 
         $request->attributes->set('integration_token', $token);

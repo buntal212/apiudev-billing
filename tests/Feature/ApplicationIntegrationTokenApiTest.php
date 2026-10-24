@@ -70,6 +70,18 @@ class ApplicationIntegrationTokenApiTest extends TestCase
             ->assertJsonPath('data.scopes.0', ApplicationIntegrationToken::ScopeSubscriptionPlansRead);
     }
 
+    public function test_admin_can_issue_an_application_token_without_scopes(): void
+    {
+        $application = Application::factory()->create();
+        Sanctum::actingAs(User::factory()->create(['is_admin' => true]), ['admin:access']);
+
+        $this->postJson("/api/v1/admin/applications/{$application->id}/integration-tokens", [
+            'name' => 'Larissama token tunggal',
+        ])
+            ->assertCreated()
+            ->assertJsonPath('data.scopes', []);
+    }
+
     public function test_admin_can_review_safe_integration_audit_metadata(): void
     {
         $application = Application::factory()->create();

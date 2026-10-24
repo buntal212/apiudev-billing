@@ -36,16 +36,12 @@ Route::prefix('v1/auth')->group(function (): void {
 Route::prefix('v1/integrations')
     ->middleware(['integration.auth', 'throttle:integration-api'])
     ->group(function (): void {
-        Route::get('subscription-plans', [IntegrationSubscriptionPlanController::class, 'index'])
-            ->middleware('integration.scope:subscription-plans:read');
-        Route::post('customers', [IntegrationCustomerController::class, 'store'])
-            ->middleware('integration.scope:customers:write');
+        Route::get('subscription-plans', [IntegrationSubscriptionPlanController::class, 'index']);
+        Route::post('customers', [IntegrationCustomerController::class, 'store']);
         Route::get('customers/{externalId}', [IntegrationCustomerController::class, 'show'])
-            ->where('externalId', '[A-Za-z0-9._:-]{1,100}')
-            ->middleware('integration.scope:customers:read');
+            ->where('externalId', '[A-Za-z0-9._:-]{1,100}');
         Route::patch('customers/{externalId}', [IntegrationCustomerController::class, 'update'])
-            ->where('externalId', '[A-Za-z0-9._:-]{1,100}')
-            ->middleware('integration.scope:customers:write');
+            ->where('externalId', '[A-Za-z0-9._:-]{1,100}');
     });
 
 Route::prefix('v1/admin')
