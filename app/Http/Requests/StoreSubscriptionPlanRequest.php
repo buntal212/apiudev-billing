@@ -34,7 +34,7 @@ class StoreSubscriptionPlanRequest extends ApiFormRequest
             ],
             'name' => ['required', 'string', 'max:255'],
             'description' => ['nullable', 'string'],
-            'duration_months' => ['required', 'integer', 'min:1', 'max:1200'],
+            'duration_days' => ['required', 'integer', 'min:30', 'max:36000', 'multiple_of:30'],
             'price' => ['required', 'numeric', 'min:0'],
             'currency' => ['required', 'string', 'size:3', 'alpha:ascii'],
             'is_active' => ['required', 'boolean'],

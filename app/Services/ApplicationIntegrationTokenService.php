@@ -18,6 +18,7 @@ class ApplicationIntegrationTokenService
         $allowedScopes = [
             ApplicationIntegrationToken::ScopeCustomersRead,
             ApplicationIntegrationToken::ScopeCustomersWrite,
+            ApplicationIntegrationToken::ScopeSubscriptionPlansRead,
         ];
         $scopes = array_values(array_unique($scopes));
         if ($scopes === [] || array_diff($scopes, $allowedScopes) !== []) {

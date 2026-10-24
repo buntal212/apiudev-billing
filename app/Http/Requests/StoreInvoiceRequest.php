@@ -30,7 +30,7 @@ class StoreInvoiceRequest extends ApiFormRequest
             'idempotency_key' => ['required', 'string', 'max:100'],
             'amount' => ['prohibited'],
             'currency' => ['prohibited'],
-            'duration_months' => ['prohibited'],
+            'duration_days' => ['prohibited'],
             'metadata' => ['prohibited'],
         ];
     }
@@ -71,7 +71,7 @@ class StoreInvoiceRequest extends ApiFormRequest
             ...parent::messages(),
             'amount.prohibited' => 'Nominal tagihan ditentukan berdasarkan paket langganan.',
             'currency.prohibited' => 'Mata uang ditentukan berdasarkan paket langganan.',
-            'duration_months.prohibited' => 'Durasi ditentukan berdasarkan paket langganan.',
+            'duration_days.prohibited' => 'Durasi ditentukan berdasarkan paket langganan.',
             'metadata.prohibited' => 'Data tambahan tidak dapat dikirim saat membuat invoice.',
         ];
     }

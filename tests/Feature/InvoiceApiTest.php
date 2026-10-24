@@ -24,6 +24,7 @@ class InvoiceApiTest extends TestCase
             'application_id' => $application->id,
             'price' => '125000.00',
             'duration_months' => 3,
+            'duration_days' => 90,
         ]);
         Sanctum::actingAs($this->admin(), ['admin:access']);
 
@@ -36,7 +37,7 @@ class InvoiceApiTest extends TestCase
             ->assertJsonPath('data.application_customer_id', $customer->id)
             ->assertJsonPath('data.subscription_plan_id', $plan->id)
             ->assertJsonPath('data.amount', '125000.00')
-            ->assertJsonPath('data.duration_months', 3)
+            ->assertJsonPath('data.duration_days', 90)
             ->assertJsonPath('data.status', Invoice::StatusPending);
 
         $invoiceId = $response->json('data.id');
@@ -44,6 +45,7 @@ class InvoiceApiTest extends TestCase
             'id' => $invoiceId,
             'amount' => '125000.00',
             'duration_months' => 3,
+            'duration_days' => 90,
             'currency' => 'IDR',
             'idempotency_key' => 'invoice-create-0001',
         ]);

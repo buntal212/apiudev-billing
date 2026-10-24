@@ -22,7 +22,7 @@ class InvoiceResource extends JsonResource
             'subscription_id' => $this->subscription_id,
             'amount' => $this->amount,
             'currency' => $this->currency,
-            'duration_months' => $this->duration_months,
+            'duration_days' => $this->duration_days,
             'status' => $this->status,
             'issued_at' => $this->issued_at?->toISOString(),
             'due_at' => $this->due_at?->toISOString(),

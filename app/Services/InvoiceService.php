@@ -105,6 +105,7 @@ class InvoiceService
                     'amount' => $lockedPlan->price,
                     'currency' => $lockedPlan->currency,
                     'duration_months' => $lockedPlan->duration_months,
+                    'duration_days' => $lockedPlan->duration_days,
                     'idempotency_key' => $idempotencyKey,
                     'status' => Invoice::StatusPending,
                     'issued_at' => now(),

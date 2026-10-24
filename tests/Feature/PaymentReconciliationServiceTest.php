@@ -51,7 +51,7 @@ class PaymentReconciliationServiceTest extends TestCase
         $this->assertSame('paid', $result->run?->gateway_status);
         $this->assertSame(Invoice::StatusPaid, $attempt->invoice->fresh()->status);
         $this->assertSame(PaymentAttempt::StatusSucceeded, $attempt->fresh()->status);
-        $this->assertTrue($subscription->fresh()->expires_at->equalTo($previousExpiry->addMonth()));
+        $this->assertTrue($subscription->fresh()->expires_at->equalTo($previousExpiry->addDays(30)));
         $this->assertDatabaseCount('payment_allocations', 1);
         $this->assertDatabaseCount('subscription_period_events', 1);
         Http::assertSentCount(1);
@@ -366,7 +366,7 @@ class PaymentReconciliationServiceTest extends TestCase
 
         $this->assertSame(PaymentReconciliationRun::StatusPaid, $result->status);
         $this->assertSame($verifiedAt->format('Y-m-d H:i:s'), $subscription->fresh()->starts_at->format('Y-m-d H:i:s'));
-        $this->assertSame($verifiedAt->addMonth()->format('Y-m-d H:i:s'), $subscription->fresh()->expires_at->format('Y-m-d H:i:s'));
+        $this->assertSame($verifiedAt->addDays(30)->format('Y-m-d H:i:s'), $subscription->fresh()->expires_at->format('Y-m-d H:i:s'));
     }
 
     public function test_reconciliation_audit_never_stores_gateway_credentials_or_payload(): void
@@ -441,7 +441,7 @@ class PaymentReconciliationServiceTest extends TestCase
         $subscription = Subscription::factory()->create([
             'application_customer_id' => $invoice->application_customer_id,
             'subscription_plan_id' => $invoice->subscription_plan_id,
-            'expires_at' => now()->addMonth(),
+            'expires_at' => now()->addDays(30),
         ]);
         $invoice->update(['subscription_id' => $subscription->id]);
 

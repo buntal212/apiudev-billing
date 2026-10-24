@@ -31,8 +31,9 @@ Accept: application/json
 Content-Type: application/json
 ```
 
-Token terikat pada satu aplikasi dan memiliki scope `customers:read` dan/atau
-`customers:write`. Token yang dicabut atau kedaluwarsa ditolak. Batas request
+Token terikat pada satu aplikasi dan dapat memiliki scope `customers:read`,
+`customers:write`, dan/atau `subscription-plans:read`. Token yang dicabut atau
+kedaluwarsa ditolak. Batas request
 adalah 60 request per menit per token/aplikasi, dengan perlindungan tambahan 120
 request per menit per alamat sumber; hormati `Retry-After` untuk respons `429`
 dan jangan melakukan retry tanpa batas.
@@ -97,8 +98,9 @@ berarti pelanggan tidak ditemukan, `409` berarti konflik record manual, dan
 
 1. Buka **Master Aplikasi** di UDEV.
 2. Buka detail aplikasi Larissama dan pastikan aplikasi aktif.
-3. Buat token, beri nama, pilih `customers:read` dan/atau `customers:write`,
-   lalu tentukan expiry bila diperlukan.
+3. Buat token, beri nama, pilih scope minimum yang diperlukan (untuk master
+   paket Larissama pilih `subscription-plans:read`), lalu tentukan expiry bila
+   diperlukan.
 4. Salin plaintext token pada dialog. Token lengkap tidak dapat dilihat lagi.
 5. Kirim token melalui secret manager ke backend Larissama, bukan melalui
    browser atau chat biasa.
@@ -294,3 +296,89 @@ Pelanggan baru terdaftar tidak sama dengan langganan aktif. Invoice dibuat
 melalui alur billing UDEV, checkout DANA tetap Sandbox-only, dan status lunas
 hanya berasal dari gateway yang telah diverifikasi serta settlement. Redirect
 browser tidak pernah menjadi bukti pembayaran.
+
+## Integrasi Master Paket Langganan UDEV
+
+Backend Larissama dapat mengambil katalog paket aktif miliknya dari UDEV tanpa
+menulis data billing apa pun.
+
+| Item | Nilai |
+| --- | --- |
+| Base URL | `https://apiudev.udumbara.my.id` |
+| Endpoint | `/api/v1/integrations/subscription-plans` |
+| Metode | `GET` |
+| Autentikasi | `Authorization: Bearer {APPLICATION_TOKEN}` |
+| Scope wajib | `subscription-plans:read` |
+
+Identitas aplikasi selalu ditentukan dari token integrasi yang tervalidasi.
+Jangan mengirim atau mempercayai `application_id` dari request untuk memilih
+paket. Endpoint hanya menampilkan paket aktif yang terhubung ke aplikasi
+pemilik token, diurutkan berdasarkan `code` lalu ID. Paket aplikasi lain dan
+paket nonaktif tidak pernah ditampilkan. Respons mengikuti pagination standar
+UDEV (`meta` dan `links`); gunakan `?per_page=100` bila katalog Larissama
+memiliki hingga seratus paket.
+
+Contoh request:
+
+```http
+GET /api/v1/integrations/subscription-plans HTTP/1.1
+Host: apiudev.udumbara.my.id
+Accept: application/json
+Authorization: Bearer udev_...
+```
+
+Contoh response:
+
+```json
+{
+  "data": [
+    {
+      "id": 1,
+      "code": "PAKET-BULANAN",
+      "name": "Paket 30 Hari",
+      "description": "Langganan selama 30 hari",
+      "price": "175000.00",
+      "currency": "IDR",
+      "duration_days": 30,
+      "is_active": true
+    }
+  ]
+}
+```
+
+`price` adalah string desimal agar nilai uang tidak berubah akibat floating
+point. Durasi memakai `duration_days`: satu periode adalah 30 hari tetap, dua
+periode 60 hari, dan seterusnya. Perhitungan tidak mengikuti jumlah hari pada
+bulan kalender, termasuk pada pergantian bulan dan Februari.
+Field `id`, `code`, `name`, `description`, `currency`, dan `is_active` adalah
+data katalog; `application_id`, kredensial, token, dan konfigurasi internal
+tidak ditampilkan.
+
+Jika tidak ada paket yang cocok, respons tetap `200` dengan `data` kosong dan
+metadata pagination, bukan `404`. `401` berarti token tidak ada/tidak
+valid/kedaluwarsa/dicabut, `403` berarti scope tidak ada atau aplikasi tidak
+aktif, dan `429` meminta klien menunggu `Retry-After`. Kesalahan internal
+menggunakan respons JSON aman `500`.
+
+Contoh Laravel HTTP Client di backend Larissama:
+
+```php
+use Illuminate\Support\Facades\Http;
+
+$response = Http::baseUrl(config('services.udev.base_url'))
+    ->acceptJson()
+    ->withToken(config('services.udev.token'))
+    ->timeout(10)
+    ->get('/api/v1/integrations/subscription-plans');
+
+$response->throw();
+$packages = $response->json('data', []);
+```
+
+Gunakan token khusus aplikasi Larissama yang dibuat melalui **Master Aplikasi
+→ Detail Aplikasi → Token integrasi aplikasi** dan pilih hanya scope
+`subscription-plans:read` bila token hanya dipakai untuk katalog. Token lama
+tidak memperoleh scope ini otomatis: buat token baru atau otorisasi ulang token
+sesuai prosedur admin. Simpan secret hanya pada konfigurasi backend/secret
+manager Larissama; jangan pernah meneruskannya ke Quasar, JavaScript browser,
+`localStorage`, URL, atau log.

@@ -21,8 +21,8 @@ class SubscriptionPeriodEventFactory extends Factory
         return [
             'subscription_id' => Subscription::factory(),
             'event_type' => 'renewal',
-            'previous_expires_at' => now()->addMonth(),
-            'new_expires_at' => now()->addMonths(2),
+            'previous_expires_at' => now()->addDays(30),
+            'new_expires_at' => now()->addDays(60),
             'source_type' => 'manual',
             'source_id' => (string) fake()->uuid(),
             'idempotency_key' => (string) fake()->uuid(),

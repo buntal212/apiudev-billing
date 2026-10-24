@@ -16,6 +16,8 @@ class ApplicationIntegrationToken extends Model
 
     public const string ScopeCustomersWrite = 'customers:write';
 
+    public const string ScopeSubscriptionPlansRead = 'subscription-plans:read';
+
     /** @use HasFactory<ApplicationIntegrationTokenFactory> */
     use HasFactory;
 

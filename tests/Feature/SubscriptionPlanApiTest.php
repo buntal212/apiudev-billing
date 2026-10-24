@@ -24,8 +24,8 @@ class SubscriptionPlanApiTest extends TestCase
             'application_id' => $application->id,
             'code' => 'BULANAN',
             'name' => 'Paket Bulanan',
-            'description' => 'Akses selama satu bulan.',
-            'duration_months' => 1,
+            'description' => 'Akses selama 30 hari.',
+            'duration_days' => 30,
             'price' => '125000.00',
             'currency' => 'IDR',
             'is_active' => true,
@@ -33,7 +33,7 @@ class SubscriptionPlanApiTest extends TestCase
             ->assertCreated()
             ->assertJsonPath('data.application_id', $application->id)
             ->assertJsonPath('data.price', '125000.00')
-            ->assertJsonPath('data.duration_months', 1);
+            ->assertJsonPath('data.duration_days', 30);
 
         $planId = $response->json('data.id');
 
@@ -42,11 +42,11 @@ class SubscriptionPlanApiTest extends TestCase
             ->assertJsonPath('data.code', 'BULANAN');
 
         $this->patchJson("/api/v1/admin/subscription-plans/{$planId}", [
-            'duration_months' => 12,
+            'duration_days' => 360,
             'price' => '1200000.00',
         ])
             ->assertOk()
-            ->assertJsonPath('data.duration_months', 12)
+            ->assertJsonPath('data.duration_days', 360)
             ->assertJsonPath('data.price', '1200000.00');
 
         $this->deleteJson("/api/v1/admin/subscription-plans/{$planId}")
@@ -81,14 +81,14 @@ class SubscriptionPlanApiTest extends TestCase
             'application_id' => Application::factory()->create()->id,
             'code' => 'INVALID',
             'name' => 'Paket tidak valid',
-            'duration_months' => 0,
+            'duration_days' => 31,
             'price' => '-1.00',
             'currency' => 'ID',
             'is_active' => true,
         ])
             ->assertUnprocessable()
-            ->assertJsonValidationErrors(['duration_months', 'price', 'currency'])
-            ->assertJsonPath('errors.duration_months.0', 'Durasi paket minimal 1.');
+            ->assertJsonValidationErrors(['duration_days', 'price', 'currency'])
+            ->assertJsonPath('errors.duration_days.0', 'The Durasi paket field must be a multiple of 30.');
     }
 
     public function test_subscription_plans_can_be_filtered_by_application(): void
@@ -149,7 +149,7 @@ class SubscriptionPlanApiTest extends TestCase
             'application_id' => $application->id,
             'code' => $code,
             'name' => 'Paket Premium',
-            'duration_months' => 1,
+            'duration_days' => 30,
             'price' => '100000.00',
             'currency' => 'IDR',
             'is_active' => true,

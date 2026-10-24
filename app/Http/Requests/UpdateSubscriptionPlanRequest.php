@@ -37,7 +37,7 @@ class UpdateSubscriptionPlanRequest extends ApiFormRequest
             ],
             'name' => ['sometimes', 'required', 'string', 'max:255'],
             'description' => ['sometimes', 'nullable', 'string'],
-            'duration_months' => ['sometimes', 'required', 'integer', 'min:1', 'max:1200'],
+            'duration_days' => ['sometimes', 'required', 'integer', 'min:30', 'max:36000', 'multiple_of:30'],
             'price' => ['sometimes', 'required', 'numeric', 'min:0'],
             'currency' => ['sometimes', 'required', 'string', 'size:3', 'alpha:ascii'],
             'is_active' => ['sometimes', 'required', 'boolean'],

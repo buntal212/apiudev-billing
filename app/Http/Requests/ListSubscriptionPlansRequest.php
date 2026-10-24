@@ -27,7 +27,7 @@ class ListSubscriptionPlansRequest extends ApiFormRequest
             'per_page' => ['nullable', 'integer', 'min:1', 'max:100'],
             'search' => ['nullable', 'string', 'max:255'],
             'is_active' => ['nullable', 'boolean'],
-            'sort' => ['nullable', 'in:code,name,price,duration_months,created_at,updated_at'],
+            'sort' => ['nullable', 'in:code,name,price,duration_days,created_at,updated_at'],
             'direction' => ['nullable', 'in:asc,desc'],
         ];
     }

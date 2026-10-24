@@ -29,7 +29,7 @@ class SubscriptionFactory extends Factory
                 ])->id;
             },
             'starts_at' => now()->startOfDay(),
-            'expires_at' => now()->startOfDay()->addMonth(),
+            'expires_at' => now()->startOfDay()->addDays(30),
             'status' => Subscription::StatusActive,
         ];
     }

@@ -9,7 +9,7 @@ use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 
-#[Fillable(['application_id', 'code', 'name', 'description', 'duration_months', 'price', 'currency', 'is_active'])]
+#[Fillable(['application_id', 'code', 'name', 'description', 'duration_months', 'duration_days', 'price', 'currency', 'is_active'])]
 class SubscriptionPlan extends Model
 {
     /** @use HasFactory<SubscriptionPlanFactory> */
@@ -46,6 +46,7 @@ class SubscriptionPlan extends Model
     {
         return [
             'duration_months' => 'integer',
+            'duration_days' => 'integer',
             'is_active' => 'boolean',
             'price' => 'decimal:2',
         ];

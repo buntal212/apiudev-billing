@@ -46,7 +46,7 @@ class SubscriptionPlanController extends Controller
     {
         $this->authorize('create', SubscriptionPlan::class);
 
-        $plan = SubscriptionPlan::create($request->validated());
+        $plan = SubscriptionPlan::create($this->withLegacyDurationMonths($request->validated()));
 
         return (new SubscriptionPlanResource($plan))
             ->response()
@@ -64,7 +64,7 @@ class SubscriptionPlanController extends Controller
     {
         $this->authorize('update', $subscriptionPlan);
 
-        $subscriptionPlan->update($request->validated());
+        $subscriptionPlan->update($this->withLegacyDurationMonths($request->validated()));
 
         return new SubscriptionPlanResource($subscriptionPlan->refresh());
     }
@@ -82,5 +82,21 @@ class SubscriptionPlanController extends Controller
         $subscriptionPlan->delete();
 
         return response()->json(status: Response::HTTP_NO_CONTENT);
+    }
+
+    /**
+     * Kolom duration_months dipertahankan untuk kompatibilitas data lama.
+     * Semua nilai baru tervalidasi sebagai kelipatan 30 hari.
+     *
+     * @param  array<string, mixed>  $data
+     * @return array<string, mixed>
+     */
+    private function withLegacyDurationMonths(array $data): array
+    {
+        if (isset($data['duration_days'])) {
+            $data['duration_months'] = intdiv($data['duration_days'], 30);
+        }
+
+        return $data;
     }
 }

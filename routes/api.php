@@ -16,6 +16,7 @@ use App\Http\Controllers\Api\V1\Admin\SubscriptionController;
 use App\Http\Controllers\Api\V1\Admin\SubscriptionPlanController;
 use App\Http\Controllers\Api\V1\Auth\AuthController;
 use App\Http\Controllers\Api\V1\Integration\IntegrationCustomerController;
+use App\Http\Controllers\Api\V1\Integration\IntegrationSubscriptionPlanController;
 use App\Http\Controllers\Api\V1\PaymentResultController;
 use Illuminate\Support\Facades\Route;
 
@@ -35,6 +36,8 @@ Route::prefix('v1/auth')->group(function (): void {
 Route::prefix('v1/integrations')
     ->middleware(['integration.auth', 'throttle:integration-api'])
     ->group(function (): void {
+        Route::get('subscription-plans', [IntegrationSubscriptionPlanController::class, 'index'])
+            ->middleware('integration.scope:subscription-plans:read');
         Route::post('customers', [IntegrationCustomerController::class, 'store'])
             ->middleware('integration.scope:customers:write');
         Route::get('customers/{externalId}', [IntegrationCustomerController::class, 'show'])

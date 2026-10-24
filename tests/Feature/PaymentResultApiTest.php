@@ -84,7 +84,7 @@ class PaymentResultApiTest extends TestCase
         $subscription = Subscription::factory()->create([
             'application_customer_id' => $invoice->application_customer_id,
             'subscription_plan_id' => $invoice->subscription_plan_id,
-            'expires_at' => now()->addMonth(),
+            'expires_at' => now()->addDays(30),
         ]);
         $invoice->update(['subscription_id' => $subscription->id]);
         ApplicationPaymentGateway::query()->create([
@@ -108,7 +108,7 @@ class PaymentResultApiTest extends TestCase
 
         $this->assertSame('paid', $invoice->fresh()->status);
         $this->assertSame(1, $invoice->fresh()->paymentAllocation()->count());
-        $this->assertTrue($subscription->fresh()->expires_at->equalTo($previousExpiry->addMonth()));
+        $this->assertTrue($subscription->fresh()->expires_at->equalTo($previousExpiry->addDays(30)));
         $this->assertDatabaseCount('subscription_period_events', 1);
     }
 

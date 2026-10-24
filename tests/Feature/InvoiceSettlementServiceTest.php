@@ -34,7 +34,7 @@ class InvoiceSettlementServiceTest extends TestCase
         $this->assertFalse($first->alreadySettled);
         $this->assertTrue($second->alreadySettled);
         $this->assertSame(Invoice::StatusPaid, $invoice->fresh()->status);
-        $this->assertTrue($subscription->fresh()->expires_at->equalTo($previousExpiry->addMonth()));
+        $this->assertTrue($subscription->fresh()->expires_at->equalTo($previousExpiry->addDays(30)));
         $this->assertDatabaseCount('payment_allocations', 1);
         $this->assertDatabaseCount('subscription_period_events', 1);
         $this->assertDatabaseHas('settlement_events', [
@@ -59,7 +59,7 @@ class InvoiceSettlementServiceTest extends TestCase
         $this->assertNotNull($invoice->subscription_id);
         $subscription = Subscription::query()->findOrFail($invoice->subscription_id);
         $this->assertSame($paidAt->format('Y-m-d H:i:s'), $subscription->starts_at->format('Y-m-d H:i:s'));
-        $this->assertSame($paidAt->addMonth()->format('Y-m-d H:i:s'), $subscription->expires_at->format('Y-m-d H:i:s'));
+        $this->assertSame($paidAt->addDays(30)->format('Y-m-d H:i:s'), $subscription->expires_at->format('Y-m-d H:i:s'));
         $this->assertSame(Subscription::StatusActive, $subscription->status);
         $this->assertDatabaseHas('subscription_period_events', [
             'subscription_id' => $subscription->id,
@@ -250,7 +250,7 @@ class InvoiceSettlementServiceTest extends TestCase
         );
 
         $subscription->refresh();
-        $this->assertTrue($subscription->expires_at->equalTo($previousExpiry->addMonth()));
+        $this->assertTrue($subscription->expires_at->equalTo($previousExpiry->addDays(30)));
         $this->assertTrue($subscription->starts_at->equalTo($previousStart));
         $this->assertSame(Subscription::StatusActive, $subscription->status);
     }
@@ -275,7 +275,7 @@ class InvoiceSettlementServiceTest extends TestCase
 
         $subscription->refresh();
         $this->assertSame($paidAt->format('Y-m-d H:i:s'), $subscription->starts_at->format('Y-m-d H:i:s'));
-        $this->assertSame($paidAt->addMonth()->format('Y-m-d H:i:s'), $subscription->expires_at->format('Y-m-d H:i:s'));
+        $this->assertSame($paidAt->addDays(30)->format('Y-m-d H:i:s'), $subscription->expires_at->format('Y-m-d H:i:s'));
         $this->assertSame(Subscription::StatusActive, $subscription->status);
         $this->assertSame(Invoice::StatusPaid, $invoice->fresh()->status);
     }
@@ -300,7 +300,7 @@ class InvoiceSettlementServiceTest extends TestCase
 
         $subscription->refresh();
         $this->assertSame($paidAt->format('Y-m-d H:i:s'), $subscription->starts_at->format('Y-m-d H:i:s'));
-        $this->assertSame($paidAt->addMonth()->format('Y-m-d H:i:s'), $subscription->expires_at->format('Y-m-d H:i:s'));
+        $this->assertSame($paidAt->addDays(30)->format('Y-m-d H:i:s'), $subscription->expires_at->format('Y-m-d H:i:s'));
         $this->assertSame(Subscription::StatusExpired, $subscription->status);
         $this->assertSame(Invoice::StatusPaid, $invoice->fresh()->status);
     }
@@ -430,7 +430,7 @@ class InvoiceSettlementServiceTest extends TestCase
             $subscription = Subscription::factory()->create([
                 'application_customer_id' => $invoice->application_customer_id,
                 'subscription_plan_id' => $invoice->subscription_plan_id,
-                'expires_at' => now()->addMonth(),
+                'expires_at' => now()->addDays(30),
             ]);
             $invoice->update(['subscription_id' => $subscription->id]);
         }

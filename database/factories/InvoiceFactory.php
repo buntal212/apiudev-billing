@@ -33,6 +33,7 @@ class InvoiceFactory extends Factory
             'amount' => '100000.00',
             'currency' => 'IDR',
             'duration_months' => 1,
+            'duration_days' => 30,
             'idempotency_key' => fake()->unique()->uuid(),
             'status' => Invoice::StatusPending,
             'issued_at' => now(),

@@ -92,7 +92,7 @@ class InvoiceSettlementService
 
                     $this->subscriptionService->renewFromVerifiedPayment(
                         subscription: $subscription,
-                        durationMonths: $invoice->duration_months,
+                        durationDays: $invoice->duration_days,
                         idempotencyKey: $settlementKey.':renewal',
                         sourceType: 'payment_allocation',
                         verifiedPaidAt: $verification->paidAt,
@@ -101,7 +101,7 @@ class InvoiceSettlementService
                 } else {
                     $this->subscriptionService->activateFromVerifiedPayment(
                         invoice: $invoice,
-                        durationMonths: $invoice->duration_months,
+                        durationDays: $invoice->duration_days,
                         idempotencyKey: $settlementKey.':activation',
                         sourceType: 'payment_allocation',
                         verifiedPaidAt: $verification->paidAt,
@@ -209,7 +209,7 @@ class InvoiceSettlementService
             if ($lockedInvoice->subscription_id === null) {
                 $this->subscriptionService->activateFromVerifiedPayment(
                     invoice: $lockedInvoice,
-                    durationMonths: $lockedInvoice->duration_months,
+                    durationDays: $lockedInvoice->duration_days,
                     idempotencyKey: $settlementKey.':activation',
                     sourceType: 'payment_allocation',
                     verifiedPaidAt: $allocation->allocated_at,

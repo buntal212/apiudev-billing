@@ -298,7 +298,7 @@ class InvoiceCheckoutTest extends TestCase
             $subscription = Subscription::factory()->create([
                 'application_customer_id' => $invoice->application_customer_id,
                 'subscription_plan_id' => $invoice->subscription_plan_id,
-                'expires_at' => now()->addMonth(),
+                'expires_at' => now()->addDays(30),
             ]);
             $invoice->update(['subscription_id' => $subscription->id]);
         }

@@ -21,7 +21,7 @@ class SubscriptionServiceTest extends TestCase
         $customer = ApplicationCustomer::factory()->create(['application_id' => $application->id]);
         $plan = SubscriptionPlan::factory()->create(['application_id' => $application->id]);
         $startsAt = now()->startOfDay();
-        $expiresAt = $startsAt->copy()->addMonth();
+        $expiresAt = $startsAt->copy()->addDays(30);
 
         $subscription = app(SubscriptionService::class)->createSubscription(
             $customer,
@@ -52,7 +52,7 @@ class SubscriptionServiceTest extends TestCase
                 $customer,
                 $plan,
                 now()->startOfDay(),
-                now()->startOfDay()->addMonth(),
+                now()->startOfDay()->addDays(30),
             );
 
             self::fail('Paket dari aplikasi lain seharusnya ditolak.');
@@ -72,14 +72,14 @@ class SubscriptionServiceTest extends TestCase
         $service = app(SubscriptionService::class);
         $startsAt = now()->startOfDay();
 
-        $service->createSubscription($customer, $plan, $startsAt, $startsAt->copy()->addMonth());
+        $service->createSubscription($customer, $plan, $startsAt, $startsAt->copy()->addDays(30));
 
         try {
             $service->createSubscription(
                 $customer,
                 $plan,
                 $startsAt->copy()->addDays(10),
-                $startsAt->copy()->addMonths(2),
+                $startsAt->copy()->addDays(60),
             );
 
             self::fail('Langganan aktif yang tumpang tindih seharusnya ditolak.');
@@ -98,10 +98,10 @@ class SubscriptionServiceTest extends TestCase
         $plan = SubscriptionPlan::factory()->create(['application_id' => $application->id]);
         $service = app(SubscriptionService::class);
         $startsAt = now()->startOfDay();
-        $firstExpiresAt = $startsAt->copy()->addMonth();
+        $firstExpiresAt = $startsAt->copy()->addDays(30);
 
         $service->createSubscription($customer, $plan, $startsAt, $firstExpiresAt);
-        $service->createSubscription($customer, $plan, $firstExpiresAt, $firstExpiresAt->copy()->addMonth());
+        $service->createSubscription($customer, $plan, $firstExpiresAt, $firstExpiresAt->copy()->addDays(30));
 
         $this->assertDatabaseCount('subscriptions', 2);
     }
@@ -109,7 +109,7 @@ class SubscriptionServiceTest extends TestCase
     public function test_subscription_renewal_is_idempotent(): void
     {
         $subscription = Subscription::factory()->create([
-            'expires_at' => now()->addMonth(),
+            'expires_at' => now()->addDays(30),
         ]);
         $service = app(SubscriptionService::class);
         $idempotencyKey = 'payment-dana-0001';
@@ -117,14 +117,14 @@ class SubscriptionServiceTest extends TestCase
 
         $firstEvent = $service->extendSubscription(
             $subscription,
-            1,
+            30,
             $idempotencyKey,
             'payment',
             'DANA-0001',
         );
         $secondEvent = $service->extendSubscription(
             $subscription,
-            1,
+            30,
             $idempotencyKey,
             'payment',
             'DANA-0001',
@@ -133,7 +133,7 @@ class SubscriptionServiceTest extends TestCase
         $subscription->refresh();
 
         $this->assertSame($firstEvent->id, $secondEvent->id);
-        $this->assertTrue($subscription->expires_at->equalTo($previousExpiresAt->addMonth()));
+        $this->assertTrue($subscription->expires_at->equalTo($previousExpiresAt->addDays(30)));
         $this->assertDatabaseCount('subscription_period_events', 1);
     }
 
@@ -148,7 +148,7 @@ class SubscriptionServiceTest extends TestCase
 
         app(SubscriptionService::class)->renewFromVerifiedPayment(
             subscription: $subscription,
-            durationMonths: 1,
+            durationDays: 30,
             idempotencyKey: 'verified-active-renewal-0001',
             sourceType: 'payment_allocation',
             verifiedPaidAt: now(),
@@ -156,7 +156,7 @@ class SubscriptionServiceTest extends TestCase
         );
 
         $subscription->refresh();
-        $this->assertTrue($subscription->expires_at->equalTo($previousExpiry->addMonth()));
+        $this->assertTrue($subscription->expires_at->equalTo($previousExpiry->addDays(30)));
         $this->assertTrue($subscription->starts_at->equalTo($previousStart));
         $this->assertSame(Subscription::StatusActive, $subscription->status);
     }
@@ -166,13 +166,13 @@ class SubscriptionServiceTest extends TestCase
         $paidAt = now()->subHours(2);
         $subscription = Subscription::factory()->create([
             'status' => Subscription::StatusExpired,
-            'starts_at' => now()->subMonths(2),
+            'starts_at' => now()->subDays(60),
             'expires_at' => $paidAt->copy()->subDay(),
         ]);
 
         app(SubscriptionService::class)->renewFromVerifiedPayment(
             subscription: $subscription,
-            durationMonths: 1,
+            durationDays: 30,
             idempotencyKey: 'verified-expired-renewal-0001',
             sourceType: 'payment_allocation',
             verifiedPaidAt: $paidAt,
@@ -181,22 +181,22 @@ class SubscriptionServiceTest extends TestCase
 
         $subscription->refresh();
         $this->assertSame($paidAt->format('Y-m-d H:i:s'), $subscription->starts_at->format('Y-m-d H:i:s'));
-        $this->assertSame($paidAt->addMonth()->format('Y-m-d H:i:s'), $subscription->expires_at->format('Y-m-d H:i:s'));
+        $this->assertSame($paidAt->addDays(30)->format('Y-m-d H:i:s'), $subscription->expires_at->format('Y-m-d H:i:s'));
         $this->assertSame(Subscription::StatusActive, $subscription->status);
     }
 
     public function test_verified_payment_keeps_historical_period_when_reconciliation_is_delayed(): void
     {
-        $paidAt = now()->subMonths(2);
+        $paidAt = now()->subDays(60);
         $subscription = Subscription::factory()->create([
             'status' => Subscription::StatusExpired,
-            'starts_at' => now()->subMonths(4),
+            'starts_at' => now()->subDays(120),
             'expires_at' => $paidAt->copy()->subDay(),
         ]);
 
         app(SubscriptionService::class)->renewFromVerifiedPayment(
             subscription: $subscription,
-            durationMonths: 1,
+            durationDays: 30,
             idempotencyKey: 'verified-delayed-renewal-0001',
             sourceType: 'payment_allocation',
             verifiedPaidAt: $paidAt,
@@ -205,7 +205,7 @@ class SubscriptionServiceTest extends TestCase
 
         $subscription->refresh();
         $this->assertSame($paidAt->format('Y-m-d H:i:s'), $subscription->starts_at->format('Y-m-d H:i:s'));
-        $this->assertSame($paidAt->addMonth()->format('Y-m-d H:i:s'), $subscription->expires_at->format('Y-m-d H:i:s'));
+        $this->assertSame($paidAt->addDays(30)->format('Y-m-d H:i:s'), $subscription->expires_at->format('Y-m-d H:i:s'));
         $this->assertSame(Subscription::StatusExpired, $subscription->status);
     }
 
@@ -220,7 +220,7 @@ class SubscriptionServiceTest extends TestCase
 
         $event = app(SubscriptionService::class)->renewFromVerifiedPayment(
             subscription: $subscription,
-            durationMonths: 1,
+            durationDays: 30,
             idempotencyKey: 'verified-out-of-order-0001',
             sourceType: 'payment_allocation',
             verifiedPaidAt: $paidAt,
@@ -228,7 +228,7 @@ class SubscriptionServiceTest extends TestCase
         );
 
         $subscription->refresh();
-        $this->assertTrue($subscription->expires_at->equalTo($previousExpiry->addMonth()));
+        $this->assertTrue($subscription->expires_at->equalTo($previousExpiry->addDays(30)));
         $this->assertStringContainsString('period_rule=continue_active_expiry', (string) $event->notes);
     }
 
@@ -242,7 +242,7 @@ class SubscriptionServiceTest extends TestCase
 
         app(SubscriptionService::class)->renewFromVerifiedPayment(
             subscription: $subscription,
-            durationMonths: 1,
+            durationDays: 30,
             idempotencyKey: 'verified-cancelled-renewal-0001',
             sourceType: 'payment_allocation',
             verifiedPaidAt: now(),

@@ -25,16 +25,16 @@ class SubscriptionService
      */
     public function activateFromVerifiedPayment(
         Invoice $invoice,
-        int $durationMonths,
+        int $durationDays,
         string $idempotencyKey,
         string $sourceType,
         DateTimeInterface $verifiedPaidAt,
         ?string $sourceId = null,
         ?string $notes = null,
     ): SubscriptionPeriodEvent {
-        if ($durationMonths < 1) {
+        if ($durationDays < 1) {
             throw ValidationException::withMessages([
-                'duration_months' => ['Durasi aktivasi minimal 1 bulan.'],
+                'duration_days' => ['Durasi aktivasi minimal 1 hari.'],
             ]);
         }
 
@@ -48,7 +48,7 @@ class SubscriptionService
         try {
             return DB::transaction(function () use (
                 $invoice,
-                $durationMonths,
+                $durationDays,
                 $idempotencyKey,
                 $sourceType,
                 $verifiedPaidAt,
@@ -111,7 +111,7 @@ class SubscriptionService
                     ]);
                 }
 
-                $newExpiresAt = $verifiedPaidAt->addMonthsNoOverflow($durationMonths);
+                $newExpiresAt = $verifiedPaidAt->addDays($durationDays);
                 $subscription = Subscription::query()->create([
                     'application_customer_id' => $lockedCustomer->id,
                     'subscription_plan_id' => $lockedPlan->id,
@@ -228,22 +228,22 @@ class SubscriptionService
 
     public function extendSubscription(
         Subscription $subscription,
-        int $durationMonths,
+        int $durationDays,
         string $idempotencyKey,
         string $sourceType,
         ?string $sourceId = null,
         ?string $notes = null,
     ): SubscriptionPeriodEvent {
-        if ($durationMonths < 1) {
+        if ($durationDays < 1) {
             throw ValidationException::withMessages([
-                'duration_months' => ['Durasi perpanjangan minimal 1 bulan.'],
+                'duration_days' => ['Durasi perpanjangan minimal 1 hari.'],
             ]);
         }
 
         try {
             return DB::transaction(function () use (
                 $subscription,
-                $durationMonths,
+                $durationDays,
                 $idempotencyKey,
                 $sourceType,
                 $sourceId,
@@ -270,7 +270,7 @@ class SubscriptionService
 
                 $previousExpiresAt = $lockedSubscription->expires_at->toImmutable();
                 $newExpiresAt = ($previousExpiresAt->isFuture() ? $previousExpiresAt : now()->toImmutable())
-                    ->addMonthsNoOverflow($durationMonths);
+                    ->addDays($durationDays);
 
                 $periodEvent = SubscriptionPeriodEvent::create([
                     'subscription_id' => $lockedSubscription->id,
@@ -308,16 +308,16 @@ class SubscriptionService
      */
     public function renewFromVerifiedPayment(
         Subscription $subscription,
-        int $durationMonths,
+        int $durationDays,
         string $idempotencyKey,
         string $sourceType,
         DateTimeInterface $verifiedPaidAt,
         ?string $sourceId = null,
         ?string $notes = null,
     ): SubscriptionPeriodEvent {
-        if ($durationMonths < 1) {
+        if ($durationDays < 1) {
             throw ValidationException::withMessages([
-                'duration_months' => ['Durasi perpanjangan minimal 1 bulan.'],
+                'duration_days' => ['Durasi perpanjangan minimal 1 hari.'],
             ]);
         }
 
@@ -331,7 +331,7 @@ class SubscriptionService
         try {
             return DB::transaction(function () use (
                 $subscription,
-                $durationMonths,
+                $durationDays,
                 $idempotencyKey,
                 $sourceType,
                 $verifiedPaidAt,
@@ -371,7 +371,7 @@ class SubscriptionService
                 $periodStart = $continuesActivePeriod
                     ? $lockedSubscription->expires_at->toImmutable()
                     : $verifiedPaidAt;
-                $newExpiresAt = $periodStart->addMonthsNoOverflow($durationMonths);
+                $newExpiresAt = $periodStart->addDays($durationDays);
                 $nextStatus = $newExpiresAt->isFuture()
                     ? Subscription::StatusActive
                     : Subscription::StatusExpired;

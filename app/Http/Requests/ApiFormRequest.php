@@ -52,7 +52,7 @@ abstract class ApiFormRequest extends FormRequest
             'contact_email' => 'Email kontak',
             'description' => 'Deskripsi',
             'direction' => 'Arah pengurutan',
-            'duration_months' => 'Durasi paket',
+            'duration_days' => 'Durasi paket',
             'email' => 'Email',
             'external_customer_id' => 'ID pelanggan pada aplikasi',
             'due_at' => 'Tanggal jatuh tempo',
