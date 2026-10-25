@@ -98,7 +98,7 @@ jobs:
           staging_in_use() {
             local candidate="$1" output status
             command -v lsof >/dev/null 2>&1 || return 2
-            if output="$(lsof -nP +D -- "$candidate" 2>&1)"; then
+            if output="$(lsof -nP +D "$candidate" 2>&1)"; then
               return 0
             else
               status=$?
