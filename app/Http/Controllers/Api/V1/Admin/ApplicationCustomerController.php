@@ -3,11 +3,13 @@
 namespace App\Http\Controllers\Api\V1\Admin;
 
 use App\Http\Controllers\Controller;
+use App\Http\Requests\AdminAttachCustomerReferralRequest;
 use App\Http\Requests\ListApplicationCustomersRequest;
 use App\Http\Requests\StoreApplicationCustomerRequest;
 use App\Http\Requests\UpdateApplicationCustomerRequest;
 use App\Http\Resources\ApplicationCustomerResource;
 use App\Models\ApplicationCustomer;
+use App\Services\IntegrationReferralService;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Resources\Json\AnonymousResourceCollection;
@@ -78,6 +80,22 @@ class ApplicationCustomerController extends Controller
         $this->authorize('update', $applicationCustomer);
 
         $applicationCustomer->update($request->validated());
+
+        return new ApplicationCustomerResource($applicationCustomer->refresh()->load(['application', 'referral.partner']));
+    }
+
+    public function validateReferral(AdminAttachCustomerReferralRequest $request, ApplicationCustomer $applicationCustomer, IntegrationReferralService $referrals): JsonResponse
+    {
+        $this->authorize('update', $applicationCustomer);
+        abort_if($applicationCustomer->referral()->exists(), Response::HTTP_CONFLICT, 'Referral pelanggan sudah terkunci dan tidak dapat diganti.');
+
+        return response()->json(['data' => $referrals->validate($applicationCustomer->application, $request->string('referral_code')->toString())]);
+    }
+
+    public function attachReferral(AdminAttachCustomerReferralRequest $request, ApplicationCustomer $applicationCustomer, IntegrationReferralService $referrals): ApplicationCustomerResource
+    {
+        $this->authorize('update', $applicationCustomer);
+        $referrals->attach($applicationCustomer->application, $applicationCustomer, $request->string('referral_code')->toString());
 
         return new ApplicationCustomerResource($applicationCustomer->refresh()->load(['application', 'referral.partner']));
     }

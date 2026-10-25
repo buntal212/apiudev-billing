@@ -129,6 +129,8 @@ Route::prefix('v1/admin')
         });
         Route::apiResource('application-customers', ApplicationCustomerController::class)
             ->only(['index', 'store', 'show', 'update']);
+        Route::post('application-customers/{applicationCustomer}/referral/validate', [ApplicationCustomerController::class, 'validateReferral']);
+        Route::post('application-customers/{applicationCustomer}/referral', [ApplicationCustomerController::class, 'attachReferral']);
         Route::apiResource('subscription-plans', SubscriptionPlanController::class)
             ->only(['index', 'store', 'show', 'update', 'destroy']);
         Route::apiResource('subscriptions', SubscriptionController::class)

@@ -57,7 +57,7 @@ class IntegrationReferralService
     /** @return array<string, mixed> */
     public function safeReferral(ReferralCode $code): array
     {
-        return ['code' => $code->code, 'type' => $code->type, 'base_price' => $code->base_price, 'discount_amount' => $code->discount_amount, 'customer_price' => $code->customer_price];
+        return ['code' => $code->code, 'partner_name' => $code->partner?->name, 'type' => $code->type, 'base_price' => $code->base_price, 'discount_amount' => $code->discount_amount, 'customer_price' => $code->customer_price];
     }
 
     private function activeCode(Application $application, string $submittedCode, bool $lock = false): ReferralCode
