@@ -11,7 +11,9 @@ use App\Http\Controllers\Api\V1\Admin\BillingGatewayTransactionController;
 use App\Http\Controllers\Api\V1\Admin\DanaGatewayMerchantProvisioningController;
 use App\Http\Controllers\Api\V1\Admin\InvoiceCheckoutController;
 use App\Http\Controllers\Api\V1\Admin\InvoiceController;
+use App\Http\Controllers\Api\V1\Admin\PartnerController;
 use App\Http\Controllers\Api\V1\Admin\PaymentAttemptController;
+use App\Http\Controllers\Api\V1\Admin\ReferralCodeController;
 use App\Http\Controllers\Api\V1\Admin\SubscriptionController;
 use App\Http\Controllers\Api\V1\Admin\SubscriptionPlanController;
 use App\Http\Controllers\Api\V1\Auth\AuthController;
@@ -47,6 +49,11 @@ Route::prefix('v1/integrations')
 Route::prefix('v1/admin')
     ->middleware(['auth:sanctum', 'abilities:admin:access', 'admin'])
     ->group(function (): void {
+        Route::apiResource('partners', PartnerController::class)
+            ->only(['index', 'store', 'show', 'update', 'destroy']);
+        Route::get('referral-codes/{referralCode}/usages', [ReferralCodeController::class, 'usages']);
+        Route::apiResource('referral-codes', ReferralCodeController::class)
+            ->only(['index', 'store', 'show', 'update']);
         Route::apiResource('applications', ApplicationController::class)
             ->only(['index', 'store', 'show', 'update']);
         Route::get('applications/{application}/integration-tokens', [ApplicationIntegrationTokenController::class, 'index'])

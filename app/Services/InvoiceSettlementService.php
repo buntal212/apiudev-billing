@@ -15,7 +15,10 @@ use Throwable;
 
 class InvoiceSettlementService
 {
-    public function __construct(private readonly SubscriptionService $subscriptionService) {}
+    public function __construct(
+        private readonly SubscriptionService $subscriptionService,
+        private readonly ReferralCommissionService $referralCommissionService,
+    ) {}
 
     public function settle(PaymentAttempt $paymentAttempt, VerifiedGatewayPayment $verification): SettlementResult
     {
@@ -79,6 +82,8 @@ class InvoiceSettlementService
                     'status' => Invoice::StatusPaid,
                     'paid_at' => $verification->paidAt,
                 ]);
+
+                $this->referralCommissionService->recordVerifiedAllocation($allocation);
 
                 if ($invoice->subscription_id !== null) {
                     $subscription = Subscription::query()
