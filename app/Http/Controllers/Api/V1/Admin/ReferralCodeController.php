@@ -11,7 +11,9 @@ use App\Http\Resources\ReferralCodeResource;
 use App\Models\Partner;
 use App\Models\PartnerAudit;
 use App\Models\ReferralCode;
+use App\Services\ReferralCodeGenerator;
 use Illuminate\Database\Eloquent\Builder;
+use Illuminate\Database\QueryException;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Http\Resources\Json\AnonymousResourceCollection;
@@ -19,6 +21,10 @@ use Symfony\Component\HttpFoundation\Response;
 
 class ReferralCodeController extends Controller
 {
+    private const int MaximumGenerationAttempts = 10;
+
+    public function __construct(private readonly ReferralCodeGenerator $referralCodeGenerator) {}
+
     public function index(ListReferralCodesRequest $request): AnonymousResourceCollection
     {
         $this->authorize('viewAny', ReferralCode::class);
@@ -41,7 +47,13 @@ class ReferralCodeController extends Controller
         $partner = Partner::query()->findOrFail($data['partner_id']);
         abort_unless($partner->is_active, Response::HTTP_UNPROCESSABLE_ENTITY, 'Mitra tidak aktif tidak dapat menerima kode referral baru.');
         [$basePrice, $discount, $customerPrice] = ReferralCode::pricingFor($data['type']);
-        $code = ReferralCode::query()->create([...$data, 'code' => mb_strtoupper($data['code']), 'base_price' => $basePrice, 'discount_amount' => $discount, 'customer_price' => $customerPrice, 'created_by' => $request->user()?->getAuthIdentifier()]);
+        $code = $this->createWithGeneratedCode([
+            ...$data,
+            'base_price' => $basePrice,
+            'discount_amount' => $discount,
+            'customer_price' => $customerPrice,
+            'created_by' => $request->user()?->getAuthIdentifier(),
+        ]);
         $this->audit($request, $code, 'referral_code.created', null, $code->getAttributes());
 
         return (new ReferralCodeResource($code->load('partner:id,name')))->response()->setStatusCode(Response::HTTP_CREATED);
@@ -75,5 +87,33 @@ class ReferralCodeController extends Controller
     private function audit(Request $request, ReferralCode $code, string $action, ?array $before, ?array $after): void
     {
         PartnerAudit::query()->create(['partner_id' => $code->partner_id, 'referral_code_id' => $code->getKey(), 'user_id' => $request->user()?->getAuthIdentifier(), 'action' => $action, 'before' => $before, 'after' => $after, 'ip_address' => $request->ip()]);
+    }
+
+    /** @param array<string, mixed> $attributes */
+    private function createWithGeneratedCode(array $attributes): ReferralCode
+    {
+        for ($attempt = 1; $attempt <= self::MaximumGenerationAttempts; $attempt++) {
+            $generatedCode = $this->referralCodeGenerator->generate();
+
+            if (ReferralCode::query()->where('code', $generatedCode)->exists()) {
+                continue;
+            }
+
+            try {
+                return ReferralCode::query()->create([...$attributes, 'code' => $generatedCode]);
+            } catch (QueryException $exception) {
+                if (! $this->isCodeCollision($exception)) {
+                    throw $exception;
+                }
+            }
+        }
+
+        abort(Response::HTTP_SERVICE_UNAVAILABLE, 'Kode referral tidak dapat dibuat. Silakan coba kembali.');
+    }
+
+    private function isCodeCollision(QueryException $exception): bool
+    {
+        return in_array($exception->getCode(), ['23000', '23505'], true)
+            && str_contains(mb_strtolower($exception->getMessage()), 'referral_codes');
     }
 }

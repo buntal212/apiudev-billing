@@ -13,6 +13,7 @@ use App\Models\ReferralCommissionLedger;
 use App\Models\Subscription;
 use App\Models\SubscriptionPlan;
 use App\Models\User;
+use App\Services\ReferralCodeGenerator;
 use App\Services\ReferralCommissionService;
 use App\Services\ReferralValidationService;
 use Illuminate\Foundation\Testing\LazilyRefreshDatabase;
@@ -44,17 +45,60 @@ class PartnerReferralApiTest extends TestCase
         $this->getJson('/api/v1/admin/referral-codes')->assertForbidden();
     }
 
-    public function test_referral_code_is_unique_and_its_prices_follow_the_type(): void
+    public function test_referral_code_is_generated_without_code_field_and_uses_correct_price(): void
     {
         $partner = Partner::factory()->create();
         Sanctum::actingAs($this->admin(), ['admin:access']);
 
-        $this->postJson('/api/v1/admin/referral-codes', ['partner_id' => $partner->id, 'code' => 'umum-udev', 'type' => 'umum', 'is_active' => true])
-            ->assertCreated()->assertJsonPath('data.code', 'UMUM-UDEV')->assertJsonPath('data.discount_amount', '50000.00')->assertJsonPath('data.customer_price', '125000.00');
-        $this->postJson('/api/v1/admin/referral-codes', ['partner_id' => $partner->id, 'code' => 'KHUSUS-UDEV', 'type' => 'khusus', 'is_active' => true])
+        $firstCode = $this->postJson('/api/v1/admin/referral-codes', ['partner_id' => $partner->id, 'type' => 'umum', 'is_active' => true])
+            ->assertCreated()->assertJsonPath('data.discount_amount', '50000.00')->assertJsonPath('data.customer_price', '125000.00')->json('data.code');
+        $secondCode = $this->postJson('/api/v1/admin/referral-codes', ['partner_id' => $partner->id, 'type' => 'khusus', 'is_active' => true])
             ->assertCreated()->assertJsonPath('data.discount_amount', '75000.00')->assertJsonPath('data.customer_price', '100000.00');
-        $this->postJson('/api/v1/admin/referral-codes', ['partner_id' => $partner->id, 'code' => 'UMUM-UDEV', 'type' => 'umum', 'is_active' => true])
-            ->assertUnprocessable()->assertJsonValidationErrors('code');
+        $this->assertMatchesRegularExpression('/^REF-[A-Z0-9]{6}$/', $firstCode);
+        $this->assertNotSame($firstCode, $secondCode->json('data.code'));
+    }
+
+    public function test_request_code_is_ignored_and_generated_code_does_not_change_on_update(): void
+    {
+        $partner = Partner::factory()->create();
+        Sanctum::actingAs($this->admin(), ['admin:access']);
+
+        $created = $this->postJson('/api/v1/admin/referral-codes', ['partner_id' => $partner->id, 'code' => 'REF-MANUAL', 'type' => 'umum', 'is_active' => true])->assertCreated()->json('data');
+        $this->assertNotSame('REF-MANUAL', $created['code']);
+        $this->patchJson("/api/v1/admin/referral-codes/{$created['id']}", ['code' => 'REF-DIUBAH', 'is_active' => false])
+            ->assertOk()->assertJsonPath('data.code', $created['code'])->assertJsonPath('data.is_active', false);
+    }
+
+    public function test_generator_retries_when_a_generated_code_collides(): void
+    {
+        $partner = Partner::factory()->create();
+        ReferralCode::factory()->create(['partner_id' => $partner->id, 'code' => 'REF-BENTUR']);
+        app()->instance(ReferralCodeGenerator::class, new class(['REF-BENTUR', 'REF-UNIK12']) extends ReferralCodeGenerator
+        {
+            /** @param array<int, string> $codes */
+            public function __construct(private array $codes) {}
+
+            public function generate(): string
+            {
+                return array_shift($this->codes);
+            }
+        });
+        Sanctum::actingAs($this->admin(), ['admin:access']);
+
+        $this->postJson('/api/v1/admin/referral-codes', ['partner_id' => $partner->id, 'type' => 'umum', 'is_active' => true])
+            ->assertCreated()->assertJsonPath('data.code', 'REF-UNIK12');
+    }
+
+    public function test_generator_uses_the_expected_secure_code_format(): void
+    {
+        $generator = app(ReferralCodeGenerator::class);
+        $codes = array_map(fn (): string => $generator->generate(), range(1, 10));
+
+        foreach ($codes as $code) {
+            $this->assertMatchesRegularExpression('/^REF-[A-Z0-9]{6}$/', $code);
+        }
+
+        $this->assertCount(10, array_unique($codes));
     }
 
     public function test_referral_lock_is_permanent_and_isolated_by_application(): void
