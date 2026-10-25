@@ -80,8 +80,70 @@ Gunakan timeout, retry terbatas hanya untuk kegagalan jaringan/`503`, dan idempo
 
 Setiap respons integrasi menyertakan `request_id` untuk investigasi aman oleh tim UDEV.
 
-## Paket dan pembayaran
+## Paket dan pembayaran DANA Sandbox
 
-Gunakan `GET /subscription-plans` untuk mengambil paket aktif aplikasi token. Saat membuat invoice, UDEV memvalidasi bahwa pelanggan, paket, dan langganan berasal dari aplikasi yang sama. Harga invoice adalah snapshot UDEV: harga paket normal bila tanpa referral, atau harga referral yang telah terkunci.
+Semua endpoint di bawah memakai Global API Token yang sama. UDEV menentukan aplikasi dari token, sehingga Larissama tidak boleh mengirim `application_id`, harga, diskon, currency, atau `subscription_id`.
+
+### Daftar paket
+
+`GET /subscription-plans?per_page=15`
+
+Endpoint hanya mengembalikan paket aktif untuk aplikasi token. Gunakan `code` paket untuk endpoint berikutnya.
+
+```json
+{"data":[{"code":"LARIS-30","name":"Larissama 30 Hari","price":"175000.00","currency":"IDR","duration_days":30,"is_active":true}]}
+```
+
+### Preview harga
+
+`POST /customers/{externalId}/invoice-preview`
+
+```json
+{"subscription_plan_code":"LARIS-30"}
+```
+
+```json
+{"data":{"customer_external_id":"SALON-001","plan":{"code":"LARIS-30","duration_days":30},"pricing":{"normal_price":"175000.00","referral_code":"REF-A1B2C3","referral_type":"umum","discount_amount":"50000.00","final_price":"125000.00","currency":"IDR"}},"request_id":"..."}
+```
+
+Harga preview dihitung UDEV dari snapshot referral yang sudah terkunci. Larissama tidak boleh menghitung ulang atau mengganti nilainya.
+
+### Buat invoice
+
+`POST /customers/{externalId}/invoices`
+
+```http
+Idempotency-Key: invoice-salon-001-20261026-01
+```
+
+```json
+{"subscription_plan_code":"LARIS-30","due_at":"2026-10-27T12:00:00+07:00"}
+```
+
+Respons berisi nomor invoice, snapshot paket dan harga, status pembayaran, serta status masa aktif. Gunakan `Idempotency-Key` yang sama untuk mengulang request yang sama setelah gangguan jaringan. Kunci yang sudah dipakai pelanggan lain akan ditolak.
 
 Paket tujuan boleh berbeda dari paket subscription aktif. Perubahan paket dan penambahan durasi hanya terjadi setelah pembayaran DANA Sandbox terverifikasi; bila periode masih aktif, durasi baru ditambahkan dari tanggal berakhir terakhir. Pembayaran pending, gagal, kedaluwarsa, atau dibatalkan tidak mengubah paket maupun masa aktif.
+
+### Checkout DANA Sandbox
+
+`POST /invoices/{invoiceNumber}/checkout`
+
+```http
+Idempotency-Key: checkout-inv-20261026-01
+```
+
+Tidak ada body yang diperlukan. Jika checkout telah siap, respons `200` menyertakan:
+
+```json
+{"data":{"invoice_number":"INV-...","payment":{"status":"pending","provider":"dana","checkout_status":"ready","checkout_url":"https://...","checkout_expires_at":"2026-10-27T12:00:00Z","transaction_id":"INV-...-A1"}},"request_id":"..."}
+```
+
+Status `202` berarti checkout masih diproses. Jangan membuat payment baru; panggil endpoint yang sama dengan idempotency key yang sama atau periksa invoice kemudian. Checkout hanya memakai mapping merchant DANA **Sandbox** aktif milik aplikasi token.
+
+### Status invoice, pembayaran, masa aktif, dan tracking
+
+- `GET /invoices/{invoiceNumber}` mengembalikan snapshot invoice, status pembayaran DANA, URL checkout yang masih tersedia, settlement, serta masa aktif.
+- `GET /customers/{externalId}/subscription` mengembalikan status langganan dan snapshot referral pelanggan.
+- `GET /customers/{externalId}/transactions?per_page=15` mengembalikan riwayat invoice terurut terbaru, ID transaksi, status pembayaran, settlement, serta event masa aktif/perubahan paket yang terkait.
+
+Semua endpoint di atas diisolasi oleh aplikasi dari token. Nomor invoice atau ID pelanggan aplikasi lain selalu diperlakukan sebagai `404`.

@@ -51,6 +51,12 @@ class InvoiceService
                     ->first();
 
                 if ($existingInvoice) {
+                    if ($existingInvoice->application_customer_id !== $lockedCustomer->getKey()) {
+                        throw ValidationException::withMessages([
+                            'idempotency_key' => ['Kunci idempotensi telah digunakan untuk pelanggan lain.'],
+                        ]);
+                    }
+
                     return $existingInvoice;
                 }
 

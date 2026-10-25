@@ -18,6 +18,7 @@ use App\Http\Controllers\Api\V1\Admin\ReferralCodeController;
 use App\Http\Controllers\Api\V1\Admin\SubscriptionController;
 use App\Http\Controllers\Api\V1\Admin\SubscriptionPlanController;
 use App\Http\Controllers\Api\V1\Auth\AuthController;
+use App\Http\Controllers\Api\V1\Integration\IntegrationBillingController;
 use App\Http\Controllers\Api\V1\Integration\IntegrationCustomerController;
 use App\Http\Controllers\Api\V1\Integration\IntegrationReferralController;
 use App\Http\Controllers\Api\V1\Integration\IntegrationSubscriptionPlanController;
@@ -41,6 +42,16 @@ Route::prefix('v1/integrations')
     ->middleware(['integration.auth', 'integration.global', 'throttle:integration-api'])
     ->group(function (): void {
         Route::get('subscription-plans', [IntegrationSubscriptionPlanController::class, 'index']);
+        Route::post('customers/{externalId}/invoice-preview', [IntegrationBillingController::class, 'preview'])
+            ->where('externalId', '[A-Za-z0-9._:-]{1,100}');
+        Route::post('customers/{externalId}/invoices', [IntegrationBillingController::class, 'store'])
+            ->where('externalId', '[A-Za-z0-9._:-]{1,100}');
+        Route::get('customers/{externalId}/transactions', [IntegrationBillingController::class, 'transactions'])
+            ->where('externalId', '[A-Za-z0-9._:-]{1,100}');
+        Route::get('invoices/{invoiceNumber}', [IntegrationBillingController::class, 'show'])
+            ->where('invoiceNumber', '[A-Za-z0-9-]{1,100}');
+        Route::post('invoices/{invoiceNumber}/checkout', [IntegrationBillingController::class, 'checkout'])
+            ->where('invoiceNumber', '[A-Za-z0-9-]{1,100}');
         Route::post('customers', [IntegrationCustomerController::class, 'store']);
         Route::get('customers/{externalId}', [IntegrationCustomerController::class, 'show'])
             ->where('externalId', '[A-Za-z0-9._:-]{1,100}');
