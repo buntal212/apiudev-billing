@@ -43,6 +43,22 @@ class ApplicationCustomerResource extends JsonResource
                 'customer_price' => $this->referral->customer_price,
                 'locked_at' => $this->referral->locked_at?->toISOString(),
             ] : null),
+            'package' => $this->whenLoaded('latestSubscription', function (): ?array {
+                $subscription = $this->latestSubscription;
+                if ($subscription === null || $subscription->plan === null) {
+                    return null;
+                }
+                $referral = $this->relationLoaded('referral') ? $this->referral : null;
+
+                return [
+                    'name' => $subscription->plan->name,
+                    'currency' => $subscription->plan->currency,
+                    'normal_price' => $referral?->base_price ?? $subscription->plan->price,
+                    'referral_discount' => $referral?->discount_amount ?? '0.00',
+                    'final_price' => $referral?->customer_price ?? $subscription->plan->price,
+                    'period_days' => $subscription->plan->duration_days,
+                ];
+            }),
             'created_at' => $this->created_at,
             'updated_at' => $this->updated_at,
         ];

@@ -21,7 +21,7 @@ class ApplicationCustomerController extends Controller
 
         $filters = $request->validated();
         $customers = ApplicationCustomer::query()
-            ->with('application')
+            ->with(['application', 'referral.partner', 'latestSubscription.plan'])
             ->withCount(['invoices', 'subscriptions'])
             ->when($filters['application_id'] ?? null, function (Builder $query, int $applicationId): void {
                 $query->where('application_id', $applicationId);

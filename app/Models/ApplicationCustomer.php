@@ -32,6 +32,12 @@ class ApplicationCustomer extends Model
         return $this->hasMany(Subscription::class);
     }
 
+    /** @return HasOne<Subscription, $this> */
+    public function latestSubscription(): HasOne
+    {
+        return $this->hasOne(Subscription::class)->latestOfMany('expires_at');
+    }
+
     /**
      * @return HasMany<Invoice, $this>
      */
