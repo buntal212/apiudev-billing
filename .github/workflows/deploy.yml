@@ -25,6 +25,17 @@ jobs:
           clean: true
           persist-credentials: false
 
+      - name: Validasi sintaks skrip deployment
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          awk '
+            $0 == "      - name: Deploy source Laravel" { in_step=1; next }
+            in_step && $0 == "        run: |" { in_run=1; next }
+            in_run && /^          / { sub(/^          /, ""); print; next }
+            in_run { exit }
+          ' "$GITHUB_WORKSPACE/.github/workflows/deploy.yml" | bash -n
+
       - name: Deploy source Laravel
         shell: bash
         env:
@@ -41,9 +52,13 @@ jobs:
           RELEASE_ID="${GITHUB_SHA}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           STAGING_DIR=""
           BACKUP_DIR="$BACKUP_ROOT/$RELEASE_ID"
+          LOCK_FILE="$DEPLOY_ROOT/deploy.lock"
           ACTIVATION_STARTED=0
           BACKUP_READY=0
           DEPLOY_OK=0
+          LOCK_HELD=0
+          DEPLOY_ROOT_REAL=""
+          STAGING_ROOT_REAL=""
 
           # Persistent files and generated caches never go through rsync.
           EXCLUDES=(
@@ -65,13 +80,101 @@ jobs:
             du -sh "$STAGING_ROOT" "$BACKUP_ROOT" 2>/dev/null || true
           }
 
-          safe_remove() {
+          is_safe_direct_child() {
             local candidate="$1" parent="$2" parent_real candidate_real
             [[ -d "$candidate" && ! -L "$candidate" ]] || return 1
             parent_real="$(realpath -e -- "$parent")" || return 1
             candidate_real="$(realpath -e -- "$candidate")" || return 1
-            [[ "$(dirname -- "$candidate_real")" == "$parent_real" ]] || return 1
+            [[ "$(dirname -- "$candidate_real")" == "$parent_real" ]]
+          }
+
+          safe_remove() {
+            local candidate="$1" parent="$2"
+            is_safe_direct_child "$candidate" "$parent" || return 1
             rm -rf --one-file-system -- "$candidate"
+            [[ ! -e "$candidate" && ! -L "$candidate" ]]
+          }
+
+          staging_in_use() {
+            local candidate="$1" output status
+            command -v lsof >/dev/null 2>&1 || return 2
+            if output="$(lsof -nP +D -- "$candidate" 2>&1)"; then
+              return 0
+            else
+              status=$?
+            fi
+            # lsof mengembalikan 1 tanpa output bila tidak ada proses memakai pohon ini.
+            [[ "$status" -eq 1 && -z "$output" ]] && return 1
+            return 2
+          }
+
+          cleanup_orphan_staging() {
+            local candidate before_size after_size candidates_file state
+            [[ "$LOCK_HELD" == 1 && -n "$STAGING_ROOT_REAL" ]] || {
+              echo '::warning::Pembersihan staging orphan dilewati: lock deployment eksklusif tidak dipegang'
+              return 0
+            }
+            [[ -d "$STAGING_ROOT" && ! -L "$STAGING_ROOT" ]] || {
+              echo '::warning::Pembersihan staging orphan dilewati: staging root tidak aman'
+              return 0
+            }
+            [[ "$(realpath -e -- "$STAGING_ROOT")" == "$STAGING_ROOT_REAL" ]] || {
+              echo '::warning::Pembersihan staging orphan dilewati: staging root berubah tanpa diduga'
+              return 0
+            }
+            if ! command -v lsof >/dev/null 2>&1; then
+              echo '::warning::Pembersihan staging orphan dilewati: lsof tidak tersedia sehingga status pemakaian tidak dapat diverifikasi'
+              return 0
+            fi
+
+            candidates_file="$(mktemp "$DEPLOY_ROOT_REAL/.orphan-staging.XXXXXX")" || {
+              echo '::warning::Pembersihan staging orphan dilewati: daftar kandidat tervalidasi tidak dapat dibuat'
+              return 0
+            }
+            if ! find -P "$STAGING_ROOT_REAL" -xdev -mindepth 1 -maxdepth 1 -type d -mmin +1440 -print0 > "$candidates_file"; then
+              rm -f -- "$candidates_file" || true
+              echo '::warning::Pembersihan staging orphan dilewati: pencarian kandidat gagal'
+              return 0
+            fi
+
+            before_size="$(du -sh -- "$STAGING_ROOT_REAL" 2>/dev/null || echo unknown)"
+            echo "=== Pembersihan staging orphan (sebelum: $before_size) ==="
+            while IFS= read -r -d '' candidate; do
+              # find -P dan safe_remove menolak symlink; safe_remove juga memastikan
+              # kandidat tetap merupakan anak langsung dari staging root yang di-resolve.
+              if ! is_safe_direct_child "$candidate" "$STAGING_ROOT_REAL"; then
+                echo "::warning::Kandidat staging orphan tidak aman dilewati: $candidate"
+                continue
+              fi
+              if [[ -n "$STAGING_DIR" && "$candidate" == "$STAGING_DIR" ]]; then
+                echo "::notice::Direktori staging saat ini dilewati: $candidate"
+                continue
+              fi
+              if staging_in_use "$candidate"; then
+                echo "::notice::Direktori staging yang sedang digunakan dilewati: $candidate"
+                continue
+              else
+                state=$?
+              fi
+              if [[ "$state" -ne 1 ]]; then
+                echo "::warning::Kandidat staging dilewati karena status pemakaiannya tidak dapat diverifikasi: $candidate"
+                continue
+              fi
+
+              before_size="$(du -sh -- "$candidate" 2>/dev/null || echo unknown)"
+              echo "::notice::Kandidat staging orphan (>24 jam): $candidate (ukuran sebelum: $before_size)"
+              if safe_remove "$candidate" "$STAGING_ROOT_REAL"; then
+                after_size="$(du -sh -- "$STAGING_ROOT_REAL" 2>/dev/null || echo unknown)"
+                echo "::notice::Staging orphan dihapus: $candidate (ukuran staging root sesudah: $after_size)"
+              else
+                echo "::warning::Kandidat staging orphan tidak dapat dihapus: $candidate"
+              fi
+            done < "$candidates_file"
+            rm -f -- "$candidates_file" || \
+              echo '::warning::Daftar kandidat staging orphan tidak dapat dihapus'
+            after_size="$(du -sh -- "$STAGING_ROOT_REAL" 2>/dev/null || echo unknown)"
+            echo "=== Pembersihan staging orphan selesai (sesudah: $after_size) ==="
+            return 0
           }
 
           # Never touch persistent storage or modify production cache during staging.
@@ -136,12 +239,17 @@ jobs:
               safe_remove "$BACKUP_DIR" "$BACKUP_ROOT" || true
             fi
             report_disk
+            if [[ "$LOCK_HELD" == 1 ]]; then
+              flock -u 9 || echo '::warning::Lock deployment tidak dapat dilepas secara eksplisit'
+              exec 9>&-
+              LOCK_HELD=0
+            fi
             exit "$status"
           }
           trap finish EXIT
 
           echo '=== Checking requirements ==='
-          for bin in rsync composer realpath df du find sort mktemp awk; do
+          for bin in rsync composer realpath df du find sort mktemp awk flock; do
             command -v "$bin" >/dev/null 2>&1 || fail "Missing command: $bin"
           done
           [[ -x "$PHP_BIN" ]] || fail "PHP executable missing: $PHP_BIN"
@@ -159,11 +267,28 @@ jobs:
           fi
 
           ensure_storage_link
+          [[ ! -e "$DEPLOY_ROOT" || ( -d "$DEPLOY_ROOT" && ! -L "$DEPLOY_ROOT" ) ]] || \
+            fail "Invalid deployment root: $DEPLOY_ROOT"
           mkdir -p "$STAGING_ROOT" "$BACKUP_ROOT"
           for dir in "$DEPLOY_ROOT" "$STAGING_ROOT" "$BACKUP_ROOT"; do
             [[ ! -L "$dir" ]] || fail "Unexpected deployment symlink: $dir"
           done
+          DEPLOY_ROOT_REAL="$(realpath -e -- "$DEPLOY_ROOT")" || fail 'Cannot resolve deployment root'
+          [[ "$DEPLOY_ROOT_REAL" == "$(realpath -e -- "$APP_DIR")/.deploy" ]] || \
+            fail 'Deployment root is outside production webroot'
+          STAGING_ROOT_REAL="$(realpath -e -- "$STAGING_ROOT")" || fail 'Cannot resolve staging root'
+          [[ "$(dirname -- "$STAGING_ROOT_REAL")" == "$DEPLOY_ROOT_REAL" ]] || \
+            fail 'Staging root is outside deployment root'
+          [[ ! -e "$LOCK_FILE" || ( -f "$LOCK_FILE" && ! -L "$LOCK_FILE" ) ]] || \
+            fail "Invalid deployment lock file: $LOCK_FILE"
+          exec 9>"$LOCK_FILE"
+          flock -n 9 || fail 'Deployment atau cleanup lain sudah memegang lock server-side'
+          LOCK_HELD=1
+          echo "=== Lock deployment server-side diperoleh: $LOCK_FILE ==="
           report_disk
+
+          # Ini sengaja non-fatal: deployment dan rollback tidak boleh bergantung pada cleanup.
+          cleanup_orphan_staging || echo '::warning::Pembersihan staging orphan gagal; deployment diteruskan'
 
           echo '=== Preparing staging ==='
           STAGING_DIR="$(mktemp -d "$STAGING_ROOT/${RELEASE_ID}.XXXXXX")"
