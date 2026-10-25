@@ -8,6 +8,7 @@ use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
+use Illuminate\Database\Eloquent\Relations\HasOne;
 
 #[Fillable(['application_id', 'external_customer_id', 'name', 'owner_name', 'email', 'phone_number', 'is_active', 'is_test', 'source', 'first_synced_at', 'last_synced_at', 'sync_status', 'sync_error_code'])]
 class ApplicationCustomer extends Model
@@ -37,6 +38,12 @@ class ApplicationCustomer extends Model
     public function invoices(): HasMany
     {
         return $this->hasMany(Invoice::class);
+    }
+
+    /** @return HasOne<CustomerReferral, $this> */
+    public function referral(): HasOne
+    {
+        return $this->hasOne(CustomerReferral::class);
     }
 
     /**

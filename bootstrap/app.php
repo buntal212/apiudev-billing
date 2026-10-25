@@ -3,6 +3,7 @@
 use App\Exceptions\IntegrationConflictException;
 use App\Http\Middleware\AuthenticateApplicationIntegration;
 use App\Http\Middleware\EnsureAdmin;
+use App\Http\Middleware\EnsureGlobalIntegrationToken;
 use App\Http\Middleware\EnsureIntegrationScope;
 use App\Services\ApplicationIntegrationAuditService;
 use Illuminate\Auth\Access\AuthorizationException;
@@ -38,6 +39,7 @@ return Application::configure(basePath: dirname(__DIR__))
             'abilities' => CheckAbilities::class,
             'integration.auth' => AuthenticateApplicationIntegration::class,
             'integration.scope' => EnsureIntegrationScope::class,
+            'integration.global' => EnsureGlobalIntegrationToken::class,
         ]);
     })
     ->withExceptions(function (Exceptions $exceptions): void {

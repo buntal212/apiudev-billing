@@ -16,6 +16,7 @@ class ApplicationIntegrationTokenResource extends JsonResource
             'id' => $this->id,
             'application_id' => $this->application_id,
             'name' => $this->name,
+            'token_kind' => $this->token_kind,
             'token_prefix' => $this->token_prefix,
             'scopes' => $this->scopes,
             'expires_at' => $this->expires_at?->toISOString(),

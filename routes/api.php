@@ -2,6 +2,7 @@
 
 use App\Http\Controllers\Api\V1\Admin\ApplicationController;
 use App\Http\Controllers\Api\V1\Admin\ApplicationCustomerController;
+use App\Http\Controllers\Api\V1\Admin\ApplicationGlobalIntegrationTokenController;
 use App\Http\Controllers\Api\V1\Admin\ApplicationIntegrationAuditController;
 use App\Http\Controllers\Api\V1\Admin\ApplicationIntegrationTestAuditController;
 use App\Http\Controllers\Api\V1\Admin\ApplicationIntegrationTestController;
@@ -18,6 +19,7 @@ use App\Http\Controllers\Api\V1\Admin\SubscriptionController;
 use App\Http\Controllers\Api\V1\Admin\SubscriptionPlanController;
 use App\Http\Controllers\Api\V1\Auth\AuthController;
 use App\Http\Controllers\Api\V1\Integration\IntegrationCustomerController;
+use App\Http\Controllers\Api\V1\Integration\IntegrationReferralController;
 use App\Http\Controllers\Api\V1\Integration\IntegrationSubscriptionPlanController;
 use App\Http\Controllers\Api\V1\PaymentResultController;
 use Illuminate\Support\Facades\Route;
@@ -36,13 +38,18 @@ Route::prefix('v1/auth')->group(function (): void {
 });
 
 Route::prefix('v1/integrations')
-    ->middleware(['integration.auth', 'throttle:integration-api'])
+    ->middleware(['integration.auth', 'integration.global', 'throttle:integration-api'])
     ->group(function (): void {
         Route::get('subscription-plans', [IntegrationSubscriptionPlanController::class, 'index']);
         Route::post('customers', [IntegrationCustomerController::class, 'store']);
         Route::get('customers/{externalId}', [IntegrationCustomerController::class, 'show'])
             ->where('externalId', '[A-Za-z0-9._:-]{1,100}');
         Route::patch('customers/{externalId}', [IntegrationCustomerController::class, 'update'])
+            ->where('externalId', '[A-Za-z0-9._:-]{1,100}');
+        Route::post('referrals/validate', [IntegrationReferralController::class, 'validate']);
+        Route::post('customers/{externalId}/referral', [IntegrationReferralController::class, 'attach'])
+            ->where('externalId', '[A-Za-z0-9._:-]{1,100}');
+        Route::get('customers/{externalId}/subscription', [IntegrationReferralController::class, 'subscription'])
             ->where('externalId', '[A-Za-z0-9._:-]{1,100}');
     });
 
@@ -73,6 +80,13 @@ Route::prefix('v1/admin')
         Route::post('applications/{application}/integration-tokens', [ApplicationIntegrationTokenController::class, 'store'])
             ->middleware('throttle:admin-dana-gateway-write');
         Route::delete('applications/{application}/integration-tokens/{integrationToken}', [ApplicationIntegrationTokenController::class, 'destroy'])
+            ->middleware('throttle:admin-dana-gateway-write');
+        Route::get('applications/{application}/global-integration-token', [ApplicationGlobalIntegrationTokenController::class, 'show']);
+        Route::post('applications/{application}/global-integration-token', [ApplicationGlobalIntegrationTokenController::class, 'store'])
+            ->middleware('throttle:admin-dana-gateway-write');
+        Route::post('applications/{application}/global-integration-token/rotate', [ApplicationGlobalIntegrationTokenController::class, 'rotate'])
+            ->middleware('throttle:admin-dana-gateway-write');
+        Route::delete('applications/{application}/global-integration-token', [ApplicationGlobalIntegrationTokenController::class, 'destroy'])
             ->middleware('throttle:admin-dana-gateway-write');
         Route::get('payment-gateways/merchants', [ApplicationPaymentGatewayController::class, 'merchants']);
         Route::get('payment-gateway/billing-transactions', [BillingGatewayTransactionController::class, 'index'])

@@ -11,7 +11,9 @@ use App\Models\Application;
 use App\Models\ApplicationIntegrationToken;
 use App\Services\ApplicationIntegrationAuditService;
 use App\Services\IntegrationCustomerService;
+use App\Services\IntegrationReferralService;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
 use Symfony\Component\HttpFoundation\Response;
 
 class IntegrationCustomerController extends Controller
@@ -19,13 +21,29 @@ class IntegrationCustomerController extends Controller
     public function store(
         IntegrationStoreCustomerRequest $request,
         IntegrationCustomerService $customerService,
+        IntegrationReferralService $referralService,
         ApplicationIntegrationAuditService $auditService,
     ): ApplicationCustomerResource {
         [$application, $token] = $this->context($request);
 
         try {
-            $result = $customerService->upsert($application, $token, $request->validated());
-            $customer = $result['customer']->load('application');
+            [$result, $customer, $referral] = DB::transaction(function () use ($request, $application, $token, $customerService, $referralService): array {
+                $data = $request->validated();
+                $submittedReferral = $data['referral_code'] ?? null;
+                unset($data['referral_code']);
+                $result = $customerService->upsert($application, $token, $data);
+                $customer = $result['customer']->load('application');
+                $referral = null;
+                if ($submittedReferral !== null) {
+                    if (! $result['created'] && ! $customer->referral()->exists()) {
+                        throw new IntegrationConflictException('referral_attach_requires_explicit_endpoint', 'Pelanggan lama tanpa referral harus memakai endpoint penguncian referral eksplisit.');
+                    }
+                    $lockedReferral = $referralService->attach($application, $customer, $submittedReferral);
+                    $referral = ['code' => $lockedReferral->referral_code, 'type' => $lockedReferral->referral_type, 'base_price' => $lockedReferral->base_price, 'discount_amount' => $lockedReferral->discount_amount, 'customer_price' => $lockedReferral->customer_price, 'locked_at' => $lockedReferral->locked_at?->toISOString()];
+                }
+
+                return [$result, $customer, $referral];
+            });
             $auditService->record(
                 request: $request,
                 application: $application,
@@ -37,7 +55,7 @@ class IntegrationCustomerController extends Controller
             );
 
             return (new ApplicationCustomerResource($customer))
-                ->additional(['sync' => ['status' => 'accepted']]);
+                ->additional(['sync' => ['status' => 'accepted'], 'referral' => $referral, 'request_id' => $request->attributes->get('integration_request_id')]);
         } catch (IntegrationConflictException $exception) {
             $auditService->record(
                 request: $request,

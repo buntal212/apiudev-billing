@@ -67,6 +67,7 @@ class ApplicationCustomerController extends Controller
 
         return new ApplicationCustomerResource($applicationCustomer->load([
             'application',
+            'referral.partner',
             'invoices.paymentAttempts.latestReconciliationRun',
             'subscriptions.plan',
         ])->loadCount(['invoices', 'subscriptions']));
@@ -78,6 +79,6 @@ class ApplicationCustomerController extends Controller
 
         $applicationCustomer->update($request->validated());
 
-        return new ApplicationCustomerResource($applicationCustomer->refresh()->load('application'));
+        return new ApplicationCustomerResource($applicationCustomer->refresh()->load(['application', 'referral.partner']));
     }
 }

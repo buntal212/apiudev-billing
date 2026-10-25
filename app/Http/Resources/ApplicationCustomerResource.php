@@ -34,6 +34,15 @@ class ApplicationCustomerResource extends JsonResource
             'subscriptions_count' => $this->when(isset($this->subscriptions_count), $this->subscriptions_count),
             'invoices' => InvoiceResource::collection($this->whenLoaded('invoices')),
             'subscriptions' => SubscriptionResource::collection($this->whenLoaded('subscriptions')),
+            'referral' => $this->whenLoaded('referral', fn () => $this->referral ? [
+                'code' => $this->referral->referral_code,
+                'partner_name' => $this->referral->partner?->name,
+                'type' => $this->referral->referral_type,
+                'base_price' => $this->referral->base_price,
+                'discount_amount' => $this->referral->discount_amount,
+                'customer_price' => $this->referral->customer_price,
+                'locked_at' => $this->referral->locked_at?->toISOString(),
+            ] : null),
             'created_at' => $this->created_at,
             'updated_at' => $this->updated_at,
         ];

@@ -23,6 +23,7 @@ class IntegrationStoreCustomerRequest extends ApiFormRequest
             'phone' => ['nullable', 'string', 'max:30'],
             'email' => ['nullable', 'email', 'max:255'],
             'status' => ['required', 'in:active,inactive'],
+            'referral_code' => ['nullable', 'string', 'max:40', 'regex:/^REF-[A-Z0-9]{6}$/'],
             'application_id' => ['prohibited'],
             'subscription_id' => ['prohibited'],
             'invoice' => ['prohibited'],

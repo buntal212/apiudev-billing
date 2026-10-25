@@ -9,9 +9,13 @@ use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 
-#[Fillable(['application_id', 'name', 'token_hash', 'token_prefix', 'scopes', 'expires_at', 'revoked_at', 'last_used_at'])]
+#[Fillable(['application_id', 'name', 'token_kind', 'token_hash', 'token_prefix', 'scopes', 'expires_at', 'revoked_at', 'last_used_at'])]
 class ApplicationIntegrationToken extends Model
 {
+    public const string KindGlobal = 'global';
+
+    public const string KindLegacy = 'legacy';
+
     public const string ScopeCustomersRead = 'customers:read';
 
     public const string ScopeCustomersWrite = 'customers:write';
