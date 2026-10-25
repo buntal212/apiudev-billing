@@ -3,6 +3,7 @@
 namespace App\Services;
 
 use App\Models\ApplicationCustomer;
+use App\Models\CustomerReferral;
 use App\Models\Invoice;
 use App\Models\Subscription;
 use App\Models\SubscriptionPlan;
@@ -69,14 +70,19 @@ class InvoiceService
                     ? null
                     : Subscription::query()->lockForUpdate()->findOrFail($subscriptionId);
 
-                if ($lockedSubscription && (
-                    $lockedSubscription->application_customer_id !== $lockedCustomer->id
-                    || $lockedSubscription->subscription_plan_id !== $lockedPlan->id
-                )) {
+                if ($lockedSubscription && $lockedSubscription->application_customer_id !== $lockedCustomer->id) {
                     throw ValidationException::withMessages([
-                        'subscription_id' => ['Langganan harus sesuai dengan pelanggan dan paket yang dipilih.'],
+                        'subscription_id' => ['Langganan harus sesuai dengan pelanggan yang dipilih.'],
                     ]);
                 }
+
+                $referral = CustomerReferral::query()
+                    ->where('application_customer_id', $lockedCustomer->id)
+                    ->lockForUpdate()
+                    ->first();
+                $normalPrice = $lockedPlan->price;
+                $discountAmount = $referral?->discount_amount ?? '0.00';
+                $finalPrice = $referral?->customer_price ?? $normalPrice;
 
                 $duplicateInvoice = Invoice::query()
                     ->where('application_customer_id', $lockedCustomer->id)
@@ -102,7 +108,7 @@ class InvoiceService
                     'application_customer_id' => $lockedCustomer->id,
                     'subscription_plan_id' => $lockedPlan->id,
                     'subscription_id' => $lockedSubscription?->id,
-                    'amount' => $lockedPlan->price,
+                    'amount' => $finalPrice,
                     'currency' => $lockedPlan->currency,
                     'duration_months' => $lockedPlan->duration_months,
                     'duration_days' => $lockedPlan->duration_days,
@@ -113,6 +119,11 @@ class InvoiceService
                     'metadata' => [
                         'subscription_plan_code' => $lockedPlan->code,
                         'subscription_plan_name' => $lockedPlan->name,
+                        'normal_price' => $normalPrice,
+                        'referral_code' => $referral?->referral_code,
+                        'referral_type' => $referral?->referral_type,
+                        'referral_discount' => $discountAmount,
+                        'final_price' => $finalPrice,
                     ],
                 ]);
             });

@@ -71,7 +71,11 @@ class ApplicationCustomerController extends Controller
             'application',
             'referral.partner',
             'invoices.paymentAttempts.latestReconciliationRun',
+            'invoices.paymentAttempts.paymentAllocation',
+            'invoices.paymentAttempts.settlementEvents',
+            'invoices.paymentAttempts.checkoutOutbox',
             'subscriptions.plan',
+            'subscriptions.periodEvents',
         ])->loadCount(['invoices', 'subscriptions']));
     }
 

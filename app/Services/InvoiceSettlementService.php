@@ -90,8 +90,7 @@ class InvoiceSettlementService
                         ->lockForUpdate()
                         ->findOrFail($invoice->subscription_id);
 
-                    if ($subscription->application_customer_id !== $invoice->application_customer_id
-                        || $subscription->subscription_plan_id !== $invoice->subscription_plan_id) {
+                    if ($subscription->application_customer_id !== $invoice->application_customer_id) {
                         $this->reject('subscription_scope_mismatch', 'Langganan tidak sesuai dengan invoice.');
                     }
 
@@ -102,6 +101,7 @@ class InvoiceSettlementService
                         sourceType: 'payment_allocation',
                         verifiedPaidAt: $verification->paidAt,
                         sourceId: (string) $allocation->getKey(),
+                        targetPlanId: $invoice->subscription_plan_id,
                     );
                 } else {
                     $this->subscriptionService->activateFromVerifiedPayment(
@@ -225,8 +225,7 @@ class InvoiceSettlementService
                 $subscription = Subscription::query()
                     ->lockForUpdate()
                     ->findOrFail($lockedInvoice->subscription_id);
-                if ($subscription->application_customer_id !== $lockedInvoice->application_customer_id
-                    || $subscription->subscription_plan_id !== $lockedInvoice->subscription_plan_id) {
+                if ($subscription->application_customer_id !== $lockedInvoice->application_customer_id) {
                     throw ValidationException::withMessages([
                         'invoice' => ['Langganan terkait tidak sesuai dengan invoice.'],
                     ]);

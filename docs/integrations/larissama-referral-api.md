@@ -79,3 +79,9 @@ Gunakan timeout, retry terbatas hanya untuk kegagalan jaringan/`503`, dan idempo
 | 503 | Kode/token tidak dapat diproses sementara | Retry terbatas dengan idempotency key sama. |
 
 Setiap respons integrasi menyertakan `request_id` untuk investigasi aman oleh tim UDEV.
+
+## Paket dan pembayaran
+
+Gunakan `GET /subscription-plans` untuk mengambil paket aktif aplikasi token. Saat membuat invoice, UDEV memvalidasi bahwa pelanggan, paket, dan langganan berasal dari aplikasi yang sama. Harga invoice adalah snapshot UDEV: harga paket normal bila tanpa referral, atau harga referral yang telah terkunci.
+
+Paket tujuan boleh berbeda dari paket subscription aktif. Perubahan paket dan penambahan durasi hanya terjadi setelah pembayaran DANA Sandbox terverifikasi; bila periode masih aktif, durasi baru ditambahkan dari tanggal berakhir terakhir. Pembayaran pending, gagal, kedaluwarsa, atau dibatalkan tidak mengubah paket maupun masa aktif.

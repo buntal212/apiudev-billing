@@ -59,7 +59,7 @@ class InvoiceServiceTest extends TestCase
             self::fail('Langganan yang tidak sesuai seharusnya ditolak.');
         } catch (ValidationException $exception) {
             self::assertSame(
-                'Langganan harus sesuai dengan pelanggan dan paket yang dipilih.',
+                'Langganan harus sesuai dengan pelanggan yang dipilih.',
                 $exception->errors()['subscription_id'][0],
             );
         }

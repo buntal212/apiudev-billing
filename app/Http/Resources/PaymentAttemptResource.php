@@ -61,12 +61,14 @@ class PaymentAttemptResource extends JsonResource
                     : null,
             ]),
             'settlement' => $this->whenLoaded('paymentAllocation', fn (): ?array => $this->paymentAllocation ? [
+                'id' => $this->paymentAllocation->id,
                 'amount' => $this->paymentAllocation->amount,
                 'currency' => $this->paymentAllocation->currency,
                 'allocated_at' => $this->paymentAllocation->allocated_at?->toISOString(),
             ] : null),
             'settlement_history' => $this->whenLoaded('settlementEvents', fn (): array => $this->settlementEvents
                 ->map(fn ($event): array => [
+                    'id' => $event->id,
                     'event_type' => $event->event_type,
                     'status' => $event->status,
                     'error_code' => $event->error_code,

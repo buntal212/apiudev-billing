@@ -314,6 +314,7 @@ class SubscriptionService
         DateTimeInterface $verifiedPaidAt,
         ?string $sourceId = null,
         ?string $notes = null,
+        ?int $targetPlanId = null,
     ): SubscriptionPeriodEvent {
         if ($durationDays < 1) {
             throw ValidationException::withMessages([
@@ -337,6 +338,7 @@ class SubscriptionService
                 $verifiedPaidAt,
                 $sourceId,
                 $notes,
+                $targetPlanId,
             ): SubscriptionPeriodEvent {
                 $existingEvent = SubscriptionPeriodEvent::query()
                     ->where('idempotency_key', $idempotencyKey)
@@ -366,8 +368,20 @@ class SubscriptionService
                     ]);
                 }
 
+                $targetPlan = $targetPlanId === null
+                    ? null
+                    : SubscriptionPlan::query()->lockForUpdate()->findOrFail($targetPlanId);
+                if ($targetPlan !== null && $targetPlan->application_id !== $lockedSubscription->customer->application_id) {
+                    throw ValidationException::withMessages(['subscription_plan_id' => ['Paket tujuan tidak berasal dari aplikasi pelanggan.']]);
+                }
+
                 $continuesActivePeriod = $lockedSubscription->status === Subscription::StatusActive
                     && $lockedSubscription->expires_at->greaterThan($verifiedPaidAt);
+                $previousPlanId = $lockedSubscription->subscription_plan_id;
+                $nextPlanId = $targetPlan?->getKey() ?? $previousPlanId;
+                $remainingDays = $continuesActivePeriod
+                    ? max(0, $verifiedPaidAt->diffInDays($lockedSubscription->expires_at, false))
+                    : 0;
                 $periodStart = $continuesActivePeriod
                     ? $lockedSubscription->expires_at->toImmutable()
                     : $verifiedPaidAt;
@@ -380,6 +394,12 @@ class SubscriptionService
                     'verified_paid_at='.$verifiedPaidAt->toISOString(),
                     'period_start='.$periodStart->toISOString(),
                     $continuesActivePeriod ? 'period_rule=continue_active_expiry' : 'period_rule=start_at_verified_paid_at',
+                    'previous_plan_id='.$previousPlanId,
+                    'new_plan_id='.$nextPlanId,
+                    'remaining_days='.$remainingDays,
+                    'additional_days='.$durationDays,
+                    'previous_expires_at='.$lockedSubscription->expires_at->toISOString(),
+                    'new_expires_at='.$newExpiresAt->toISOString(),
                 ])));
 
                 $periodEvent = SubscriptionPeriodEvent::create([
@@ -398,6 +418,9 @@ class SubscriptionService
                     'expires_at' => $newExpiresAt,
                     'status' => $nextStatus,
                 ];
+                if ($targetPlan !== null) {
+                    $updates['subscription_plan_id'] = $targetPlan->getKey();
+                }
                 if (! $continuesActivePeriod) {
                     $updates['starts_at'] = $periodStart;
                 }
