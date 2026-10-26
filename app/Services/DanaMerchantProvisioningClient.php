@@ -23,7 +23,7 @@ class DanaMerchantProvisioningClient
     }
 
     /**
-     * @param  array{environment: string, partner_id: string, merchant_id: string, private_key: string, dana_webhook_public_key: string, origin: string, channel_id: string, notification_url: string, callback_url: string, mcc: string, enabled: bool}  $attributes
+     * @param  array{environment: string, partner_id: string, merchant_id: string, private_key: string, dana_webhook_public_key: string, origin: string, channel_id: string, external_store_id?: string|null, sub_merchant_id?: string|null, notification_url: string, callback_url: string, mcc: string, enabled: bool}  $attributes
      */
     public function stableDanaConfigurationIdempotencyKey(int $merchantId, array $attributes): string
     {
@@ -117,7 +117,7 @@ class DanaMerchantProvisioningClient
     }
 
     /**
-     * @param  array{environment: string, partner_id: string, merchant_id: string, private_key: string, dana_webhook_public_key: string, origin: string, channel_id: string, notification_url: string, callback_url: string, mcc: string, enabled: bool}  $attributes
+     * @param  array{environment: string, partner_id: string, merchant_id: string, private_key: string, dana_webhook_public_key: string, origin: string, channel_id: string, external_store_id?: string|null, sub_merchant_id?: string|null, notification_url: string, callback_url: string, mcc: string, enabled: bool}  $attributes
      * @return array{merchant_code: string, environment: string, dana_configuration: array{available: bool, enabled: bool, ready: bool}}
      */
     public function configureDanaSandbox(int $merchantId, array $attributes, string $idempotencyKey): array
@@ -142,7 +142,7 @@ class DanaMerchantProvisioningClient
     }
 
     /**
-     * @param  array{amount_minor: int, return_context: string}  $attributes
+     * @param  array{amount_minor: int, payment_method: string, return_context: string}  $attributes
      * @return array<string, mixed>
      */
     public function createDanaSandboxTestTransaction(int $merchantId, array $attributes, string $idempotencyKey): array
@@ -183,6 +183,7 @@ class DanaMerchantProvisioningClient
     public function paymentAudit(int $merchantId, string $paymentId): array
     {
         $response = $this->send(fn (PendingRequest $request): Response => $request->get("/api/v1/internal/merchants/{$merchantId}/payments/{$paymentId}/audit"));
+
         return $this->auditPayment($this->decodeSuccessfulResponse($response)['data'] ?? null);
     }
 
@@ -518,6 +519,8 @@ class DanaMerchantProvisioningClient
     {
         $transaction = is_array($result) ? ($result['transaction'] ?? null) : null;
         $authentication = is_array($result) ? ($result['authentication'] ?? null) : null;
+        $expiresAt = is_array($transaction) ? ($transaction['expires_at'] ?? null) : null;
+        $instruction = is_array($transaction) ? ($transaction['payment_instruction'] ?? null) : null;
 
         if (! is_array($result)
             || ! is_string($result['merchant_code'] ?? null)
@@ -529,6 +532,8 @@ class DanaMerchantProvisioningClient
             || ($transaction['currency'] ?? null) !== 'IDR'
             || ! is_string($transaction['status'] ?? null)
             || ! is_bool($transaction['checkout_available'] ?? null)
+            || (! is_string($expiresAt) && $expiresAt !== null)
+            || (! is_array($instruction) && $instruction !== null)
             || (! is_string($transaction['checkout_url'] ?? null) && $transaction['checkout_url'] !== null)) {
             throw new DanaMerchantProvisioningException('Respons transaksi tester Sandbox tidak valid.', 502, false);
         }
@@ -537,21 +542,16 @@ class DanaMerchantProvisioningClient
         if ($checkoutUrl !== null && (! filter_var($checkoutUrl, FILTER_VALIDATE_URL) || ! str_starts_with(strtolower($checkoutUrl), 'https://'))) {
             throw new DanaMerchantProvisioningException('URL checkout tester Sandbox tidak valid.', 502, false);
         }
+        $paymentInstruction = $this->sandboxPaymentInstruction($instruction);
 
         $data = [
             'merchant_code' => $result['merchant_code'],
             'environment' => 'sandbox',
-            'transaction' => collect($transaction)->only([
-                'id',
-                'merchant_order_id',
-                'amount_minor',
-                'currency',
-                'status',
-                'checkout_url',
-                'checkout_available',
-                'created_at',
-                'updated_at',
-            ])->all(),
+            'transaction' => [
+                ...collect($transaction)->only(['id', 'merchant_order_id', 'amount_minor', 'currency', 'status', 'checkout_url', 'checkout_available', 'created_at', 'updated_at'])->all(),
+                'expires_at' => $expiresAt,
+                'payment_instruction' => $paymentInstruction,
+            ],
         ];
         if (array_key_exists('return_context', $result)
             && (! is_string($result['return_context']) || preg_match('/\A[A-Za-z0-9_-]{43}\z/', $result['return_context']) !== 1)) {
@@ -565,6 +565,48 @@ class DanaMerchantProvisioningClient
         }
 
         return $data;
+    }
+
+    /** @return array<string, string|null>|null */
+    private function sandboxPaymentInstruction(mixed $instruction): ?array
+    {
+        if ($instruction === null) {
+            return null;
+        }
+
+        $allowedMethods = ['dana_wallet', 'qris', 'va_bri', 'va_pani', 'va_cimb', 'va_btpn', 'hosted_checkout'];
+        $allowedTypes = ['redirect', 'qris', 'virtual_account'];
+        if (! is_array($instruction)
+            || ! is_string($instruction['method'] ?? null)
+            || ! in_array($instruction['method'], $allowedMethods, true)
+            || ! is_string($instruction['label'] ?? null)
+            || ! is_string($instruction['type'] ?? null)
+            || ! in_array($instruction['type'], $allowedTypes, true)
+            || ! is_string($instruction['message'] ?? null)) {
+            throw new DanaMerchantProvisioningException('Instruksi pembayaran tester Sandbox tidak valid.', 502, false);
+        }
+
+        $paymentCode = $instruction['payment_code'] ?? null;
+        $qrImage = $instruction['qr_image'] ?? null;
+        $qrUrl = $instruction['qr_url'] ?? null;
+        $safeQrImage = $qrImage === null
+            || (is_string($qrImage) && (str_starts_with(strtolower($qrImage), 'data:image/') || (filter_var($qrImage, FILTER_VALIDATE_URL) && str_starts_with(strtolower($qrImage), 'https://'))));
+        if ((! is_string($paymentCode) && $paymentCode !== null)
+            || ! $safeQrImage
+            || (! is_string($qrUrl) && $qrUrl !== null)
+            || ($qrUrl !== null && (! filter_var($qrUrl, FILTER_VALIDATE_URL) || ! str_starts_with(strtolower($qrUrl), 'https://')))) {
+            throw new DanaMerchantProvisioningException('Instruksi pembayaran tester Sandbox tidak valid.', 502, false);
+        }
+
+        return [
+            'method' => $instruction['method'],
+            'label' => mb_substr($instruction['label'], 0, 100),
+            'type' => $instruction['type'],
+            'message' => mb_substr($instruction['message'], 0, 300),
+            'payment_code' => $paymentCode,
+            'qr_image' => $qrImage,
+            'qr_url' => $qrUrl,
+        ];
     }
 
     /** @return array<string, mixed> */
@@ -592,15 +634,20 @@ class DanaMerchantProvisioningClient
             throw new DanaMerchantProvisioningException('Respons audit pembayaran gateway tidak valid.', 502, false);
         }
         foreach (['merchant_reference', 'provider_order_reference', 'created_at', 'updated_at', 'gateway_verified_at'] as $field) {
-            if (! is_string($payment[$field] ?? null) && $payment[$field] !== null) {
+            $value = $payment[$field] ?? null;
+            if (! is_string($value) && $value !== null) {
                 throw new DanaMerchantProvisioningException('Respons audit pembayaran gateway tidak valid.', 502, false);
             }
+        }
+        $paymentMethod = $payment['payment_method'] ?? null;
+        if (! is_string($paymentMethod) && $paymentMethod !== null) {
+            throw new DanaMerchantProvisioningException('Respons audit pembayaran gateway tidak valid.', 502, false);
         }
         if (array_key_exists('timeline', $payment) && (! is_array($payment['timeline']) || collect($payment['timeline'])->contains(fn (mixed $event): bool => ! is_array($event)))) {
             throw new DanaMerchantProvisioningException('Respons audit pembayaran gateway tidak valid.', 502, false);
         }
 
-        return collect($payment)->only([...$required, 'provider_order_reference', 'timeline'])->all();
+        return collect($payment)->only([...$required, 'payment_method', 'provider_order_reference', 'timeline'])->all();
     }
 
     /** @return array<string, mixed> */
@@ -633,7 +680,7 @@ class DanaMerchantProvisioningClient
             ];
         }
 
-        $stringOrNull = ['partner_id', 'merchant_id', 'origin', 'channel_id', 'notification_url', 'callback_url', 'mcc'];
+        $stringOrNull = ['partner_id', 'merchant_id', 'origin', 'channel_id', 'external_store_id', 'sub_merchant_id', 'notification_url', 'callback_url', 'mcc'];
         foreach ($stringOrNull as $field) {
             if (! is_string($values[$field] ?? null) && $values[$field] !== null) {
                 throw new DanaMerchantProvisioningException('Respons metadata konfigurasi DANA gateway tidak valid.', 502, false);

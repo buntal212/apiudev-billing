@@ -25,6 +25,8 @@ class StoreDanaGatewayMerchantDanaConfigurationRequest extends ApiFormRequest
             'dana_webhook_public_key' => ['nullable', 'string', 'max:65535'],
             'origin' => ['required', 'url', 'max:255', 'regex:/\Ahttps:\/\//i'],
             'channel_id' => ['required', 'string', 'max:100'],
+            'external_store_id' => ['nullable', 'string', 'max:150'],
+            'sub_merchant_id' => ['nullable', 'string', 'max:150'],
             'notification_url' => ['required', 'url', 'max:2048', 'regex:/\Ahttps:\/\//i'],
             'callback_url' => ['required', 'url', 'max:2048', 'regex:/\Ahttps:\/\//i'],
             'mcc' => ['required', 'string', 'regex:/\A\d{4}\z/'],

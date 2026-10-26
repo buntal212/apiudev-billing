@@ -212,6 +212,7 @@ class DanaGatewayMerchantProvisioningController extends Controller
         $this->recordManagementAudit($request, $merchant, 'dana_sandbox_tester.transaction_created', 'succeeded', 201, false, [
             'payment_id' => $result['transaction']['id'],
             'checkout_available' => $result['transaction']['checkout_available'],
+            'payment_method' => $request->transactionAttributes()['payment_method'],
         ], $request->idempotencyKey());
 
         unset($result['return_context']);
@@ -336,6 +337,7 @@ class DanaGatewayMerchantProvisioningController extends Controller
         ]);
         try {
             $result = $client->paymentAuditWebhooks($merchantId, $paymentId, $validated);
+
             return response()->json(['data' => $result['webhooks'], 'meta' => $result['meta']])->header('Cache-Control', 'no-store');
         } catch (DanaMerchantProvisioningException $exception) {
             return $this->gatewayError($exception)->header('Cache-Control', 'no-store');

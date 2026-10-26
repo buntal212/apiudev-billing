@@ -45,6 +45,19 @@ class DanaSandboxTesterApiTest extends TestCase
         Http::assertNothingSent();
     }
 
+    public function test_tester_rejects_payment_method_outside_the_verified_sandbox_allowlist(): void
+    {
+        $merchant = $this->sandboxProvisionedMerchant();
+        $this->actingAdmin();
+
+        $this->withHeader('Idempotency-Key', 'frontend-sandbox-tester-unverified-method')
+            ->postJson($this->transactionUrl($merchant->gateway_merchant_id), ['amount_minor' => 10_000, 'payment_method' => 'ovo'])
+            ->assertUnprocessable()
+            ->assertJsonValidationErrors('payment_method');
+
+        Http::assertNothingSent();
+    }
+
     public function test_validation_only_returns_safe_configuration_metadata_and_audits_the_result(): void
     {
         $merchant = $this->sandboxProvisionedMerchant();
@@ -88,7 +101,7 @@ class DanaSandboxTesterApiTest extends TestCase
         Sanctum::actingAs($admin, ['admin:access']);
 
         $response = $this->withHeader('Idempotency-Key', $idempotencyKey)
-            ->postJson($this->transactionUrl($merchant->gateway_merchant_id), ['amount_minor' => 10_000])
+            ->postJson($this->transactionUrl($merchant->gateway_merchant_id), ['amount_minor' => 10_000, 'payment_method' => 'dana_wallet'])
             ->assertCreated()
             ->assertJsonPath('data.transaction.status', 'pending')
             ->assertJsonPath('data.transaction.checkout_available', true)
@@ -110,6 +123,7 @@ class DanaSandboxTesterApiTest extends TestCase
             return $request->method() === 'POST'
                 && $request->header('Idempotency-Key') === [$idempotencyKey]
                 && $request->data()['amount_minor'] === 10_000
+                && $request->data()['payment_method'] === 'dana_wallet'
                 && is_string($request->data()['return_context'] ?? null)
                 && $request->header('Authorization') === ['Bearer '.self::ServiceToken];
         });
@@ -373,8 +387,7 @@ class DanaSandboxTesterApiTest extends TestCase
         ?string $returnContext = null,
         string $paymentId = '01K7A2M3N4P5Q6R7S8T9V0W1X2',
         string $status = 'pending',
-    ): array
-    {
+    ): array {
         return array_filter([
             'merchant_code' => $merchantCode,
             'environment' => 'sandbox',
@@ -390,6 +403,16 @@ class DanaSandboxTesterApiTest extends TestCase
                 'status' => $status,
                 'checkout_url' => 'https://checkout.sandbox.dana.id/session/udev-test',
                 'checkout_available' => true,
+                'expires_at' => '2026-10-17T10:30:00+07:00',
+                'payment_instruction' => [
+                    'method' => 'dana_wallet',
+                    'label' => 'DANA Wallet',
+                    'type' => 'redirect',
+                    'message' => 'Lanjutkan pembayaran pada halaman DANA Wallet Sandbox.',
+                    'payment_code' => null,
+                    'qr_image' => null,
+                    'qr_url' => null,
+                ],
                 'created_at' => '2026-10-17T10:00:00+07:00',
                 'updated_at' => '2026-10-17T10:00:00+07:00',
             ],
