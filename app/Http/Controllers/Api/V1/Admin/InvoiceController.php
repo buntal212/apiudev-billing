@@ -23,7 +23,7 @@ class InvoiceController extends Controller
 
         $filters = $request->validated();
         $invoices = Invoice::query()
-            ->with(['customer', 'plan', 'subscription'])
+            ->with(['customer.referral.partner', 'plan', 'subscription'])
             ->when($filters['application_id'] ?? null, function (Builder $query, int $applicationId): void {
                 $query->whereHas('customer', function (Builder $query) use ($applicationId): void {
                     $query->where('application_id', $applicationId);
@@ -68,7 +68,7 @@ class InvoiceController extends Controller
             idempotencyKey: $data['idempotency_key'],
         );
 
-        return (new InvoiceResource($invoice->load(['customer', 'plan', 'subscription'])))
+        return (new InvoiceResource($invoice->load(['customer.referral.partner', 'plan', 'subscription'])))
             ->response()
             ->setStatusCode(
                 $invoice->wasRecentlyCreated ? Response::HTTP_CREATED : Response::HTTP_OK,
@@ -81,6 +81,7 @@ class InvoiceController extends Controller
 
         return new InvoiceResource($invoice->load([
             'customer',
+            'customer.referral.partner',
             'plan',
             'subscription',
             'paymentAttempts.latestReconciliationRun',
@@ -100,6 +101,7 @@ class InvoiceController extends Controller
 
         return new InvoiceResource($recoveredInvoice->load([
             'customer',
+            'customer.referral.partner',
             'plan',
             'subscription.latestPeriodEvent',
         ]));

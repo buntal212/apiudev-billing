@@ -4,7 +4,9 @@ namespace Tests\Feature;
 
 use App\Models\Application;
 use App\Models\ApplicationCustomer;
+use App\Models\CustomerReferral;
 use App\Models\Invoice;
+use App\Models\Partner;
 use App\Models\SubscriptionPlan;
 use App\Models\User;
 use Illuminate\Foundation\Testing\LazilyRefreshDatabase;
@@ -163,6 +165,40 @@ class InvoiceApiTest extends TestCase
             ->assertOk()
             ->assertJsonPath('data.customer.id', $customer->id)
             ->assertJsonPath('data.plan.id', $plan->id);
+    }
+
+    public function test_invoice_pricing_snapshot_and_referral_name_are_returned(): void
+    {
+        $application = Application::factory()->create();
+        $customer = ApplicationCustomer::factory()->create(['application_id' => $application->id]);
+        $plan = SubscriptionPlan::factory()->create(['application_id' => $application->id]);
+        $partner = Partner::factory()->create(['name' => 'Mitra Andalan']);
+        CustomerReferral::factory()->create([
+            'application_id' => $application->id,
+            'application_customer_id' => $customer->id,
+            'partner_id' => $partner->id,
+        ]);
+        $invoice = Invoice::factory()->create([
+            'application_customer_id' => $customer->id,
+            'subscription_plan_id' => $plan->id,
+            'amount' => '100000.00',
+            'metadata' => [
+                'normal_price' => '175000.00',
+                'referral_discount' => '75000.00',
+                'final_price' => '100000.00',
+                'referral_code' => 'REF-ABC123',
+                'referral_partner_name' => 'Mitra Andalan',
+            ],
+        ]);
+        Sanctum::actingAs($this->admin(), ['admin:access']);
+
+        $this->getJson("/api/v1/admin/invoices/{$invoice->id}")
+            ->assertOk()
+            ->assertJsonPath('data.pricing.normal_price', '175000.00')
+            ->assertJsonPath('data.pricing.discount_amount', '75000.00')
+            ->assertJsonPath('data.pricing.final_price', '100000.00')
+            ->assertJsonPath('data.pricing.referral_code', 'REF-ABC123')
+            ->assertJsonPath('data.pricing.referral_partner_name', 'Mitra Andalan');
     }
 
     public function test_returns_401_when_no_sanctum_token_is_provided(): void

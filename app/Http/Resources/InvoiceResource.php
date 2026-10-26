@@ -14,6 +14,11 @@ class InvoiceResource extends JsonResource
      */
     public function toArray(Request $request): array
     {
+        $metadata = is_array($this->metadata) ? $this->metadata : [];
+        $referral = $this->relationLoaded('customer') && $this->customer?->relationLoaded('referral')
+            ? $this->customer->referral
+            : null;
+
         return [
             'id' => $this->id,
             'invoice_number' => $this->invoice_number,
@@ -22,6 +27,14 @@ class InvoiceResource extends JsonResource
             'subscription_id' => $this->subscription_id,
             'amount' => $this->amount,
             'currency' => $this->currency,
+            'pricing' => [
+                'normal_price' => $metadata['normal_price'] ?? $this->amount,
+                'discount_amount' => $metadata['referral_discount'] ?? '0.00',
+                'final_price' => $metadata['final_price'] ?? $this->amount,
+                'referral_code' => $metadata['referral_code'] ?? null,
+                'referral_partner_name' => $metadata['referral_partner_name']
+                    ?? $referral?->partner?->name,
+            ],
             'duration_days' => $this->duration_days,
             'status' => $this->status,
             'issued_at' => $this->issued_at?->toISOString(),

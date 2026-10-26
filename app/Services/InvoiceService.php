@@ -127,6 +127,7 @@ class InvoiceService
                         'subscription_plan_name' => $lockedPlan->name,
                         'normal_price' => $normalPrice,
                         'referral_code' => $referral?->referral_code,
+                        'referral_partner_name' => $referral?->partner()->value('name'),
                         'referral_type' => $referral?->referral_type,
                         'referral_discount' => $discountAmount,
                         'final_price' => $finalPrice,
