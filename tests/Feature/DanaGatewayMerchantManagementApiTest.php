@@ -125,6 +125,7 @@ class DanaGatewayMerchantManagementApiTest extends TestCase
             ->assertHeader('Cache-Control')
             ->assertJsonPath('data.configuration_exists', true)
             ->assertJsonPath('data.configuration.partner_id', 'partner-sandbox')
+            ->assertJsonMissingPath('data.configuration.external_store_id')
             ->assertJsonPath('data.configuration.private_key_configured', true)
             ->assertJsonMissingPath('data.configuration.private_key')
             ->assertJsonMissingPath('data.configuration.dana_webhook_public_key');

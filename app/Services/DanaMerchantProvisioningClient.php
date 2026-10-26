@@ -598,7 +598,9 @@ class DanaMerchantProvisioningClient
         }
 
         $allowedMethods = ['dana_wallet', 'qris', 'va_bri', 'va_pani', 'va_cimb', 'va_btpn', 'hosted_checkout'];
-        $allowedTypes = ['redirect', 'qris', 'virtual_account'];
+        // Custom Checkout tidak mendokumentasikan qrContent MPM. Jangan
+        // meneruskan tipe QR MPM sampai entitlement dan kontraknya diverifikasi.
+        $allowedTypes = ['redirect', 'payment_code', 'virtual_account'];
         if (! is_array($instruction)
             || ! is_string($instruction['method'] ?? null)
             || ! in_array($instruction['method'], $allowedMethods, true)
@@ -734,7 +736,8 @@ class DanaMerchantProvisioningClient
 
         $stringOrNull = ['partner_id', 'merchant_id', 'origin', 'channel_id', 'external_store_id', 'sub_merchant_id', 'notification_url', 'callback_url', 'mcc'];
         foreach ($stringOrNull as $field) {
-            if (! is_string($values[$field] ?? null) && $values[$field] !== null) {
+            $value = $values[$field] ?? null;
+            if ($value !== null && ! is_string($value)) {
                 throw new DanaMerchantProvisioningException('Respons metadata konfigurasi DANA gateway tidak valid.', 502, false);
             }
         }
