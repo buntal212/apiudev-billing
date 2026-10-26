@@ -58,6 +58,35 @@ class DanaSandboxTesterApiTest extends TestCase
         Http::assertNothingSent();
     }
 
+    public function test_tester_exposes_only_allowlisted_sandbox_validation_messages_from_gateway(): void
+    {
+        $merchant = $this->sandboxProvisionedMerchant();
+        $calls = 0;
+        Http::fake([
+            "https://dana-gateway.test/api/v1/internal/merchants/{$merchant->gateway_merchant_id}/sandbox-tester/transactions" => function () use (&$calls) {
+                $calls++;
+
+                return Http::response([
+                    'message' => $calls === 1
+                        ? 'QRIS Sandbox memerlukan External Store ID pada konfigurasi merchant.'
+                        : 'Pesan internal yang tidak boleh diteruskan.',
+                ], 422);
+            },
+        ]);
+        $this->actingAdmin();
+
+        $this->withHeader('Idempotency-Key', 'frontend-sandbox-tester-qris-no-store')
+            ->postJson($this->transactionUrl($merchant->gateway_merchant_id), ['amount_minor' => 10_000, 'payment_method' => 'qris'])
+            ->assertUnprocessable()
+            ->assertJsonPath('message', 'QRIS Sandbox memerlukan External Store ID pada konfigurasi merchant.');
+
+        $this->withHeader('Idempotency-Key', 'frontend-sandbox-tester-unknown-422')
+            ->postJson($this->transactionUrl($merchant->gateway_merchant_id), ['amount_minor' => 10_000, 'payment_method' => 'dana_wallet'])
+            ->assertUnprocessable()
+            ->assertJsonPath('message', 'Data provisioning merchant ditolak oleh gateway.')
+            ->assertDontSee('Pesan internal yang tidak boleh diteruskan.');
+    }
+
     public function test_validation_only_returns_safe_configuration_metadata_and_audits_the_result(): void
     {
         $merchant = $this->sandboxProvisionedMerchant();
