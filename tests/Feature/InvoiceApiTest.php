@@ -25,29 +25,31 @@ class InvoiceApiTest extends TestCase
         $plan = SubscriptionPlan::factory()->create([
             'application_id' => $application->id,
             'price' => '125000.00',
-            'duration_months' => 3,
-            'duration_days' => 90,
+            'duration_months' => 1,
+            'duration_days' => 30,
         ]);
         Sanctum::actingAs($this->admin(), ['admin:access']);
 
         $response = $this->postJson(
             '/api/v1/admin/invoices',
-            $this->invoicePayload($customer, $plan, '2026-10-20 10:00:00'),
+            [...$this->invoicePayload($customer, $plan, '2026-10-20 10:00:00'), 'period_count' => 3],
             ['Idempotency-Key' => 'invoice-create-0001'],
         )
             ->assertCreated()
             ->assertJsonPath('data.application_customer_id', $customer->id)
             ->assertJsonPath('data.subscription_plan_id', $plan->id)
-            ->assertJsonPath('data.amount', '125000.00')
+            ->assertJsonPath('data.amount', '375000.00')
+            ->assertJsonPath('data.period_count', 3)
             ->assertJsonPath('data.duration_days', 90)
             ->assertJsonPath('data.status', Invoice::StatusPending);
 
         $invoiceId = $response->json('data.id');
         $this->assertDatabaseHas('invoices', [
             'id' => $invoiceId,
-            'amount' => '125000.00',
+            'amount' => '375000.00',
             'duration_months' => 3,
             'duration_days' => 90,
+            'period_count' => 3,
             'currency' => 'IDR',
             'idempotency_key' => 'invoice-create-0001',
         ]);

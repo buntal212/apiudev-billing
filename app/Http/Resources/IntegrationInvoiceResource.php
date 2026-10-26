@@ -26,6 +26,7 @@ class IntegrationInvoiceResource extends JsonResource
         return [
             'invoice_number' => $this->invoice_number,
             'status' => $this->status,
+            'period_count' => $this->period_count,
             'issued_at' => $this->issued_at?->toISOString(),
             'due_at' => $this->due_at?->toISOString(),
             'paid_at' => $this->paid_at?->toISOString(),
@@ -33,6 +34,7 @@ class IntegrationInvoiceResource extends JsonResource
                 'code' => $metadata['subscription_plan_code'] ?? $this->plan?->code,
                 'name' => $metadata['subscription_plan_name'] ?? $this->plan?->name,
                 'duration_days' => $this->duration_days,
+                'period_count' => $this->period_count,
             ],
             'pricing' => [
                 'normal_price' => $metadata['normal_price'] ?? $this->amount,

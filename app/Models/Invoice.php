@@ -10,7 +10,7 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\Relations\HasOne;
 
-#[Fillable(['invoice_number', 'application_customer_id', 'subscription_plan_id', 'subscription_id', 'amount', 'currency', 'duration_months', 'duration_days', 'idempotency_key', 'status', 'issued_at', 'due_at', 'paid_at', 'cancelled_at', 'metadata'])]
+#[Fillable(['invoice_number', 'application_customer_id', 'subscription_plan_id', 'subscription_id', 'amount', 'currency', 'duration_months', 'duration_days', 'period_count', 'idempotency_key', 'status', 'issued_at', 'due_at', 'paid_at', 'cancelled_at', 'metadata'])]
 class Invoice extends Model
 {
     public const string StatusPending = 'pending';
@@ -81,6 +81,7 @@ class Invoice extends Model
             'amount' => 'decimal:2',
             'duration_days' => 'integer',
             'duration_months' => 'integer',
+            'period_count' => 'integer',
             'cancelled_at' => 'datetime',
             'due_at' => 'datetime',
             'issued_at' => 'datetime',

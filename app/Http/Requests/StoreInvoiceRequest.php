@@ -26,6 +26,7 @@ class StoreInvoiceRequest extends ApiFormRequest
             'application_customer_id' => ['required', 'integer', 'exists:application_customers,id'],
             'subscription_plan_id' => ['required', 'integer', 'exists:subscription_plans,id'],
             'subscription_id' => ['nullable', 'integer', 'exists:subscriptions,id'],
+            'period_count' => ['nullable', 'integer', 'min:1', 'max:12'],
             'due_at' => ['required', 'date'],
             'idempotency_key' => ['required', 'string', 'max:100'],
             'amount' => ['prohibited'],

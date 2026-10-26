@@ -85,17 +85,30 @@ class InvoiceSettlementService
 
                 $this->referralCommissionService->recordVerifiedAllocation($allocation);
 
+                $targetSubscription = null;
                 if ($invoice->subscription_id !== null) {
-                    $subscription = Subscription::query()
+                    $targetSubscription = Subscription::query()
                         ->lockForUpdate()
                         ->findOrFail($invoice->subscription_id);
 
-                    if ($subscription->application_customer_id !== $invoice->application_customer_id) {
+                    if ($targetSubscription->application_customer_id !== $invoice->application_customer_id) {
                         $this->reject('subscription_scope_mismatch', 'Langganan tidak sesuai dengan invoice.');
+                    }
+                } else {
+                    $targetSubscription = Subscription::query()
+                        ->where('application_customer_id', $invoice->application_customer_id)
+                        ->latest('expires_at')
+                        ->lockForUpdate()
+                        ->first();
+                }
+
+                if ($targetSubscription !== null) {
+                    if ($invoice->subscription_id === null) {
+                        $invoice->update(['subscription_id' => $targetSubscription->id]);
                     }
 
                     $this->subscriptionService->renewFromVerifiedPayment(
-                        subscription: $subscription,
+                        subscription: $targetSubscription,
                         durationDays: $invoice->duration_days,
                         idempotencyKey: $settlementKey.':renewal',
                         sourceType: 'payment_allocation',
@@ -212,15 +225,35 @@ class InvoiceSettlementService
             }
 
             if ($lockedInvoice->subscription_id === null) {
-                $this->subscriptionService->activateFromVerifiedPayment(
-                    invoice: $lockedInvoice,
-                    durationDays: $lockedInvoice->duration_days,
-                    idempotencyKey: $settlementKey.':activation',
-                    sourceType: 'payment_allocation',
-                    verifiedPaidAt: $allocation->allocated_at,
-                    sourceId: (string) $allocation->getKey(),
-                    notes: 'recovered_from_paid_invoice',
-                );
+                $existingSubscription = Subscription::query()
+                    ->where('application_customer_id', $lockedInvoice->application_customer_id)
+                    ->latest('expires_at')
+                    ->lockForUpdate()
+                    ->first();
+
+                if ($existingSubscription !== null) {
+                    $lockedInvoice->update(['subscription_id' => $existingSubscription->id]);
+                    $this->subscriptionService->renewFromVerifiedPayment(
+                        subscription: $existingSubscription,
+                        durationDays: $lockedInvoice->duration_days,
+                        idempotencyKey: $settlementKey.':renewal',
+                        sourceType: 'payment_allocation',
+                        verifiedPaidAt: $allocation->allocated_at,
+                        sourceId: (string) $allocation->getKey(),
+                        targetPlanId: $lockedInvoice->subscription_plan_id,
+                        notes: 'recovered_from_paid_invoice',
+                    );
+                } else {
+                    $this->subscriptionService->activateFromVerifiedPayment(
+                        invoice: $lockedInvoice,
+                        durationDays: $lockedInvoice->duration_days,
+                        idempotencyKey: $settlementKey.':activation',
+                        sourceType: 'payment_allocation',
+                        verifiedPaidAt: $allocation->allocated_at,
+                        sourceId: (string) $allocation->getKey(),
+                        notes: 'recovered_from_paid_invoice',
+                    );
+                }
             } else {
                 $subscription = Subscription::query()
                     ->lockForUpdate()

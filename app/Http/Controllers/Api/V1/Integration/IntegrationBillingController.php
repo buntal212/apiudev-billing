@@ -32,10 +32,16 @@ class IntegrationBillingController extends Controller
         [$application, $token] = $this->context($request);
         $customer = $this->customerOrFail($customers, $application, $externalId);
         $plan = $this->planOrFail($application, $request->string('subscription_plan_code')->toString());
+        $periodCount = max(1, min(12, $request->integer('period_count', 1)));
         $referral = $customer->referral()->first();
-        $normalPrice = $plan->price;
-        $discount = $referral?->discount_amount ?? '0.00';
-        $finalPrice = $referral?->customer_price ?? $normalPrice;
+        $unitPrice = $plan->price;
+        $unitDiscount = $referral?->discount_amount ?? '0.00';
+        $unitFinalPrice = $referral?->customer_price ?? $unitPrice;
+
+        $normalPrice = $this->multiplyPrice($unitPrice, $periodCount);
+        $discount = $this->multiplyPrice($unitDiscount, $periodCount);
+        $finalPrice = $this->multiplyPrice($unitFinalPrice, $periodCount);
+        $durationDays = 30 * $periodCount;
 
         $audits->record(
             request: $request,
@@ -44,7 +50,11 @@ class IntegrationBillingController extends Controller
             operation: 'invoice.previewed',
             status: 'succeeded',
             externalCustomerId: $externalId,
-            safeDetails: ['plan_code' => $plan->code, 'has_referral' => $referral !== null],
+            safeDetails: [
+                'plan_code' => $plan->code,
+                'period_count' => $periodCount,
+                'has_referral' => $referral !== null,
+            ],
         );
 
         return $this->response($request, [
@@ -52,9 +62,12 @@ class IntegrationBillingController extends Controller
             'plan' => [
                 'code' => $plan->code,
                 'name' => $plan->name,
-                'duration_days' => $plan->duration_days,
+                'duration_days' => $durationDays,
+                'period_count' => $periodCount,
             ],
             'pricing' => [
+                'unit_price' => $unitPrice,
+                'period_count' => $periodCount,
                 'normal_price' => $normalPrice,
                 'referral_code' => $referral?->referral_code,
                 'referral_type' => $referral?->referral_type,
@@ -76,12 +89,14 @@ class IntegrationBillingController extends Controller
         $customer = $this->customerOrFail($customers, $application, $externalId);
         $plan = $this->planOrFail($application, $request->string('subscription_plan_code')->toString());
         $subscription = $customer->subscriptions()->latest('expires_at')->first();
+        $periodCount = max(1, min(12, $request->integer('period_count', 1)));
         $invoice = $invoices->createInvoice(
             customerId: $customer->getKey(),
             planId: $plan->getKey(),
             subscriptionId: $subscription?->getKey(),
             dueAt: $request->date('due_at'),
             idempotencyKey: $request->string('idempotency_key')->toString(),
+            periodCount: $periodCount,
         );
 
         $invoice = $this->loadInvoice($invoice);
@@ -92,7 +107,7 @@ class IntegrationBillingController extends Controller
             operation: 'invoice.created',
             status: 'succeeded',
             externalCustomerId: $externalId,
-            safeDetails: ['invoice_number' => $invoice->invoice_number, 'plan_code' => $plan->code],
+            safeDetails: ['invoice_number' => $invoice->invoice_number, 'plan_code' => $plan->code, 'period_count' => $periodCount],
         );
 
         return (new IntegrationInvoiceResource($invoice))
@@ -243,5 +258,17 @@ class IntegrationBillingController extends Controller
             'data' => $data,
             'request_id' => $request->attributes->get('integration_request_id'),
         ]);
+    }
+
+    private function multiplyPrice(string $price, int $multiplier): string
+    {
+        if (preg_match('/\A(\d+)(?:\.(\d{1,2}))?\z/', $price, $matches) !== 1) {
+            return $price;
+        }
+
+        $cents = ((int) $matches[1] * 100) + (int) str_pad($matches[2] ?? '0', 2, '0');
+        $total = $cents * $multiplier;
+
+        return intdiv($total, 100).'.'.str_pad((string) ($total % 100), 2, '0', STR_PAD_LEFT);
     }
 }

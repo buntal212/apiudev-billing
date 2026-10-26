@@ -20,6 +20,7 @@ class IntegrationStoreInvoiceRequest extends ApiFormRequest
         return [
             'subscription_plan_code' => ['required', 'string', 'max:100'],
             'due_at' => ['required', 'date'],
+            'period_count' => ['nullable', 'integer', 'min:1', 'max:12'],
             'idempotency_key' => ['required', 'string', 'max:100', 'regex:/^[A-Za-z0-9][A-Za-z0-9._-]*$/'],
             'application_id' => ['prohibited'],
             'amount' => ['prohibited'],

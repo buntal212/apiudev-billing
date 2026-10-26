@@ -22,6 +22,7 @@ class InvoiceService
         ?int $subscriptionId,
         DateTimeInterface $dueAt,
         string $idempotencyKey,
+        int $periodCount = 1,
     ): Invoice {
         $dueAt = CarbonImmutable::instance($dueAt)->setMicrosecond(0);
 
@@ -29,6 +30,9 @@ class InvoiceService
             throw ValidationException::withMessages([
                 'due_at' => ['Tanggal jatuh tempo harus setelah waktu penerbitan invoice.'],
             ]);
+        }
+        if ($periodCount < 1 || $periodCount > 12) {
+            throw ValidationException::withMessages(['period_count' => ['Jumlah periode harus antara 1 dan 12.']]);
         }
 
         try {
@@ -38,6 +42,7 @@ class InvoiceService
                 $subscriptionId,
                 $dueAt,
                 $idempotencyKey,
+                $periodCount,
             ): Invoice {
                 $lockedCustomer = ApplicationCustomer::query()
                     ->lockForUpdate()
@@ -73,7 +78,7 @@ class InvoiceService
                 }
 
                 $lockedSubscription = $subscriptionId === null
-                    ? null
+                    ? Subscription::query()->where('application_customer_id', $lockedCustomer->id)->latest('expires_at')->lockForUpdate()->first()
                     : Subscription::query()->lockForUpdate()->findOrFail($subscriptionId);
 
                 if ($lockedSubscription && $lockedSubscription->application_customer_id !== $lockedCustomer->id) {
@@ -86,9 +91,12 @@ class InvoiceService
                     ->where('application_customer_id', $lockedCustomer->id)
                     ->lockForUpdate()
                     ->first();
-                $normalPrice = $lockedPlan->price;
-                $discountAmount = $referral?->discount_amount ?? '0.00';
-                $finalPrice = $referral?->customer_price ?? $normalPrice;
+                if ($lockedPlan->duration_days !== 30) {
+                    throw ValidationException::withMessages(['subscription_plan_id' => ['Paket untuk invoice periode harus berdurasi dasar 30 hari.']]);
+                }
+                $normalPrice = $this->multiplyPrice($lockedPlan->price, $periodCount);
+                $discountAmount = $this->multiplyPrice($referral?->discount_amount ?? '0.00', $periodCount);
+                $finalPrice = $this->multiplyPrice($referral?->customer_price ?? $lockedPlan->price, $periodCount);
 
                 $duplicateInvoice = Invoice::query()
                     ->where('application_customer_id', $lockedCustomer->id)
@@ -116,8 +124,9 @@ class InvoiceService
                     'subscription_id' => $lockedSubscription?->id,
                     'amount' => $finalPrice,
                     'currency' => $lockedPlan->currency,
-                    'duration_months' => $lockedPlan->duration_months,
-                    'duration_days' => $lockedPlan->duration_days,
+                    'duration_months' => $periodCount,
+                    'duration_days' => 30 * $periodCount,
+                    'period_count' => $periodCount,
                     'idempotency_key' => $idempotencyKey,
                     'status' => Invoice::StatusPending,
                     'issued_at' => now(),
@@ -125,6 +134,8 @@ class InvoiceService
                     'metadata' => [
                         'subscription_plan_code' => $lockedPlan->code,
                         'subscription_plan_name' => $lockedPlan->name,
+                        'period_count' => $periodCount,
+                        'unit_price' => $lockedPlan->price,
                         'normal_price' => $normalPrice,
                         'referral_code' => $referral?->referral_code,
                         'referral_partner_name' => $referral?->partner()->value('name'),
@@ -154,5 +165,17 @@ class InvoiceService
         } while (Invoice::query()->where('invoice_number', $invoiceNumber)->exists());
 
         return $invoiceNumber;
+    }
+
+    private function multiplyPrice(string $price, int $multiplier): string
+    {
+        if (preg_match('/\A(\d+)(?:\.(\d{1,2}))?\z/', $price, $matches) !== 1) {
+            throw ValidationException::withMessages(['subscription_plan_id' => ['Harga paket tidak valid.']]);
+        }
+
+        $cents = ((int) $matches[1] * 100) + (int) str_pad($matches[2] ?? '0', 2, '0');
+        $total = $cents * $multiplier;
+
+        return intdiv($total, 100).'.'.str_pad((string) ($total % 100), 2, '0', STR_PAD_LEFT);
     }
 }

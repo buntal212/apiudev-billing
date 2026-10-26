@@ -22,8 +22,8 @@ class InvoiceServiceTest extends TestCase
         $plan = SubscriptionPlan::factory()->create([
             'application_id' => $application->id,
             'price' => '250000.00',
-            'duration_months' => 6,
-            'duration_days' => 180,
+            'duration_months' => 1,
+            'duration_days' => 30,
         ]);
 
         $invoice = app(InvoiceService::class)->createInvoice(
@@ -33,11 +33,25 @@ class InvoiceServiceTest extends TestCase
             now()->addWeek(),
             'invoice-snapshot-0001',
         );
-        $plan->update(['price' => '300000.00', 'duration_months' => 12, 'duration_days' => 360]);
+        $plan->update(['price' => '300000.00', 'duration_months' => 1, 'duration_days' => 30]);
         $invoice->refresh();
 
         $this->assertSame('250000.00', $invoice->amount);
-        $this->assertSame(180, $invoice->duration_days);
+        $this->assertSame(30, $invoice->duration_days);
+    }
+
+    public function test_invoice_multiplies_a_30_day_package_for_the_selected_period_count(): void
+    {
+        $application = Application::factory()->create();
+        $customer = ApplicationCustomer::factory()->create(['application_id' => $application->id]);
+        $plan = SubscriptionPlan::factory()->create(['application_id' => $application->id, 'price' => '125000.00', 'duration_days' => 30]);
+
+        $invoice = app(InvoiceService::class)->createInvoice($customer->id, $plan->id, null, now()->addWeek(), 'invoice-period-count-0001', 3);
+
+        $this->assertSame('375000.00', $invoice->amount);
+        $this->assertSame(3, $invoice->period_count);
+        $this->assertSame(90, $invoice->duration_days);
+        $this->assertSame(3, $invoice->metadata['period_count']);
     }
 
     public function test_rejects_a_subscription_that_does_not_match_the_selected_customer_and_plan(): void

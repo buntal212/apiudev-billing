@@ -149,6 +149,10 @@ Route::prefix('v1/admin')
             ->only(['index', 'show']);
         Route::apiResource('invoices', InvoiceController::class)
             ->only(['index', 'store', 'show']);
+        Route::post('invoices/{invoice}/reconcile', [InvoiceController::class, 'reconcile'])
+            ->middleware('throttle:admin-dana-gateway-write');
+        Route::post('invoices/{invoice}/sandbox-simulate-payment', [InvoiceController::class, 'sandboxSimulatePayment'])
+            ->middleware('throttle:admin-dana-gateway-write');
         Route::post('invoices/{invoice}/subscription/recover', [InvoiceController::class, 'recoverSubscription'])
             ->middleware('throttle:admin-dana-gateway-write');
         Route::post('invoices/{invoice}/checkout', [InvoiceCheckoutController::class, 'store']);

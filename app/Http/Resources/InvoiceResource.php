@@ -36,6 +36,7 @@ class InvoiceResource extends JsonResource
                     ?? $referral?->partner?->name,
             ],
             'duration_days' => $this->duration_days,
+            'period_count' => $this->period_count,
             'status' => $this->status,
             'issued_at' => $this->issued_at?->toISOString(),
             'due_at' => $this->due_at?->toISOString(),
@@ -58,6 +59,22 @@ class InvoiceResource extends JsonResource
                 'status' => $this->subscription->status,
                 'starts_at' => $this->subscription->starts_at?->toISOString(),
                 'expires_at' => $this->subscription->expires_at?->toISOString(),
+                'period_events' => $this->subscription->relationLoaded('periodEvents')
+                    ? $this->subscription->periodEvents
+                        ->sortByDesc('created_at')
+                        ->values()
+                        ->map(fn ($event): array => [
+                            'id' => $event->id,
+                            'event_type' => $event->event_type,
+                            'previous_expires_at' => $event->previous_expires_at?->toISOString(),
+                            'new_expires_at' => $event->new_expires_at?->toISOString(),
+                            'source_type' => $event->source_type,
+                            'source_id' => $event->source_id,
+                            'notes' => $event->notes,
+                            'created_at' => $event->created_at?->toISOString(),
+                        ])
+                        ->all()
+                    : [],
             ] : null),
             'payment_attempts' => PaymentAttemptResource::collection(
                 $this->whenLoaded('paymentAttempts')
