@@ -47,8 +47,14 @@ class IntegrationInvoiceResource extends JsonResource
             'payment' => $attempt ? [
                 'status' => $attempt->status,
                 'provider' => $attempt->provider,
-                'checkout_status' => $attempt->checkout_url !== null ? 'ready' : ($attempt->checkoutOutbox?->status ?? 'processing'),
+                'payment_method' => $attempt->metadata['payment_method'] ?? 'dana_wallet',
+                'checkout_status' => ($attempt->checkout_url !== null || ! empty($attempt->metadata['qr_content'] ?? null) || ! empty($attempt->metadata['payment_code'] ?? null))
+                    ? 'ready'
+                    : ($attempt->checkoutOutbox?->status === 'failed' ? 'failed' : 'processing'),
                 'checkout_url' => $attempt->checkout_url,
+                'qr_content' => $attempt->metadata['qr_content'] ?? $attempt->metadata['payment_code'] ?? null,
+                'payment_code' => $attempt->metadata['payment_code'] ?? null,
+                'payment_instruction' => $attempt->metadata['payment_instruction'] ?? null,
                 'checkout_expires_at' => $attempt->checkout_expires_at?->toISOString(),
                 'transaction_id' => $attempt->merchant_reference,
                 'completed_at' => $attempt->completed_at?->toISOString(),

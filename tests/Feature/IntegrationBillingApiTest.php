@@ -204,6 +204,75 @@ class IntegrationBillingApiTest extends TestCase
             ->assertJsonPath('data.0.invoice_number', $invoice->invoice_number);
     }
 
+    public function test_integration_client_can_checkout_invoice_using_qris_and_view_qr_content(): void
+    {
+        [$application, $token] = $this->integrationToken();
+        $customer = ApplicationCustomer::factory()->create([
+            'application_id' => $application->id,
+            'external_customer_id' => 'SALON-QRIS-001',
+        ]);
+        $plan = SubscriptionPlan::factory()->create(['application_id' => $application->id, 'code' => 'QRIS-PLAN', 'price' => '150000.00']);
+        $invoice = Invoice::factory()->create([
+            'application_customer_id' => $customer->id,
+            'subscription_plan_id' => $plan->id,
+            'amount' => '150000.00',
+            'currency' => 'IDR',
+            'status' => Invoice::StatusPending,
+            'due_at' => now()->addDays(2),
+        ]);
+        ApplicationPaymentGateway::query()->create([
+            'application_id' => $application->id,
+            'provider' => 'dana',
+            'environment' => 'sandbox',
+            'gateway_merchant_code' => 'udev-demo',
+            'is_active' => true,
+        ]);
+
+        Http::fake(function (HttpRequest $request): mixed {
+            if ($request->method() === 'GET') {
+                return Http::response(['data' => []]);
+            }
+
+            $attempt = PaymentAttempt::query()->latest('attempt_number')->firstOrFail();
+
+            return Http::response(['data' => [
+                'id' => 'dana-sandbox-qris-001',
+                'merchant_order_id' => $attempt->merchant_reference,
+                'amount_minor' => 150000,
+                'currency' => 'IDR',
+                'status' => 'pending',
+                'checkout_url' => null,
+                'expires_at' => now()->addMinutes(15)->toISOString(),
+                'metadata' => [
+                    'udev_sandbox_payment_instruction' => [
+                        'method' => 'qris',
+                        'label' => 'QRIS',
+                        'type' => 'payment_code',
+                        'payment_code' => '00020101021226570011ID.DANA.WWW.QRIS.SAMPLE',
+                    ],
+                ],
+            ]]);
+        });
+
+        $this->withToken($token)
+            ->postJson("/api/v1/integrations/invoices/{$invoice->invoice_number}/checkout", [
+                'payment_method' => 'qris',
+            ], [
+                'Idempotency-Key' => 'checkout-invoice-qris-001',
+            ])
+            ->assertOk()
+            ->assertJsonPath('data.payment.provider', 'dana')
+            ->assertJsonPath('data.payment.payment_method', 'qris')
+            ->assertJsonPath('data.payment.checkout_status', 'ready')
+            ->assertJsonPath('data.payment.qr_content', '00020101021226570011ID.DANA.WWW.QRIS.SAMPLE');
+
+        $this->withToken($token)
+            ->getJson("/api/v1/integrations/invoices/{$invoice->invoice_number}")
+            ->assertOk()
+            ->assertJsonPath('data.payment.payment_method', 'qris')
+            ->assertJsonPath('data.payment.qr_content', '00020101021226570011ID.DANA.WWW.QRIS.SAMPLE');
+    }
+
     /** @return array{0: Application, 1: string} */
     private function integrationToken(): array
     {

@@ -30,6 +30,10 @@ class PaymentAttemptResource extends JsonResource
             'failure_code' => $this->failure_code,
             'failure_message' => $this->failure_message,
             'metadata' => $this->metadata,
+            'payment_method' => $this->metadata['payment_method'] ?? 'dana_wallet',
+            'qr_content' => $this->metadata['qr_content'] ?? $this->metadata['payment_code'] ?? null,
+            'payment_code' => $this->metadata['payment_code'] ?? null,
+            'payment_instruction' => $this->metadata['payment_instruction'] ?? null,
             'checkout_url' => $this->checkout_url,
             'checkout_expires_at' => $this->checkout_expires_at?->toISOString(),
             'checkout' => $this->whenLoaded('checkoutOutbox', fn (): ?array => $this->checkoutOutbox ? [

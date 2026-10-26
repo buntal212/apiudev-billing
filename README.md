@@ -7,6 +7,38 @@
 <a href="https://packagist.org/packages/laravel/framework"><img src="https://img.shields.io/packagist/l/laravel/framework" alt="License"></a>
 </p>
 
+## DANA Sandbox Reconciliation Scheduler
+
+Layanan `apiudev-billing` menyertakan scheduler otomatis untuk merekonsiliasi transaksi DANA Sandbox yang masih berstatus `initiated` atau `pending`.
+
+### Spesifikasi Perintah
+- **Perintah Artisan**: `php artisan payments:reconcile-pending {--limit=25}`
+- **Kelas Command**: [`App\Console\Commands\ReconcilePendingPayments`](app/Console/Commands/ReconcilePendingPayments.php)
+- **Registrasi Penjadwalan**: Terdaftar di [`bootstrap/app.php`](bootstrap/app.php) dengan frekuensi setiap menit (`everyMinute()`), diproteksi overlapping (`withoutOverlapping(1)`), dan dibatasi ke satu node (`onOneServer()`).
+
+### Alur Rekonsiliasi
+1. Scheduler memfilter `PaymentAttempt` dengan kriteria: provider `dana`, environment `sandbox`, memiliki `gateway_payment_id`, serta status `initiated` atau `pending`.
+2. [`App\Services\PaymentReconciliationService`](app/Services/PaymentReconciliationService.php) memanggil status transaksi langsung ke gateway DANA via `GET /api/v1/payments/{paymentId}/status`.
+3. Bila status gateway terkonfirmasi `paid`:
+   - Melakukan database locking transaksional (`lockForUpdate`).
+   - Membuat `PaymentAllocation` (idempoten via settlement key).
+   - Memperbarui status `Invoice` menjadi `paid` dan mencatat timestamp `paid_at`.
+   - Mengaktifkan atau memperpanjang langganan pelanggan via [`App\Services\SubscriptionService`](app/Services/SubscriptionService.php) serta mencatat `SubscriptionPeriodEvent`.
+4. Bila status gateway masih `pending`:
+   - Menerapkan exponential backoff (base 15s hingga max 900s, max 5 percobaan) sebelum diperiksa kembali.
+
+### Menjalankan Scheduler
+- **Pengembangan / Sandbox Lokal**:
+  ```bash
+  php artisan schedule:work
+  ```
+- **Staging / Produksi (Crontab Server)**:
+  ```crontab
+  * * * * * cd /path/to/apiudev-billing && php artisan schedule:run >> /dev/null 2>&1
+  ```
+
+---
+
 ## About Laravel
 
 Laravel is a web application framework with expressive, elegant syntax. We believe development must be an enjoyable and creative experience to be truly fulfilling. Laravel takes the pain out of development by easing common tasks used in many web projects, such as:

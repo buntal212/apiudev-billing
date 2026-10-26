@@ -17,7 +17,8 @@ class InvoiceCheckoutController extends Controller
     {
         $this->authorize('update', $invoice);
 
-        $attempt = $checkoutService->startCheckout($invoice, $request->validated('idempotency_key'));
+        $paymentMethod = (string) ($request->validated('payment_method') ?? 'dana_wallet');
+        $attempt = $checkoutService->startCheckout($invoice, $request->validated('idempotency_key'), $paymentMethod);
         $outbox = CheckoutOutboxMessage::query()
             ->where('payment_attempt_id', $attempt->getKey())
             ->first();
@@ -27,9 +28,12 @@ class InvoiceCheckoutController extends Controller
         }
 
         $resource = new InvoiceCheckoutResource($attempt, $outbox);
+        $isReady = $attempt->checkout_url !== null
+            || ! empty($attempt->metadata['qr_content'] ?? null)
+            || ! empty($attempt->metadata['payment_code'] ?? null);
 
         return $resource
             ->response()
-            ->setStatusCode($attempt->checkout_url === null ? Response::HTTP_ACCEPTED : Response::HTTP_OK);
+            ->setStatusCode($isReady ? Response::HTTP_OK : Response::HTTP_ACCEPTED);
     }
 }

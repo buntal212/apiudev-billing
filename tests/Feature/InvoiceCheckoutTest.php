@@ -284,6 +284,87 @@ class InvoiceCheckoutTest extends TestCase
     /** @param array<string, mixed> $attributes
      * @return array{0: Invoice, 1: Subscription|null}
      */
+    public function test_admin_can_checkout_with_qris_payment_method(): void
+    {
+        [$invoice] = $this->invoiceWithGateway();
+        Http::fake(function (HttpRequest $request): mixed {
+            if ($request->method() === 'GET') {
+                return Http::response(['data' => []]);
+            }
+
+            $attempt = PaymentAttempt::query()->sole();
+
+            return Http::response([
+                'data' => [
+                    'id' => 'gateway-qris-001',
+                    'merchant_order_id' => $attempt->merchant_reference,
+                    'amount_minor' => 10000,
+                    'currency' => 'IDR',
+                    'status' => 'pending',
+                    'checkout_url' => null,
+                    'expires_at' => now()->addMinutes(15)->toISOString(),
+                    'metadata' => [
+                        'udev_sandbox_payment_instruction' => [
+                            'method' => 'qris',
+                            'label' => 'QRIS',
+                            'type' => 'payment_code',
+                            'payment_code' => '00020101021226570011ID.DANA.WWW',
+                        ],
+                    ],
+                ],
+            ]);
+        });
+
+        $this->actingAdmin()
+            ->postJson("/api/v1/admin/invoices/{$invoice->id}/checkout", [
+                'payment_method' => 'qris',
+            ], ['Idempotency-Key' => 'checkout-qris-001'])
+            ->assertOk()
+            ->assertJsonPath('data.payment_method', 'qris')
+            ->assertJsonPath('data.checkout_status', 'ready')
+            ->assertJsonPath('data.qr_content', '00020101021226570011ID.DANA.WWW')
+            ->assertJsonPath('data.checkout_url', null);
+
+        $attempt = PaymentAttempt::query()->sole();
+        $this->assertSame('qris', $attempt->metadata['payment_method']);
+        $this->assertSame('00020101021226570011ID.DANA.WWW', $attempt->metadata['qr_content']);
+    }
+
+    public function test_checkout_handles_expired_attempt_and_creates_new_attempt_on_retry(): void
+    {
+        [$invoice] = $this->invoiceWithGateway();
+        $paymentId = 'gateway-payment-first';
+        Http::fake(function (HttpRequest $request) use (&$paymentId): mixed {
+            if ($request->method() === 'GET') {
+                return Http::response(['data' => []]);
+            }
+
+            $attempt = PaymentAttempt::query()->latest('attempt_number')->firstOrFail();
+
+            return Http::response([
+                'data' => $this->gatewayPayment($attempt, $paymentId),
+            ]);
+        });
+
+        $this->actingAdmin()
+            ->postJson("/api/v1/admin/invoices/{$invoice->id}/checkout", [], ['Idempotency-Key' => 'chk-exp-001'])
+            ->assertOk();
+
+        $attempt1 = PaymentAttempt::query()->firstOrFail();
+        $attempt1->update(['checkout_expires_at' => now()->subMinute()]);
+
+        // Second checkout should notice attempt1 is expired and create attempt 2 with new payment
+        $paymentId = 'gateway-payment-second';
+
+        $this->actingAdmin()
+            ->postJson("/api/v1/admin/invoices/{$invoice->id}/checkout", [], ['Idempotency-Key' => 'chk-exp-002'])
+            ->assertOk()
+            ->assertJsonPath('data.gateway_payment_id', 'gateway-payment-second');
+
+        $this->assertSame(PaymentAttempt::StatusExpired, $attempt1->fresh()->status);
+        $this->assertDatabaseCount('payment_attempts', 2);
+    }
+
     private function invoiceWithGateway(array $attributes = [], bool $withSubscription = false): array
     {
         $invoice = Invoice::factory()->create([
@@ -328,7 +409,7 @@ class InvoiceCheckoutTest extends TestCase
                 return Http::response(['data' => []]);
             }
 
-            $attempt = PaymentAttempt::query()->sole();
+            $attempt = PaymentAttempt::query()->latest('attempt_number')->firstOrFail();
 
             return Http::response([
                 'data' => $this->gatewayPayment($attempt, $gatewayPaymentId, $merchantOrderId),

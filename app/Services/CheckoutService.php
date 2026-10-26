@@ -20,9 +20,9 @@ class CheckoutService
         private DanaGatewayMerchantResolver $merchantResolver,
     ) {}
 
-    public function startCheckout(Invoice $invoice, string $requestIdempotencyKey): PaymentAttempt
+    public function startCheckout(Invoice $invoice, string $requestIdempotencyKey, string $paymentMethod = 'dana_wallet'): PaymentAttempt
     {
-        $outbox = $this->prepareCheckout($invoice, $requestIdempotencyKey);
+        $outbox = $this->prepareCheckout($invoice, $requestIdempotencyKey, $paymentMethod);
         $this->dispatch($outbox->getKey());
 
         return PaymentAttempt::query()->findOrFail($outbox->payment_attempt_id);
@@ -70,10 +70,10 @@ class CheckoutService
         return $outboxIds->count();
     }
 
-    private function prepareCheckout(Invoice $invoice, string $requestIdempotencyKey): CheckoutOutboxMessage
+    private function prepareCheckout(Invoice $invoice, string $requestIdempotencyKey, string $paymentMethod = 'dana_wallet'): CheckoutOutboxMessage
     {
         try {
-            return DB::transaction(function () use ($invoice, $requestIdempotencyKey): CheckoutOutboxMessage {
+            return DB::transaction(function () use ($invoice, $requestIdempotencyKey, $paymentMethod): CheckoutOutboxMessage {
                 $lockedInvoice = Invoice::query()
                     ->with('plan')
                     ->lockForUpdate()
@@ -86,6 +86,22 @@ class CheckoutService
                     ->lockForUpdate()
                     ->latest('attempt_number')
                     ->first();
+
+                if ($activeAttempt !== null) {
+                    if ($activeAttempt->checkout_expires_at !== null && $activeAttempt->checkout_expires_at->lessThanOrEqualTo(now())) {
+                        $activeAttempt->update([
+                            'status' => PaymentAttempt::StatusExpired,
+                            'completed_at' => now(),
+                        ]);
+                        $activeAttempt = null;
+                    } elseif (($activeAttempt->metadata['payment_method'] ?? 'dana_wallet') !== $paymentMethod) {
+                        $activeAttempt->update([
+                            'status' => PaymentAttempt::StatusCancelled,
+                            'completed_at' => now(),
+                        ]);
+                        $activeAttempt = null;
+                    }
+                }
 
                 if ($activeAttempt !== null) {
                     return CheckoutOutboxMessage::query()
@@ -131,6 +147,7 @@ class CheckoutService
                         'invoice_number' => $lockedInvoice->invoice_number,
                         'application_customer_id' => $lockedInvoice->application_customer_id,
                         'subscription_id' => $lockedInvoice->subscription_id,
+                        'payment_method' => $paymentMethod,
                     ],
                 ]);
 
@@ -189,6 +206,7 @@ class CheckoutService
             $gatewayPayment = $this->gatewayClient->findPaymentByMerchantOrderId($merchant, $attempt->merchant_reference);
 
             if ($gatewayPayment === null) {
+                $paymentMethod = $attempt->metadata['payment_method'] ?? 'dana_wallet';
                 $gatewayPayment = $this->gatewayClient->createPayment(
                     merchant: $merchant,
                     idempotencyKey: $claimed->idempotency_key,
@@ -198,6 +216,7 @@ class CheckoutService
                         'udev_invoice_id' => $attempt->invoice_id,
                         'udev_payment_attempt_id' => $attempt->getKey(),
                         'invoice_number' => $attempt->invoice->invoice_number,
+                        'udev_sandbox_payment_method' => $paymentMethod,
                     ],
                 );
             }
@@ -223,13 +242,23 @@ class CheckoutService
         $checkoutUrl = $gatewayPayment['checkout_url'] ?? null;
         $expiresAt = $gatewayPayment['expires_at'] ?? null;
 
+        $gatewayMetadata = is_array($gatewayPayment['metadata'] ?? null) ? $gatewayPayment['metadata'] : [];
+        $instruction = is_array($gatewayMetadata['udev_sandbox_payment_instruction'] ?? null)
+            ? $gatewayMetadata['udev_sandbox_payment_instruction']
+            : null;
+        $paymentCode = is_string($instruction['payment_code'] ?? null) && $instruction['payment_code'] !== ''
+            ? $instruction['payment_code']
+            : (is_string($gatewayMetadata['qr_content'] ?? null) ? $gatewayMetadata['qr_content'] : null);
+
+        $hasValidCheckoutUrl = is_string($checkoutUrl) && filter_var($checkoutUrl, FILTER_VALIDATE_URL);
+        $hasValidPaymentCode = is_string($paymentCode) && $paymentCode !== '';
+
         if (! is_string($gatewayPaymentId)
             || ! is_string($merchantOrderId)
             || ! is_int($gatewayAmount)
             || ! is_string($currency)
             || $status !== PaymentAttempt::StatusPending
-            || ! is_string($checkoutUrl)
-            || ! filter_var($checkoutUrl, FILTER_VALIDATE_URL)
+            || (! $hasValidCheckoutUrl && ! $hasValidPaymentCode)
             || ! is_string($expiresAt)) {
             throw new DanaGatewayException('Respons checkout gateway tidak lengkap.', false);
         }
@@ -239,7 +268,7 @@ class CheckoutService
             throw new DanaGatewayException('Checkout gateway sudah tidak valid.', false);
         }
 
-        DB::transaction(function () use ($claimed, $gatewayPaymentId, $merchantOrderId, $gatewayAmount, $currency, $checkoutUrl, $checkoutExpiresAt, $amountMinor): void {
+        DB::transaction(function () use ($claimed, $gatewayPaymentId, $merchantOrderId, $gatewayAmount, $currency, $checkoutUrl, $hasValidCheckoutUrl, $paymentCode, $instruction, $checkoutExpiresAt, $amountMinor): void {
             $outbox = CheckoutOutboxMessage::query()->lockForUpdate()->findOrFail($claimed->getKey());
             $attempt = PaymentAttempt::query()->lockForUpdate()->findOrFail($outbox->payment_attempt_id);
             $invoice = Invoice::query()->lockForUpdate()->findOrFail($attempt->invoice_id);
@@ -252,11 +281,21 @@ class CheckoutService
                 throw new DanaGatewayException('Referensi atau nominal gateway tidak cocok.', false);
             }
 
+            $currentMetadata = is_array($attempt->metadata) ? $attempt->metadata : [];
+            if ($paymentCode !== null) {
+                $currentMetadata['qr_content'] = $paymentCode;
+                $currentMetadata['payment_code'] = $paymentCode;
+            }
+            if ($instruction !== null) {
+                $currentMetadata['payment_instruction'] = $instruction;
+            }
+
             $attempt->update([
                 'gateway_payment_id' => $gatewayPaymentId,
-                'checkout_url' => $checkoutUrl,
+                'checkout_url' => $hasValidCheckoutUrl ? $checkoutUrl : null,
                 'checkout_expires_at' => $checkoutExpiresAt,
                 'status' => PaymentAttempt::StatusPending,
+                'metadata' => $currentMetadata,
             ]);
             $outbox->update([
                 'status' => CheckoutOutboxMessage::StatusCompleted,

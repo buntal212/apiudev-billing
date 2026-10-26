@@ -157,7 +157,8 @@ class IntegrationBillingController extends Controller
             ->first();
         abort_if($invoice === null, Response::HTTP_NOT_FOUND, 'Invoice tidak ditemukan pada aplikasi ini.');
 
-        $attempt = $checkout->startCheckout($invoice, $request->validated('idempotency_key'));
+        $paymentMethod = (string) ($request->validated('payment_method') ?? 'dana_wallet');
+        $attempt = $checkout->startCheckout($invoice, $request->validated('idempotency_key'), $paymentMethod);
         $invoice = $this->loadInvoice($invoice);
         $audits->record(
             request: $request,
@@ -166,13 +167,21 @@ class IntegrationBillingController extends Controller
             operation: 'invoice.checkout_started',
             status: 'succeeded',
             externalCustomerId: $invoice->customer->external_customer_id,
-            safeDetails: ['invoice_number' => $invoice->invoice_number, 'payment_attempt' => $attempt->attempt_number],
+            safeDetails: [
+                'invoice_number' => $invoice->invoice_number,
+                'payment_attempt' => $attempt->attempt_number,
+                'payment_method' => $paymentMethod,
+            ],
         );
+
+        $isReady = $attempt->checkout_url !== null
+            || ! empty($attempt->metadata['qr_content'] ?? null)
+            || ! empty($attempt->metadata['payment_code'] ?? null);
 
         return (new IntegrationInvoiceResource($invoice))
             ->additional(['request_id' => $request->attributes->get('integration_request_id')])
             ->response()
-            ->setStatusCode($attempt->checkout_url === null ? Response::HTTP_ACCEPTED : Response::HTTP_OK);
+            ->setStatusCode($isReady ? Response::HTTP_OK : Response::HTTP_ACCEPTED);
     }
 
     public function transactions(

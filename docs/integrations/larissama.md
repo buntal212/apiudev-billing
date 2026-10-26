@@ -243,10 +243,10 @@ Idempotency-Key: laris-inv-SALON-001-20261026-001
 
 ---
 
-## 6. Checkout DANA Sandbox
+## 6. Checkout DANA Sandbox (QRIS & DANA Wallet)
 
 ### `POST /invoices/{invoiceNumber}/checkout`
-Menginisialisasi sesi pembayaran dengan gateway DANA Sandbox.
+Menginisialisasi sesi pembayaran dengan gateway DANA Sandbox. Mendukung metode pembayaran QRIS (`payment_method: "qris"`) dan DANA Wallet Web Redirect (`payment_method: "dana_wallet"`).
 
 #### Header:
 ```http
@@ -255,16 +255,33 @@ Idempotency-Key: laris-chk-INV-20261026-SALON01-01
 
 #### Request Body:
 ```json
-{}
+{
+  "payment_method": "qris"
+}
 ```
+*Catatan: `payment_method` bersifat opsional; nilai yang didukung adalah `"qris"` (default & direkomendasikan) atau `"dana_wallet"`.*
 
-#### Mekanisme Kerja:
+#### Metode Pembayaran yang Didukung:
+1. **`qris` (Default & Rekomendasi Utama)**:
+   - Menghasilkan payload string QRIS standar EMVCo (`qr_content` / `payment_code`) dan objek instruksi pembayaran (`payment_instruction`).
+   - Larissama merender kode QR secara lokal di browser/aplikasi pelanggan (misal menggunakan library `qrcode`).
+   - Pelanggan memindai QR menggunakan aplikasi DANA atau e-wallet/mobile banking mana pun yang mendukung QRIS Sandbox.
+   - Sesi QRIS memiliki batas kedaluwarsa (`checkout_expires_at`).
+2. **`dana_wallet`**:
+   - Menghasilkan `checkout_url` untuk pengalihan (redirect) browser langsung ke antarmuka web DANA Sandbox.
+
+#### Mekanisme Kerja & State Lifecycle:
 1. UDEV Billing mencocokkan konfigurasi merchant DANA Sandbox aktif yang dialokasikan untuk Larissama.
-2. Membentuk entitas `PaymentAttempt` dan membuat outbox message secara transactional.
-3. Menghubungi DANA Sandbox Gateway untuk mendapatkan URL sesi checkout DANA (`checkout_url`).
-4. **Status invoice tetap `pending`**. Status invoice **tidak** berubah menjadi `paid` hanya karena sesi checkout berhasil dibuat atau pelanggan diarahkan ke DANA.
+2. Memeriksa sesi pembayaran aktif sebelumnya:
+   - Jika sesi sebelumnya sudah kedaluwarsa (`checkout_expires_at <= now()`), UDEV otomatis menandai attempt lama sebagai `expired` dan membuat sesi baru.
+   - Jika pelanggan mengganti metode pembayaran (misal dari DANA Wallet ke QRIS), attempt lama otomatis dibatalkan (`cancelled`) untuk memberi jalan pada attempt baru.
+3. Membentuk entitas `PaymentAttempt` dan membuat outbox message secara transactional.
+4. Menghubungi DANA Sandbox Gateway:
+   - Untuk QRIS: Meminta payload QRIS (`NETWORK_PAY` + `NETWORK_PAY_PG_QRIS`) dan menerima data string QRIS di `additionalInfo.paymentCode`.
+   - Untuk DANA Wallet: Meminta sesi checkout dan menerima `checkout_url`.
+5. **Status invoice tetap `pending`**. Status invoice **tidak pernah** berubah menjadi `paid` hanya karena sesi checkout berhasil dibuat atau kode QR ditampilkan. Pembayaran hanya sah setelah webhook konfirmasi pembayaran gateway terverifikasi.
 
-#### Contoh Respons (`200 OK` atau `202 Accepted`):
+#### Contoh Respons QRIS Ready (`200 OK` atau `202 Accepted`):
 ```json
 {
   "data": {
@@ -275,8 +292,16 @@ Idempotency-Key: laris-chk-INV-20261026-SALON01-01
     "payment": {
       "status": "pending",
       "provider": "dana",
+      "payment_method": "qris",
       "checkout_status": "ready",
-      "checkout_url": "https://sandbox.dana.id/checkout/order-session-uuid-001",
+      "checkout_url": null,
+      "qr_content": "00020101021226680014ID.DANA.WWW01189360091100220138240215INV20261026SALON015204581253033605802ID5914UDEV BILLING6007JAKARTA61051234062320115INV20261026SALON010708DANA00016304ABCD",
+      "payment_code": "00020101021226680014ID.DANA.WWW01189360091100220138240215INV20261026SALON015204581253033605802ID5914UDEV BILLING6007JAKARTA61051234062320115INV20261026SALON010708DANA00016304ABCD",
+      "payment_instruction": {
+        "instruction_type": "payment_code",
+        "payment_code": "00020101021226680014ID.DANA.WWW01189360091100220138240215INV20261026SALON015204581253033605802ID5914UDEV BILLING6007JAKARTA61051234062320115INV20261026SALON010708DANA00016304ABCD",
+        "expires_at": "2026-10-26T15:00:00.000000Z"
+      },
       "checkout_expires_at": "2026-10-26T15:00:00.000000Z",
       "transaction_id": "INV-20261026-SALON01-A1",
       "completed_at": null,
@@ -288,8 +313,43 @@ Idempotency-Key: laris-chk-INV-20261026-SALON01-01
 }
 ```
 
-> [!TIP]
-> **Alur Pengguna**: Arahkan browser pelanggan Larissama ke `checkout_url`. Setelah menyelesaikan input PIN/OTP di portal DANA Sandbox, DANA akan mengalihkan pengguna kembali ke aplikasi Larissama.
+#### Contoh Respons DANA Wallet (`200 OK` atau `202 Accepted`):
+```json
+{
+  "data": {
+    "invoice_number": "INV-20261026-SALON01",
+    "status": "pending",
+    "period_count": 3,
+    "duration_days": 90,
+    "payment": {
+      "status": "pending",
+      "provider": "dana",
+      "payment_method": "dana_wallet",
+      "checkout_status": "ready",
+      "checkout_url": "https://sandbox.dana.id/checkout/order-session-uuid-001",
+      "qr_content": null,
+      "payment_code": null,
+      "payment_instruction": null,
+      "checkout_expires_at": "2026-10-26T15:00:00.000000Z",
+      "transaction_id": "INV-20261026-SALON01-A2",
+      "completed_at": null,
+      "failure_code": null
+    },
+    "subscription": null
+  },
+  "request_id": "req-01HZY17G3..."
+}
+```
+
+#### Siklus Status Percobaan Pembayaran (Payment Attempt Lifecycle):
+- **`pending`**: Sesi QRIS atau DANA Wallet sedang aktif dan menunggu pembayaran pelanggan.
+- **`succeeded`**: Gateway DANA mengonfirmasi dana telah berhasil ditarik/diterima. Invoice berstatus `paid` dan langganan aktif.
+- **`failed`**: Pembayaran ditolak oleh gateway atau dibatalkan.
+- **`expired`**: Waktu `checkout_expires_at` telah terlewati sebelum pembayaran selesai. Klien dapat memicu retry checkout.
+- **`cancelled`**: Attempt dibatalkan karena ada inisiasi pembayaran baru dengan metode berbeda.
+
+#### Penanganan QR Kedaluwarsa & Retry Checkout:
+Jika kode QR kedaluwarsa (waktu habis pada countdown), antarmuka klien harus menampilkan tombol **"Coba lagi / Buat QR Baru"**. Pemanggilan ulang endpoint checkout dengan `payment_method: "qris"` akan membatalkan sesi lama yang expired dan menghasilkan kode QRIS baru dengan masa aktif yang baru.
 
 ---
 
@@ -326,8 +386,17 @@ Mengambil status terkini dari invoice, status percobaan pembayaran, dan subscrip
     "payment": {
       "status": "succeeded",
       "provider": "dana",
+      "payment_method": "qris",
       "checkout_status": "ready",
-      "checkout_url": "https://sandbox.dana.id/checkout/order-session-uuid-001",
+      "checkout_url": null,
+      "qr_content": "00020101021226680014ID.DANA.WWW...",
+      "payment_code": "00020101021226680014ID.DANA.WWW...",
+      "payment_instruction": {
+        "instruction_type": "payment_code",
+        "payment_code": "00020101021226680014ID.DANA.WWW...",
+        "expires_at": "2026-10-26T15:00:00.000000Z"
+      },
+      "checkout_expires_at": "2026-10-26T15:00:00.000000Z",
       "transaction_id": "INV-20261026-SALON01-A1",
       "completed_at": "2026-10-26T14:35:12.000000Z",
       "failure_code": null
@@ -400,16 +469,42 @@ UDEV Billing menerapkan aturan masa aktif subscription sebagai berikut:
 
 ## 10. Panduan Integrasi Backend (Laravel)
 
-### Service Client: `app/Services/UdevBillingClient.php`
+### 10.1. Konfigurasi Environment (`config/services.php`)
+
+Kredensial integrasi hanya disimpan di backend server Larissama (`.env`):
+
+```dotenv
+UDEV_BILLING_URL=https://billing.udev.test
+UDEV_INTEGRATION_TOKEN=udev_app_live_xxxxxxxxxxxxxxxxxxxxxxxx
+```
+
+Konfigurasi di `config/services.php`:
+
+```php
+'udev' => [
+    'base_url' => env('UDEV_BILLING_URL', 'https://billing.udev.test'),
+    'integration_token' => env('UDEV_INTEGRATION_TOKEN'),
+    'token' => env('UDEV_CUSTOMERS_TOKEN'),
+],
+```
+
+---
+
+### 10.2. Service Client: `app/Services/UdevBillingClient.php`
 
 ```php
 <?php
 
 namespace App\Services;
 
+use App\Actions\Udev\UdevCustomerConsentNotice;
+use App\Models\User;
+use App\Models\Warung;
+use App\Models\WarungCustomerSync;
 use Illuminate\Http\Client\PendingRequest;
 use Illuminate\Http\Client\Response;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Str;
 use RuntimeException;
 
 class UdevBillingClient
@@ -419,13 +514,22 @@ class UdevBillingClient
 
     public function __construct()
     {
-        $this->baseUrl = (string) config('services.udev.base_url');
-        $this->token = (string) config('services.udev.integration_token');
+        $this->baseUrl = (string) (config('services.udev.base_url') ?? '');
+        $this->token = (string) (config('services.udev.integration_token') ?? config('services.udev.token') ?? '');
+    }
+
+    public function isConfigured(): bool
+    {
+        return ! empty($this->baseUrl) && ! empty($this->token);
     }
 
     private function http(): PendingRequest
     {
-        return Http::baseUrl($this->baseUrl . '/api/v1/integrations')
+        if (! $this->isConfigured()) {
+            throw new RuntimeException('Integrasi UDEV Billing belum dikonfigurasi di Larissama.');
+        }
+
+        return Http::baseUrl(rtrim($this->baseUrl, '/').'/api/v1/integrations')
             ->withToken($this->token)
             ->acceptJson()
             ->asJson()
@@ -435,7 +539,43 @@ class UdevBillingClient
     public function getPlans(): array
     {
         $response = $this->http()->get('/subscription-plans');
+
         return $this->unwrap($response);
+    }
+
+    public function ensureCustomer(Warung $warung, User $owner): WarungCustomerSync
+    {
+        $sync = WarungCustomerSync::query()->where('warung_id', $warung->id)->first();
+        if ($sync === null) {
+            $sync = WarungCustomerSync::query()->create([
+                'warung_id' => $warung->id,
+                'owner_user_id' => $owner->id,
+                'external_customer_id' => 'larissama-'.Str::ulid(),
+                'status' => 'pending',
+                'notice_version' => UdevCustomerConsentNotice::VERSION,
+                'consented_at' => now(),
+            ]);
+        }
+
+        if ($sync->status !== 'synced') {
+            try {
+                $response = $this->http()->post('/customers', [
+                    'external_customer_id' => $sync->external_customer_id,
+                    'name' => $warung->nama,
+                    'owner_name' => $owner->nama,
+                    'email' => $owner->email,
+                    'phone' => $warung->telepon,
+                    'status' => 'active',
+                ]);
+                if ($response->successful()) {
+                    $sync->update(['status' => 'synced', 'last_success_at' => now()]);
+                }
+            } catch (\Throwable) {
+                // Biarkan tetap menggunakan sync record yang ada jika terjadi kendala jaringan sementara
+            }
+        }
+
+        return $sync;
     }
 
     public function previewInvoice(string $externalCustomerId, string $planCode, int $periodCount = 1): array
@@ -444,54 +584,70 @@ class UdevBillingClient
             'subscription_plan_code' => $planCode,
             'period_count' => $periodCount,
         ]);
+
         return $this->unwrap($response);
     }
 
     public function createInvoice(
         string $externalCustomerId,
         string $planCode,
-        int $periodCount,
-        string $dueAtIso,
-        string $idempotencyKey
+        int $periodCount = 1,
+        ?string $idempotencyKey = null,
+        ?string $dueAt = null
     ): array {
+        $idempotencyKey ??= 'laris-inv-'.$externalCustomerId.'-'.Str::uuid();
+        $dueAt ??= now()->addDays(2)->toIso8601String();
+
         $response = $this->http()
             ->withHeader('Idempotency-Key', $idempotencyKey)
             ->post("/customers/{$externalCustomerId}/invoices", [
                 'subscription_plan_code' => $planCode,
                 'period_count' => $periodCount,
-                'due_at' => $dueAtIso,
+                'due_at' => $dueAt,
             ]);
+
         return $this->unwrap($response);
     }
 
-    public function startCheckout(string $invoiceNumber, string $idempotencyKey): array
-    {
+    public function checkoutInvoice(
+        string $invoiceNumber,
+        ?string $idempotencyKey = null,
+        string $paymentMethod = 'qris'
+    ): array {
+        $idempotencyKey ??= 'laris-chk-'.$invoiceNumber.'-'.Str::uuid();
+
         $response = $this->http()
             ->withHeader('Idempotency-Key', $idempotencyKey)
-            ->post("/invoices/{$invoiceNumber}/checkout");
+            ->post("/invoices/{$invoiceNumber}/checkout", [
+                'payment_method' => $paymentMethod,
+            ]);
+
         return $this->unwrap($response);
     }
 
     public function getInvoice(string $invoiceNumber): array
     {
         $response = $this->http()->get("/invoices/{$invoiceNumber}");
+
         return $this->unwrap($response);
     }
 
     public function getCustomerSubscription(string $externalCustomerId): array
     {
         $response = $this->http()->get("/customers/{$externalCustomerId}/subscription");
+
         return $this->unwrap($response);
     }
 
     private function unwrap(Response $response): array
     {
-        if ($response->failed()) {
+        if (! $response->successful()) {
             throw new RuntimeException(
-                $response->json('message') ?? 'Gagal berkomunikasi dengan UDEV Billing: HTTP ' . $response->status(),
+                $response->json('message') ?? 'Permintaan ke UDEV Billing gagal dengan status '.$response->status(),
                 $response->status()
             );
         }
+
         return $response->json('data') ?? [];
     }
 }
@@ -499,246 +655,104 @@ class UdevBillingClient
 
 ---
 
+### 10.3. Controller Internal Larissama: `SubscriptionPaymentController.php`
+
+Controller ini mengamankan akses pembelian langganan warung (hanya role `owner`), menjembatani panggilan ke UDEV Billing, serta menyinkronkan `tanggal_berakhir` warung saat pembayaran invoice berstatus `paid`:
+
+```php
+// Route API di routes/api.php
+Route::middleware(['auth:sanctum'])->prefix('v1/subscription')->group(function () {
+    Route::get('current', [SubscriptionPaymentController::class, 'current']);
+    Route::post('preview', [SubscriptionPaymentController::class, 'preview']);
+    Route::post('order', [SubscriptionPaymentController::class, 'order']);
+    Route::get('status/{invoiceNumber}', [SubscriptionPaymentController::class, 'status']);
+    Route::post('retry/{invoiceNumber}', [SubscriptionPaymentController::class, 'retry']);
+});
+```
+
+> [!NOTE]
+> Pada middleware `EnsureActiveAccount.php`, route dengan prefix `api.v1.subscription.*` dikecualikan dari pemblokiran akun kedaluwarsa sehingga pemilik warung yang masa aktifnya habis dapat langsung memperpanjang langganan.
+
+---
+
 ## 11. Panduan Integrasi Frontend (Quasar Framework / Vue 3)
 
-### Store Pinia: `src/stores/billing.js`
+### 11.1. Service API Klien: `src/services/larisama-api.js`
 
 ```javascript
-import { defineStore } from 'pinia';
 import { api } from 'boot/axios';
 
-export const useBillingStore = defineStore('billing', {
-  state: () => ({
-    plans: [],
-    loading: false,
-    selectedPlan: null,
-    periodCount: 1,
-    preview: null,
-    currentInvoice: null,
-    checkoutUrl: null,
-    pollTimer: null,
-  }),
-
-  actions: {
-    async fetchPlans() {
-      this.loading = true;
-      try {
-        const { data } = await api.get('/api/billing/plans');
-        this.plans = data;
-      } finally {
-        this.loading = false;
-      }
-    },
-
-    async loadPreview(customerId, planCode, periodCount) {
-      const { data } = await api.post(`/api/billing/customers/${customerId}/preview`, {
-        plan_code: planCode,
-        period_count: periodCount,
-      });
-      this.preview = data;
-    },
-
-    async submitOrderAndCheckout(customerId) {
-      this.loading = true;
-      try {
-        // Backend Larissama membuat invoice ke UDEV Billing dan langsung menginisiasi checkout
-        const { data } = await api.post(`/api/billing/customers/${customerId}/order`, {
-          plan_code: this.selectedPlan.code,
-          period_count: this.periodCount,
-        });
-
-        this.currentInvoice = data.invoice;
-        this.checkoutUrl = data.checkout_url;
-
-        if (this.checkoutUrl) {
-          window.open(this.checkoutUrl, '_blank');
-          this.startStatusPolling(this.currentInvoice.invoice_number);
-        }
-      } finally {
-        this.loading = false;
-      }
-    },
-
-    startStatusPolling(invoiceNumber) {
-      if (this.pollTimer) clearInterval(this.pollTimer);
-
-      this.pollTimer = setInterval(async () => {
-        const { data } = await api.get(`/api/billing/invoices/${invoiceNumber}`);
-        this.currentInvoice = data;
-
-        if (data.status === 'paid' || data.status === 'failed') {
-          clearInterval(this.pollTimer);
-          this.pollTimer = null;
-        }
-      }, 4000);
-    },
-
-    stopPolling() {
-      if (this.pollTimer) {
-        clearInterval(this.pollTimer);
-        this.pollTimer = null;
-      }
-    },
+export const subscriptionService = {
+  getCurrent() {
+    return api.get('/api/v1/subscription/current').then(r => r.data.data);
   },
-});
+  preview(planCode, periodCount) {
+    return api.post('/api/v1/subscription/preview', {
+      subscription_plan_code: planCode,
+      period_count: periodCount,
+    }).then(r => r.data.data);
+  },
+  order(planCode, periodCount, paymentMethod = 'qris') {
+    return api.post('/api/v1/subscription/order', {
+      subscription_plan_code: planCode,
+      period_count: periodCount,
+      payment_method: paymentMethod,
+    }).then(r => r.data.data);
+  },
+  getStatus(invoiceNumber) {
+    return api.get(`/api/v1/subscription/status/${invoiceNumber}`).then(r => r.data.data);
+  },
+  retry(invoiceNumber, paymentMethod = 'qris') {
+    return api.post(`/api/v1/subscription/retry/${invoiceNumber}`, {
+      payment_method: paymentMethod,
+    }).then(r => r.data.data);
+  },
+};
 ```
 
-### Komponen Dialog Pembelian: `src/components/SubscriptionCheckoutDialog.vue`
+---
 
-```vue
-<template>
-  <q-dialog v-model="isOpen" persistent>
-    <q-card style="min-width: 480px; max-width: 90vw" class="q-pa-md">
-      <q-card-section class="row items-center q-pb-none">
-        <div class="text-h6 text-weight-bold">Beli Langganan Larissama</div>
-        <q-space />
-        <q-btn icon="close" flat round dense v-close-popup />
-      </q-card-section>
+### 11.2. Alur Render QRIS & Polling Status
 
-      <q-card-section class="q-gutter-y-md">
-        <!-- Pilihan Paket -->
-        <q-select
-          v-model="store.selectedPlan"
-          :options="store.plans"
-          option-label="name"
-          label="Pilih Paket"
-          outlined
-          dense
-          @update:model-value="onSelectionChange"
-        />
+Untuk merender QRIS secara lokal di browser Quasar:
+1. Pasang library pembentuk QR: `pnpm add qrcode`.
+2. Gunakan `QRCode.toDataURL(payload, options)` untuk mengubah string `qr_content` menjadi gambar format PNG Data URL:
 
-        <!-- Pilihan Periode (1-12 Bulan) -->
-        <div>
-          <div class="text-caption text-weight-medium q-mb-xs">
-            Jumlah Periode (1 Periode = 30 Hari)
-          </div>
-          <q-slider
-            v-model="store.periodCount"
-            :min="1"
-            :max="12"
-            :step="1"
-            markers
-            snap
-            label
-            :label-value="`${store.periodCount} Bulan (${store.periodCount * 30} Hari)`"
-            color="primary"
-            @change="onSelectionChange"
-          />
-        </div>
+```javascript
+import QRCode from 'qrcode';
 
-        <!-- Rincian Preview Harga -->
-        <q-banner v-if="store.preview" rounded class="bg-blue-1 text-dark q-pa-sm">
-          <div class="row justify-between text-caption q-mb-xs">
-            <span>Harga Paket:</span>
-            <span>Rp {{ formatRupiah(store.preview.pricing.unit_price) }} / 30 hari</span>
-          </div>
-          <div class="row justify-between text-caption q-mb-xs">
-            <span>Durasi Total:</span>
-            <span>{{ store.preview.plan.duration_days }} Hari ({{ store.periodCount }} Periode)</span>
-          </div>
-          <q-separator class="q-my-xs" />
-          <div class="row justify-between text-subtitle2 text-weight-bold">
-            <span>Total Tagihan:</span>
-            <span class="text-primary">Rp {{ formatRupiah(store.preview.pricing.final_price) }}</span>
-          </div>
-        </q-banner>
-      </q-card-section>
-
-      <q-card-actions align="right" class="q-pt-md">
-        <q-btn flat label="Batal" color="grey" v-close-popup />
-        <q-btn
-          unelevated
-          color="primary"
-          icon="payment"
-          label="Bayar via DANA Sandbox"
-          :loading="store.loading"
-          :disable="!store.selectedPlan || store.loading"
-          @click="onCheckoutClick"
-        />
-      </q-card-actions>
-    </q-card>
-  </q-dialog>
-</template>
-
-<script setup>
-import { ref } from 'vue';
-import { useBillingStore } from 'src/stores/billing';
-
-const props = defineProps({
-  customerId: { type: String, required: true },
-});
-
-const store = useBillingStore();
-const isOpen = ref(false);
-
-function onSelectionChange() {
-  if (store.selectedPlan) {
-    store.loadPreview(props.customerId, store.selectedPlan.code, store.periodCount);
-  }
+async function generateQrImage(qrPayload) {
+  return await QRCode.toDataURL(qrPayload, {
+    width: 280,
+    margin: 2,
+    color: { dark: '#0b1d3a', light: '#ffffff' },
+  });
 }
-
-async function onCheckoutClick() {
-  await store.submitOrderAndCheckout(props.customerId);
-}
-
-function formatRupiah(num) {
-  return Number(num || 0).toLocaleString('id-ID');
-}
-</script>
 ```
+
+3. **Mekanisme Polling & Countdown Timer**:
+   - Saat sesi checkout QRIS dibuka, mulai countdown timer berdurasi sesuai `checkout_expires_at`.
+   - Jalankan interval polling status setiap 3.5 detik ke endpoint status invoice.
+   - Ketika status invoice berubah menjadi `paid`:
+     - Hentikan polling dan countdown timer.
+     - Tampilkan notifikasi sukses dan perbarui tampilan masa aktif warung.
+   - Jika waktu habis sebelum pembayaran selesai (`expired`):
+     - Tampilkan status kedaluwarsa pada dialog.
+     - Sediakan tombol **"Coba lagi / Buat QR Baru"** yang memanggil endpoint `retry` untuk mendapatkan kode QR baru tanpa membuat invoice baru.
 
 ---
 
 ## 12. Checklist Audit Pra-Deployment Larissama
 
 - [x] **Global Integration Token**: Token terpasang di environment backend server dan terisolasi dari browser.
+- [x] **Metode Pembayaran QRIS**: Mendukung checkout QRIS DANA Sandbox dan rendering QR lokal via `qrcode`.
 - [x] **Periode 1–12 Bulan**: Validasi backend dan slider UI membatasi `period_count` hanya antara 1 hingga 12.
 - [x] **Kalkulasi 30 Hari**: Total hari aktif dihitung tepat $30 \times \text{period\_count}$.
-- [x] **Kedaulatan Nominal**: Nominal invoice dihitung dari harga dasar paket dikalikan jumlah periode.
+- [x] **Kedaulatan Nominal**: Nominal invoice dihitung dari harga dasar paket dikalikan jumlah periode oleh UDEV.
 - [x] **Pencegahan Invoice Ganda**: Header `Idempotency-Key` diterapkan di setiap pembuatan invoice dan sesi checkout.
 - [x] **Keabsahan Settlement**: Invoice hanya menjadi `paid` setelah konfirmasi gateway DANA terverifikasi resmi.
 - [x] **Retensi Sisa Masa Aktif**: Perpanjangan dan pergantian paket mengakumulasikan seluruh sisa hari aktif pelanggan.
-- [x] **Kegagalan Terisolasi**: Pembayaran yang gagal atau dibatalkan di DANA Sandbox tidak memotong atau mengubah subscription pelanggan.
+- [x] **Kegagalan & Kedaluwarsa Terisolasi**: Sesi QR yang expired atau pembayaran yang gagal di DANA Sandbox tidak memotong atau mengubah subscription pelanggan.
 - [x] **Integritas Modul**: Modul gateway `dana-payment` dan konfigurasi environment production tidak diubah.
 
-<script setup>
-import { ref } from 'vue';
-import { useBillingStore } from 'src/stores/billing';
-
-const props = defineProps({
-  customerId: { type: String, required: true },
-});
-
-const store = useBillingStore();
-const isOpen = ref(false);
-
-function onSelectionChange() {
-  if (store.selectedPlan) {
-    store.loadPreview(props.customerId, store.selectedPlan.code, store.periodCount);
-  }
-}
-
-async function onCheckoutClick() {
-  await store.submitOrderAndCheckout(props.customerId);
-}
-
-function formatRupiah(num) {
-  return Number(num || 0).toLocaleString('id-ID');
-}
-</script>
-```
-
----
-
-## 12. Checklist Audit Pra-Deployment Larissama
-
-- [x] **Global Integration Token**: Token terpasang di environment backend server dan terisolasi dari browser.
-- [x] **Periode 1–12 Bulan**: Validasi backend dan slider UI membatasi `period_count` hanya antara 1 hingga 12.
-- [x] **Kalkulasi 30 Hari**: Total hari aktif dihitung tepat $30 \times \text{period\_count}$.
-- [x] **Kedaulatan Nominal**: Nominal invoice dihitung dari harga dasar paket dikalikan jumlah periode.
-- [x] **Pencegahan Invoice Ganda**: Header `Idempotency-Key` diterapkan di setiap pembuatan invoice dan sesi checkout.
-- [x] **Keabsahan Settlement**: Invoice hanya menjadi `paid` setelah konfirmasi gateway DANA terverifikasi resmi.
-- [x] **Retensi Sisa Masa Aktif**: Perpanjangan dan pergantian paket mengakumulasikan seluruh sisa hari aktif pelanggan.
-- [x] **Kegagalan Terisolasi**: Pembayaran yang gagal atau dibatalkan di DANA Sandbox tidak memotong atau mengubah subscription pelanggan.
-- [x] **Integritas Modul**: Modul gateway `dana-payment` dan konfigurasi environment production tidak diubah.
 

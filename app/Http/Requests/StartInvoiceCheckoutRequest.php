@@ -18,6 +18,7 @@ class StartInvoiceCheckoutRequest extends ApiFormRequest
     {
         return [
             'idempotency_key' => ['required', 'string', 'max:64', 'regex:/^[A-Za-z0-9][A-Za-z0-9._-]*$/'],
+            'payment_method' => ['nullable', 'string', 'in:dana_wallet,qris'],
             'amount' => ['prohibited'],
             'currency' => ['prohibited'],
             'merchant' => ['prohibited'],
