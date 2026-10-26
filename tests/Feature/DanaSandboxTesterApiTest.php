@@ -83,8 +83,25 @@ class DanaSandboxTesterApiTest extends TestCase
         $this->withHeader('Idempotency-Key', 'frontend-sandbox-tester-unknown-422')
             ->postJson($this->transactionUrl($merchant->gateway_merchant_id), ['amount_minor' => 10_000, 'payment_method' => 'dana_wallet'])
             ->assertUnprocessable()
-            ->assertJsonPath('message', 'Data provisioning merchant ditolak oleh gateway.')
+            ->assertJsonPath('message', 'Data transaksi Sandbox ditolak oleh gateway.')
             ->assertDontSee('Pesan internal yang tidak boleh diteruskan.');
+    }
+
+    public function test_tester_maps_gateway_transaction_conflicts_without_calling_them_provisioning_conflicts(): void
+    {
+        $merchant = $this->sandboxProvisionedMerchant();
+        Http::fake([
+            "https://dana-gateway.test/api/v1/internal/merchants/{$merchant->gateway_merchant_id}/sandbox-tester/transactions" => Http::response([
+                'message' => 'Idempotency-Key sudah digunakan untuk payload yang berbeda.',
+            ], 409),
+        ]);
+        $this->actingAdmin();
+
+        $this->withHeader('Idempotency-Key', 'frontend-sandbox-tester-conflict-001')
+            ->postJson($this->transactionUrl($merchant->gateway_merchant_id), ['amount_minor' => 10_000, 'payment_method' => 'va_bri'])
+            ->assertConflict()
+            ->assertJsonPath('message', 'Konflik transaksi Sandbox: Idempotency-Key atau referensi transaksi sudah digunakan untuk payload berbeda.')
+            ->assertDontSee('provisioning merchant');
     }
 
     public function test_validation_only_returns_safe_configuration_metadata_and_audits_the_result(): void

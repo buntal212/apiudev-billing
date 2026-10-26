@@ -151,7 +151,7 @@ class DanaMerchantProvisioningClient
             ->withHeaders(['Idempotency-Key' => $idempotencyKey])
             ->post("/api/v1/internal/merchants/{$merchantId}/sandbox-tester/transactions", $attributes));
 
-        return $this->sandboxTesterTransaction($this->decodeSuccessfulResponse($response)['data'] ?? null);
+        return $this->sandboxTesterTransaction($this->decodeSandboxTesterTransactionResponse($response)['data'] ?? null);
     }
 
     /** @return array<string, mixed> */
@@ -365,6 +365,22 @@ class DanaMerchantProvisioningClient
         return $body;
     }
 
+    /** @return array<string, mixed> */
+    private function decodeSandboxTesterTransactionResponse(Response $response): array
+    {
+        if (! $response->successful()) {
+            throw $this->sandboxTesterTransactionExceptionFor($response);
+        }
+
+        $body = $response->json();
+
+        if (! is_array($body)) {
+            throw new DanaMerchantProvisioningException('Respons transaksi tester Sandbox tidak valid.', 502, false, $response->status());
+        }
+
+        return $body;
+    }
+
     private function exceptionFor(Response $response): DanaMerchantProvisioningException
     {
         return match ($response->status()) {
@@ -374,6 +390,26 @@ class DanaMerchantProvisioningClient
             401, 403 => new DanaMerchantProvisioningException('Autentikasi provisioning merchant gateway gagal.', 502, false, $response->status()),
             429 => new DanaMerchantProvisioningException('Gateway provisioning merchant sedang membatasi permintaan. Coba lagi nanti.', 503, true, 429, $response->header('Retry-After')),
             default => new DanaMerchantProvisioningException('Gateway provisioning merchant sedang mengalami gangguan.', 503, true, $response->status()),
+        };
+    }
+
+    private function sandboxTesterTransactionExceptionFor(Response $response): DanaMerchantProvisioningException
+    {
+        return match ($response->status()) {
+            409 => new DanaMerchantProvisioningException(
+                $this->safeSandboxTesterConflictMessage($response)
+                    ?? 'Konflik transaksi Sandbox. Gunakan Idempotency-Key yang sama hanya untuk retry dengan payload identik.',
+                409,
+                false,
+                409,
+            ),
+            422 => new DanaMerchantProvisioningException(
+                $this->safeSandboxTesterValidationMessage($response) ?? 'Data transaksi Sandbox ditolak oleh gateway.',
+                422,
+                false,
+                422,
+            ),
+            default => $this->exceptionFor($response),
         };
     }
 
@@ -389,6 +425,18 @@ class DanaMerchantProvisioningClient
             'QRIS Sandbox memerlukan External Store ID pada konfigurasi merchant.',
             'Idempotency-Key sudah digunakan untuk transaksi Sandbox yang berbeda.',
         ], true) ? $message : null;
+    }
+
+    private function safeSandboxTesterConflictMessage(Response $response): ?string
+    {
+        $message = $response->json('message');
+
+        return in_array($message, [
+            'Idempotency-Key sudah digunakan untuk payload yang berbeda.',
+            'merchant_order_id atau Idempotency-Key sudah digunakan.',
+        ], true)
+            ? 'Konflik transaksi Sandbox: Idempotency-Key atau referensi transaksi sudah digunakan untuk payload berbeda.'
+            : null;
     }
 
     private function safeProvisioningConflictMessage(Response $response): ?string
