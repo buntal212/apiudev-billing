@@ -100,8 +100,32 @@ class DanaSandboxTesterApiTest extends TestCase
         $this->withHeader('Idempotency-Key', 'frontend-sandbox-tester-conflict-001')
             ->postJson($this->transactionUrl($merchant->gateway_merchant_id), ['amount_minor' => 10_000, 'payment_method' => 'va_bri'])
             ->assertConflict()
-            ->assertJsonPath('message', 'Konflik transaksi Sandbox: Idempotency-Key atau referensi transaksi sudah digunakan untuk payload berbeda.')
+            ->assertJsonPath('message', 'Konflik idempotensi transaksi Sandbox: key hanya dapat dipakai ulang untuk payload yang identik.')
             ->assertDontSee('provisioning merchant');
+
+        $this->assertDatabaseHas('dana_merchant_provisioning_audits', [
+            'gateway_merchant_id' => $merchant->gateway_merchant_id,
+            'operation' => 'dana_sandbox_tester.transaction_created',
+            'status' => 'failed',
+            'gateway_status' => 409,
+        ]);
+        $this->assertSame('idempotency_conflict', DanaMerchantProvisioningAudit::query()->latest('id')->value('safe_details')['error_context']);
+    }
+
+    public function test_tester_distinguishes_a_merchant_order_conflict_from_an_idempotency_conflict(): void
+    {
+        $merchant = $this->sandboxProvisionedMerchant();
+        Http::fake([
+            "https://dana-gateway.test/api/v1/internal/merchants/{$merchant->gateway_merchant_id}/sandbox-tester/transactions" => Http::response([
+                'message' => 'merchant_order_id sudah digunakan.',
+            ], 409),
+        ]);
+        $this->actingAdmin();
+
+        $this->withHeader('Idempotency-Key', 'frontend-sandbox-tester-order-conflict-001')
+            ->postJson($this->transactionUrl($merchant->gateway_merchant_id), ['amount_minor' => 10_000, 'payment_method' => 'va_bri'])
+            ->assertConflict()
+            ->assertJsonPath('message', 'Konflik referensi transaksi Sandbox: referensi order sudah digunakan oleh transaksi lain.');
     }
 
     public function test_validation_only_returns_safe_configuration_metadata_and_audits_the_result(): void

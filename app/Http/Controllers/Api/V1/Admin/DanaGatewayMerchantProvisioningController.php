@@ -204,7 +204,8 @@ class DanaGatewayMerchantProvisioningController extends Controller
         } catch (DanaMerchantProvisioningException $exception) {
             $this->recordManagementAudit($request, $merchant, 'dana_sandbox_tester.transaction_created', 'failed', $exception->gatewayStatus, $exception->retryable, array_filter([
                 'payment_id' => is_array($result) && is_array($result['transaction'] ?? null) && is_string($result['transaction']['id'] ?? null) ? $result['transaction']['id'] : null,
-            ]));
+                ...$this->sandboxTransactionFailureDetails($exception),
+            ]), $request->idempotencyKey());
 
             return $this->gatewayError($exception)->header('Cache-Control', 'no-store');
         }
@@ -569,6 +570,19 @@ class DanaGatewayMerchantProvisioningController extends Controller
         }
 
         return $response;
+    }
+
+    /** @return array{error_context: string, retryable: bool} */
+    private function sandboxTransactionFailureDetails(DanaMerchantProvisioningException $exception): array
+    {
+        $context = match ($exception->getMessage()) {
+            'Konflik idempotensi transaksi Sandbox: key hanya dapat dipakai ulang untuk payload yang identik.' => 'idempotency_conflict',
+            'Konflik referensi transaksi Sandbox: referensi order sudah digunakan oleh transaksi lain.' => 'merchant_order_conflict',
+            'Konflik penyimpanan transaksi Sandbox. Coba buat tindakan baru.' => 'transaction_storage_conflict',
+            default => $exception->status === 409 ? 'transaction_conflict' : 'transaction_request_failed',
+        };
+
+        return ['error_context' => $context, 'retryable' => $exception->retryable];
     }
 
     private function sandboxPaymentResultResponse(int $merchantId, string $paymentId, DanaMerchantProvisioningClient $client): JsonResponse

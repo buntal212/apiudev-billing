@@ -431,12 +431,12 @@ class DanaMerchantProvisioningClient
     {
         $message = $response->json('message');
 
-        return in_array($message, [
-            'Idempotency-Key sudah digunakan untuk payload yang berbeda.',
-            'merchant_order_id atau Idempotency-Key sudah digunakan.',
-        ], true)
-            ? 'Konflik transaksi Sandbox: Idempotency-Key atau referensi transaksi sudah digunakan untuk payload berbeda.'
-            : null;
+        return match ($message) {
+            'Idempotency-Key sudah digunakan untuk payload yang berbeda.' => 'Konflik idempotensi transaksi Sandbox: key hanya dapat dipakai ulang untuk payload yang identik.',
+            'merchant_order_id sudah digunakan.' => 'Konflik referensi transaksi Sandbox: referensi order sudah digunakan oleh transaksi lain.',
+            'Konflik penyimpanan transaksi. Coba ulang dengan tindakan baru.' => 'Konflik penyimpanan transaksi Sandbox. Coba buat tindakan baru.',
+            default => null,
+        };
     }
 
     private function safeProvisioningConflictMessage(Response $response): ?string
