@@ -201,6 +201,47 @@ class DanaSandboxTesterApiTest extends TestCase
         $this->getJson("/api/v1/admin/dana-gateway-merchants/{$merchant->gateway_merchant_id}/sandbox-tester/transactions/{$paymentId}/result")->assertForbidden();
     }
 
+    public function test_query_dana_status_is_sandbox_scoped_audited_and_keeps_local_status_separate(): void
+    {
+        $merchant = $this->sandboxProvisionedMerchant();
+        $paymentId = '01K7A2M3N4P5Q6R7S8T9V0W1X2';
+        Http::fake([
+            "https://dana-gateway.test/api/v1/internal/merchants/{$merchant->gateway_merchant_id}/sandbox-tester/transactions/{$paymentId}/dana-status" => Http::response([
+                'data' => [
+                    'merchant_code' => $merchant->merchant_code,
+                    'environment' => 'sandbox',
+                    'payment_id' => $paymentId,
+                    'local_status' => 'pending',
+                    'dana_status' => [
+                        'http_status' => 200,
+                        'response_code' => '2005500',
+                        'latest_transaction_status' => '00',
+                        'request_id' => 'dana-query-001',
+                        'checked_at' => '2026-10-26T12:00:00+07:00',
+                    ],
+                ],
+            ]),
+        ]);
+        $this->actingAdmin();
+
+        $this->getJson($this->danaStatusUrl($merchant->gateway_merchant_id, $paymentId))
+            ->assertOk()
+            ->assertJsonPath('data.local_status', 'pending')
+            ->assertJsonPath('data.dana_status.response_code', '2005500')
+            ->assertJsonPath('data.dana_status.latest_transaction_status', '00')
+            ->assertJsonPath('data.dana_status.request_id', 'dana-query-001')
+            ->assertJsonMissingPath('data.private_key');
+
+        $this->assertDatabaseHas('dana_merchant_provisioning_audits', [
+            'gateway_merchant_id' => $merchant->gateway_merchant_id,
+            'operation' => 'dana_sandbox_tester.dana_payment_status_queried',
+            'status' => 'succeeded',
+        ]);
+        Http::assertSent(fn (Request $request): bool => $request->method() === 'GET'
+            && str_contains($request->url(), "/sandbox-tester/transactions/{$paymentId}/dana-status")
+            && $request->header('Authorization') === ['Bearer '.self::ServiceToken]);
+    }
+
     public function test_tester_history_is_sanitized_before_it_reaches_the_admin_ui(): void
     {
         $merchant = $this->sandboxProvisionedMerchant();
@@ -490,6 +531,11 @@ class DanaSandboxTesterApiTest extends TestCase
     private function transactionUrl(int $merchantId): string
     {
         return "/api/v1/admin/dana-gateway-merchants/{$merchantId}/sandbox-tester/transactions";
+    }
+
+    private function danaStatusUrl(int $merchantId, string $paymentId): string
+    {
+        return $this->transactionUrl($merchantId)."/{$paymentId}/dana-status";
     }
 
     private function actingAdmin(): self

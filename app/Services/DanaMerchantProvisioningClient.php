@@ -162,6 +162,15 @@ class DanaMerchantProvisioningClient
         return $this->sandboxTesterTransaction($this->decodeSuccessfulResponse($response)['data'] ?? null);
     }
 
+    /** @return array<string, mixed> */
+    public function queryDanaSandboxPaymentStatus(int $merchantId, string $paymentId): array
+    {
+        $response = $this->send(fn (PendingRequest $request): Response => $request->get("/api/v1/internal/merchants/{$merchantId}/sandbox-tester/transactions/{$paymentId}/dana-status"));
+        $data = $this->decodeSuccessfulResponse($response)['data'] ?? null;
+
+        return $this->sandboxDanaStatus($data);
+    }
+
     /** @return array{runs: list<array<string, mixed>>, meta: array<string, int>} */
     public function danaSandboxTestHistory(int $merchantId, array $filters): array
     {
@@ -620,6 +629,35 @@ class DanaMerchantProvisioningClient
             'payment_code' => $paymentCode,
             'qr_image' => $qrImage,
             'qr_url' => $qrUrl,
+        ];
+    }
+
+    /** @return array<string, mixed> */
+    private function sandboxDanaStatus(mixed $data): array
+    {
+        $danaStatus = is_array($data) ? ($data['dana_status'] ?? null) : null;
+        if (! is_array($data)
+            || ($data['environment'] ?? null) !== 'sandbox'
+            || ! is_string($data['merchant_code'] ?? null)
+            || ! is_string($data['payment_id'] ?? null)
+            || ! is_string($data['local_status'] ?? null)
+            || ! is_array($danaStatus)
+            || ! is_int($danaStatus['http_status'] ?? null)
+            || ! is_string($danaStatus['checked_at'] ?? null)) {
+            throw new DanaMerchantProvisioningException('Respons status DANA Sandbox tidak valid.', 502, false);
+        }
+        foreach (['response_code', 'latest_transaction_status', 'request_id'] as $field) {
+            if (! is_string($danaStatus[$field] ?? null) && $danaStatus[$field] !== null) {
+                throw new DanaMerchantProvisioningException('Respons status DANA Sandbox tidak valid.', 502, false);
+            }
+        }
+
+        return [
+            'merchant_code' => $data['merchant_code'],
+            'environment' => 'sandbox',
+            'payment_id' => $data['payment_id'],
+            'local_status' => $data['local_status'],
+            'dana_status' => collect($danaStatus)->only(['http_status', 'response_code', 'latest_transaction_status', 'request_id', 'checked_at'])->all(),
         ];
     }
 

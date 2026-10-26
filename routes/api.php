@@ -114,6 +114,7 @@ Route::prefix('v1/admin')
                 Route::get('{merchantId}/sandbox-tester/validation', [DanaGatewayMerchantProvisioningController::class, 'validateDanaSandboxTester'])->whereNumber('merchantId');
                 Route::get('{merchantId}/sandbox-tester/transactions', [DanaGatewayMerchantProvisioningController::class, 'danaSandboxTestHistory'])->whereNumber('merchantId');
                 Route::get('{merchantId}/sandbox-tester/transactions/{paymentId}/status', [DanaGatewayMerchantProvisioningController::class, 'danaSandboxTestTransactionStatus'])->whereNumber('merchantId')->whereUlid('paymentId');
+                Route::get('{merchantId}/sandbox-tester/transactions/{paymentId}/dana-status', [DanaGatewayMerchantProvisioningController::class, 'queryDanaSandboxPaymentStatus'])->whereNumber('merchantId')->whereUlid('paymentId');
                 Route::get('{merchantId}/api-keys', [DanaGatewayMerchantProvisioningController::class, 'apiKeys'])->whereNumber('merchantId');
                 Route::get('{merchantId}/api-key-issuances', [DanaGatewayMerchantProvisioningController::class, 'issuances'])->whereNumber('merchantId');
                 Route::get('{merchantId}/api-key-issuances/{issuanceId}', [DanaGatewayMerchantProvisioningController::class, 'issuanceStatus'])->whereNumber(['merchantId', 'issuanceId']);
