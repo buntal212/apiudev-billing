@@ -369,7 +369,7 @@ class DanaMerchantProvisioningClient
     {
         return match ($response->status()) {
             404 => new DanaMerchantProvisioningException('Merchant gateway tidak ditemukan.', 404, false, 404),
-            409 => new DanaMerchantProvisioningException('Permintaan provisioning merchant berkonflik dengan data yang sudah ada.', 409, false, 409),
+            409 => new DanaMerchantProvisioningException($this->safeProvisioningConflictMessage($response) ?? 'Permintaan provisioning merchant berkonflik dengan data yang sudah ada.', 409, false, 409),
             422 => new DanaMerchantProvisioningException($this->safeSandboxTesterValidationMessage($response) ?? 'Data provisioning merchant ditolak oleh gateway.', 422, false, 422),
             401, 403 => new DanaMerchantProvisioningException('Autentikasi provisioning merchant gateway gagal.', 502, false, $response->status()),
             429 => new DanaMerchantProvisioningException('Gateway provisioning merchant sedang membatasi permintaan. Coba lagi nanti.', 503, true, 429, $response->header('Retry-After')),
@@ -389,6 +389,15 @@ class DanaMerchantProvisioningClient
             'QRIS Sandbox memerlukan External Store ID pada konfigurasi merchant.',
             'Idempotency-Key sudah digunakan untuk transaksi Sandbox yang berbeda.',
         ], true) ? $message : null;
+    }
+
+    private function safeProvisioningConflictMessage(Response $response): ?string
+    {
+        $message = $response->json('message');
+
+        return $message === 'Kode merchant sudah digunakan oleh identitas atau environment berbeda.'
+            ? $message
+            : null;
     }
 
     /**
