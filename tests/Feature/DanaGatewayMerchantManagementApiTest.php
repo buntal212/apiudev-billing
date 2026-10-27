@@ -296,6 +296,25 @@ class DanaGatewayMerchantManagementApiTest extends TestCase
         ]);
     }
 
+    public function test_api_key_metadata_accepts_legacy_null_abilities_as_an_empty_display_list(): void
+    {
+        $merchant = $this->sandboxProvisionedMerchant();
+        Http::fake([
+            "https://dana-gateway.test/api/v1/internal/merchants/{$merchant->gateway_merchant_id}/api-keys" => Http::response([
+                'data' => [
+                    $this->apiKey(['id' => 91, 'abilities' => ['payments:read']]),
+                    $this->apiKey(['id' => 92, 'name' => 'Legacy metadata', 'abilities' => null]),
+                ],
+            ]),
+        ]);
+        $this->actingAdmin();
+
+        $this->getJson($this->apiKeysUrl($merchant->gateway_merchant_id))
+            ->assertOk()
+            ->assertJsonPath('data.0.abilities', ['payments:read'])
+            ->assertJsonPath('data.1.abilities', []);
+    }
+
     public function test_reconciliation_marks_cancel_pending_issuance_expired_when_gateway_reports_expired(): void
     {
         $merchant = $this->sandboxProvisionedMerchant();

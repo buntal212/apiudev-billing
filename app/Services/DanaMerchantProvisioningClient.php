@@ -823,18 +823,26 @@ class DanaMerchantProvisioningClient
      */
     private function apiKey(mixed $apiKey): array
     {
-        $abilities = is_array($apiKey) ? ($apiKey['abilities'] ?? null) : null;
+        $rawAbilities = is_array($apiKey) && array_key_exists('abilities', $apiKey)
+            ? $apiKey['abilities']
+            : null;
         $dateFields = ['expires_at', 'revoked_at', 'last_used_at', 'created_at'];
 
         if (! is_array($apiKey)
             || ! is_int($apiKey['id'] ?? null)
             || ! is_string($apiKey['name'] ?? null)
             || ! is_string($apiKey['key_prefix'] ?? null)
-            || ! is_array($abilities)
+            || ! array_key_exists('abilities', $apiKey)
+            || ($rawAbilities !== null && ! is_array($rawAbilities))
             || ! is_bool($apiKey['is_active'] ?? null)
-            || collect($abilities)->contains(fn (mixed $ability): bool => ! is_string($ability))) {
+            || (is_array($rawAbilities) && collect($rawAbilities)->contains(fn (mixed $ability): bool => ! is_string($ability)))) {
             throw new DanaMerchantProvisioningException('Respons metadata API key gateway tidak valid.', 502, false);
         }
+
+        // API key lama dapat tidak menyimpan scope. Ini hanya normalisasi
+        // metadata tampilan; tidak mengubah otorisasi key di DANA Gateway dan
+        // tidak menafsirkan null sebagai wildcard di Billing.
+        $abilities = $rawAbilities ?? [];
 
         foreach ($dateFields as $field) {
             if (! is_string($apiKey[$field] ?? null) && $apiKey[$field] !== null) {
