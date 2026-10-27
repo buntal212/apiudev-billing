@@ -205,7 +205,11 @@ class CheckoutService
             $amountMinor = $this->amountMinor($attempt->amount);
             $gatewayPayment = $this->gatewayClient->findPaymentByMerchantOrderId($merchant, $attempt->merchant_reference);
 
-            if ($gatewayPayment === null) {
+            // Selalu baca order yang sudah ada lebih dulu. Payment pending tanpa
+            // instruksi checkout adalah hasil parsial, bukan checkout siap bayar.
+            // POST dengan reference dan Idempotency-Key outbox yang sama akan
+            // melanjutkan payment gateway yang sama; tidak membuat payment baru.
+            if ($gatewayPayment === null || ! $this->hasCompleteGatewayCheckout($gatewayPayment)) {
                 $paymentMethod = $attempt->metadata['payment_method'] ?? 'dana_wallet';
                 $gatewayPayment = $this->gatewayClient->createPayment(
                     merchant: $merchant,
@@ -304,6 +308,22 @@ class CheckoutService
                 'error_code' => null,
             ]);
         });
+    }
+
+    /** @param array<string, mixed> $gatewayPayment */
+    private function hasCompleteGatewayCheckout(array $gatewayPayment): bool
+    {
+        $checkoutUrl = $gatewayPayment['checkout_url'] ?? null;
+        $metadata = is_array($gatewayPayment['metadata'] ?? null) ? $gatewayPayment['metadata'] : [];
+        $instruction = is_array($metadata['udev_sandbox_payment_instruction'] ?? null)
+            ? $metadata['udev_sandbox_payment_instruction']
+            : [];
+        $paymentCode = $instruction['payment_code'] ?? $metadata['payment_code'] ?? $metadata['qr_content'] ?? null;
+
+        return ($gatewayPayment['status'] ?? null) === PaymentAttempt::StatusPending
+            && is_string($gatewayPayment['expires_at'] ?? null)
+            && ((is_string($checkoutUrl) && filter_var($checkoutUrl, FILTER_VALIDATE_URL))
+                || (is_string($paymentCode) && $paymentCode !== ''));
     }
 
     private function markDispatchFailure(CheckoutOutboxMessage $claimed, bool $retryable, string $errorCode): void

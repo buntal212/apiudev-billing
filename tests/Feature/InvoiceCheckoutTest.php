@@ -172,6 +172,44 @@ class InvoiceCheckoutTest extends TestCase
         $this->assertDatabaseHas('checkout_outbox_messages', ['payment_attempt_id' => 2, 'status' => CheckoutOutboxMessage::StatusFailed]);
     }
 
+    public function test_partial_pending_gateway_payment_is_recovered_with_the_same_attempt_and_outbox_key(): void
+    {
+        [$invoice] = $this->invoiceWithGateway();
+        $postKeys = [];
+        Http::fake(function (HttpRequest $request) use (&$postKeys): mixed {
+            $attempt = PaymentAttempt::query()->sole();
+            if ($request->method() === 'GET') {
+                return Http::response(['data' => [[
+                    'id' => 'gateway-partial-001',
+                    'merchant_order_id' => $attempt->merchant_reference,
+                    'amount_minor' => 10000,
+                    'currency' => 'IDR',
+                    'status' => 'pending',
+                    'checkout_url' => null,
+                    'expires_at' => null,
+                ]]]);
+            }
+
+            $postKeys[] = $request->header('Idempotency-Key')[0] ?? null;
+
+            return Http::response(['data' => $this->gatewayPayment($attempt, 'gateway-partial-001')]);
+        });
+
+        $this->actingAdmin()
+            ->postJson("/api/v1/admin/invoices/{$invoice->id}/checkout", [], ['Idempotency-Key' => 'checkout-partial-recover-001'])
+            ->assertOk()
+            ->assertJsonPath('data.gateway_payment_id', 'gateway-partial-001')
+            ->assertJsonPath('data.checkout_status', 'ready');
+
+        $attempt = PaymentAttempt::query()->sole();
+        $outbox = CheckoutOutboxMessage::query()->sole();
+        $this->assertSame('gateway-partial-001', $attempt->gateway_payment_id);
+        $this->assertSame(CheckoutOutboxMessage::StatusCompleted, $outbox->status);
+        $this->assertSame($outbox->idempotency_key, $postKeys[0]);
+        $this->assertDatabaseCount('payment_attempts', 1);
+        $this->assertSame(Invoice::StatusPending, $invoice->fresh()->status);
+    }
+
     public function test_admin_can_retry_failed_checkout_with_the_same_attempt_and_idempotency_key(): void
     {
         [$invoice] = $this->invoiceWithGateway();
