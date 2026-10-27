@@ -44,6 +44,26 @@ class InvoiceSettlementServiceTest extends TestCase
         ]);
     }
 
+    public function test_verified_central_udev_attempt_settles_without_application_mapping(): void
+    {
+        [$invoice, $attempt] = $this->settleableInvoice();
+        $attempt->update([
+            'gateway_merchant_code' => 'udev-central',
+            'metadata' => ['billing_recipient' => 'udev_central'],
+        ]);
+        ApplicationPaymentGateway::query()
+            ->where('application_id', $invoice->plan->application_id)
+            ->delete();
+
+        $result = app(InvoiceSettlementService::class)->settle(
+            $attempt->fresh(),
+            $this->verification($attempt->fresh()),
+        );
+
+        $this->assertFalse($result->alreadySettled);
+        $this->assertSame(Invoice::StatusPaid, $invoice->fresh()->status);
+    }
+
     public function test_verified_payment_activates_a_new_subscription_when_invoice_has_none(): void
     {
         [$invoice, $attempt] = $this->settleableInvoice();

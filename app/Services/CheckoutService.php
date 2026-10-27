@@ -18,6 +18,7 @@ class CheckoutService
     public function __construct(
         private DanaGatewayClient $gatewayClient,
         private DanaGatewayMerchantResolver $merchantResolver,
+        private SubscriptionBillingMerchantResolver $subscriptionMerchantResolver,
     ) {}
 
     public function startCheckout(Invoice $invoice, string $requestIdempotencyKey, string $paymentMethod = 'dana_wallet'): PaymentAttempt
@@ -111,19 +112,8 @@ class CheckoutService
                 }
 
                 $environment = (string) config('services.dana_gateway.environment', 'sandbox');
-                $mapping = ApplicationPaymentGateway::query()
-                    ->where('application_id', $lockedInvoice->plan->application_id)
-                    ->where('provider', 'dana')
-                    ->where('environment', $environment)
-                    ->where('is_active', true)
-                    ->lockForUpdate()
-                    ->first();
-
-                if ($mapping === null) {
-                    throw ValidationException::withMessages([
-                        'invoice' => ['Mapping merchant DANA untuk aplikasi ini belum tersedia.'],
-                    ]);
-                }
+                $recipientMerchantCode = $this->subscriptionMerchantResolver
+                    ->resolveNewCheckoutMerchant($environment);
 
                 $attemptNumber = (int) PaymentAttempt::query()
                     ->where('invoice_id', $lockedInvoice->getKey())
@@ -136,8 +126,8 @@ class CheckoutService
                     'attempt_number' => $attemptNumber,
                     'provider' => 'dana',
                     'merchant_reference' => $merchantReference,
-                    'gateway_merchant_code' => $mapping->gateway_merchant_code,
-                    'gateway_environment' => $mapping->environment,
+                    'gateway_merchant_code' => $recipientMerchantCode,
+                    'gateway_environment' => $environment,
                     'amount' => $lockedInvoice->amount,
                     'currency' => $lockedInvoice->currency,
                     'status' => PaymentAttempt::StatusInitiated,
@@ -148,6 +138,7 @@ class CheckoutService
                         'application_customer_id' => $lockedInvoice->application_customer_id,
                         'subscription_id' => $lockedInvoice->subscription_id,
                         'payment_method' => $paymentMethod,
+                        SubscriptionBillingMerchantResolver::RecipientMetadataKey => SubscriptionBillingMerchantResolver::CentralRecipient,
                     ],
                 ]);
 
@@ -403,24 +394,36 @@ class CheckoutService
             ]);
         }
 
-        if ($invoice->plan === null) {
+        $metadata = is_array($attempt->metadata) ? $attempt->metadata : [];
+        if ($this->subscriptionMerchantResolver->isCentralAttempt($metadata)) {
+            $configuredMerchant = $this->subscriptionMerchantResolver
+                ->resolveNewCheckoutMerchant('sandbox');
+
+            if ($configuredMerchant !== $attempt->gateway_merchant_code) {
+                throw ValidationException::withMessages([
+                    'payment_attempt' => ['Merchant penerima UDEV untuk checkout ini tidak lagi cocok dengan konfigurasi Sandbox.'],
+                ]);
+            }
+        } elseif ($invoice->plan === null) {
             throw ValidationException::withMessages([
                 'payment_attempt' => ['Paket invoice tidak ditemukan untuk memvalidasi merchant.'],
             ]);
-        }
+        } else {
+            // Attempts without the central marker predate the policy. Keep them
+            // on their stored application merchant; never reroute them.
+            $mapping = ApplicationPaymentGateway::query()
+                ->where('application_id', $invoice->plan->application_id)
+                ->where('provider', 'dana')
+                ->where('environment', 'sandbox')
+                ->where('gateway_merchant_code', $attempt->gateway_merchant_code)
+                ->where('is_active', true)
+                ->first();
 
-        $mapping = ApplicationPaymentGateway::query()
-            ->where('application_id', $invoice->plan->application_id)
-            ->where('provider', 'dana')
-            ->where('environment', 'sandbox')
-            ->where('gateway_merchant_code', $attempt->gateway_merchant_code)
-            ->where('is_active', true)
-            ->first();
-
-        if ($mapping === null || $mapping->environment !== $attempt->gateway_environment) {
-            throw ValidationException::withMessages([
-                'payment_attempt' => ['Mapping merchant checkout tidak lagi tersedia atau tidak cocok.'],
-            ]);
+            if ($mapping === null || $mapping->environment !== $attempt->gateway_environment) {
+                throw ValidationException::withMessages([
+                    'payment_attempt' => ['Mapping merchant checkout historis tidak lagi tersedia atau tidak cocok.'],
+                ]);
+            }
         }
 
         if ($outbox === null || $outbox->idempotency_key !== 'dana-checkout-attempt-'.$attempt->getKey()) {

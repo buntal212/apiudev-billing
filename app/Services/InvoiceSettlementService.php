@@ -18,6 +18,7 @@ class InvoiceSettlementService
     public function __construct(
         private readonly SubscriptionService $subscriptionService,
         private readonly ReferralCommissionService $referralCommissionService,
+        private readonly SubscriptionBillingMerchantResolver $subscriptionMerchantResolver,
     ) {}
 
     public function settle(PaymentAttempt $paymentAttempt, VerifiedGatewayPayment $verification): SettlementResult
@@ -286,7 +287,9 @@ class InvoiceSettlementService
             $this->reject('application_customer_mismatch', 'Aplikasi dan pelanggan invoice tidak cocok.');
         }
 
-        $mappingExists = ApplicationPaymentGateway::query()
+        $metadata = is_array($attempt->metadata) ? $attempt->metadata : [];
+        $isCentralAttempt = $this->subscriptionMerchantResolver->isCentralAttempt($metadata);
+        $mappingExists = $isCentralAttempt || ApplicationPaymentGateway::query()
             ->where('application_id', $plan->application_id)
             ->where('provider', $verification->provider)
             ->where('environment', $verification->environment)

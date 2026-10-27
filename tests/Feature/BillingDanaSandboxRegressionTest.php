@@ -39,9 +39,16 @@ class BillingDanaSandboxRegressionTest extends TestCase
             'base_urls' => ['sandbox' => 'https://gateway.test'],
             'timeout' => 8,
             'connect_timeout' => 3,
-            'merchant_api_keys' => ['sandbox' => ['udev-demo' => 'test-api-key']],
-            'merchants' => ['sandbox' => ['udev-demo' => ['name' => 'UDEV Demo', 'is_active' => true]]],
+            'merchant_api_keys' => ['sandbox' => [
+                'udev-demo' => 'legacy-test-api-key',
+                'udev-central' => 'central-test-api-key',
+            ]],
+            'merchants' => ['sandbox' => [
+                'udev-demo' => ['name' => 'Legacy Demo', 'is_active' => true],
+                'udev-central' => ['name' => 'UDEV Pusat', 'is_active' => true],
+            ]],
         ]);
+        config()->set('services.udev_billing.subscription_dana_sandbox_merchant_code', 'udev-central');
         config()->set('services.dana_reconciliation', [
             'max_attempts' => 3,
             'batch_limit' => 25,

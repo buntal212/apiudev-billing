@@ -29,9 +29,16 @@ class InvoiceCheckoutTest extends TestCase
             'base_urls' => ['sandbox' => 'https://gateway.test'],
             'timeout' => 8,
             'connect_timeout' => 3,
-            'merchant_api_keys' => ['sandbox' => ['udev-demo' => 'test-api-key']],
-            'merchants' => ['sandbox' => ['udev-demo' => ['name' => 'UDEV Demo', 'is_active' => true]]],
+            'merchant_api_keys' => ['sandbox' => [
+                'udev-demo' => 'legacy-test-api-key',
+                'udev-central' => 'central-test-api-key',
+            ]],
+            'merchants' => ['sandbox' => [
+                'udev-demo' => ['name' => 'Legacy Demo', 'is_active' => true],
+                'udev-central' => ['name' => 'UDEV Pusat', 'is_active' => true],
+            ]],
         ]);
+        config()->set('services.udev_billing.subscription_dana_sandbox_merchant_code', 'udev-central');
     }
 
     public function test_admin_can_create_a_valid_checkout_without_changing_invoice_or_subscription_status(): void
@@ -86,14 +93,16 @@ class InvoiceCheckoutTest extends TestCase
         Http::assertNothingSent();
     }
 
-    public function test_checkout_requires_a_server_side_merchant_mapping(): void
+    public function test_checkout_requires_an_explicit_central_udev_sandbox_merchant_without_application_fallback(): void
     {
-        $invoice = Invoice::factory()->create();
+        [$invoice] = $this->invoiceWithGateway();
+        config()->set('services.udev_billing.subscription_dana_sandbox_merchant_code', null);
 
         $this->actingAdmin()
             ->postJson("/api/v1/admin/invoices/{$invoice->id}/checkout", [], ['Idempotency-Key' => 'checkout-mapping-001'])
             ->assertUnprocessable()
-            ->assertJsonValidationErrors('invoice');
+            ->assertJsonValidationErrors('invoice')
+            ->assertJsonPath('errors.invoice.0', 'Merchant penerima UDEV Sandbox belum dikonfigurasi. Checkout baru dihentikan.');
 
         Http::assertNothingSent();
     }
@@ -368,6 +377,8 @@ class InvoiceCheckoutTest extends TestCase
             ->assertJsonPath('data.checkout_url', null);
 
         $attempt = PaymentAttempt::query()->sole();
+        $this->assertSame('udev-central', $attempt->gateway_merchant_code);
+        $this->assertSame('udev_central', $attempt->metadata['billing_recipient']);
         $this->assertSame('qris', $attempt->metadata['payment_method']);
         $this->assertSame('00020101021226570011ID.DANA.WWW', $attempt->metadata['payment_code']);
         $this->assertArrayNotHasKey('qr_content', $attempt->metadata);

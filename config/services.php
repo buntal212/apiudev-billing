@@ -47,6 +47,13 @@ return [
         'merchants' => json_decode((string) env('DANA_GATEWAY_MERCHANTS', '{}'), true) ?: [],
     ],
 
+    // Deliberately unset by default. Operators must configure an existing,
+    // official Sandbox merchant; application-level merchant mappings are never
+    // used as a fallback recipient for new subscription invoices.
+    'udev_billing' => [
+        'subscription_dana_sandbox_merchant_code' => env('UDEV_SUBSCRIPTION_DANA_SANDBOX_MERCHANT_CODE'),
+    ],
+
     'dana_reconciliation' => [
         'max_attempts' => (int) env('DANA_RECONCILIATION_MAX_ATTEMPTS', 5),
         'batch_limit' => (int) env('DANA_RECONCILIATION_BATCH_LIMIT', 25),
