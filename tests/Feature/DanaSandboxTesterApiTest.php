@@ -474,6 +474,47 @@ class DanaSandboxTesterApiTest extends TestCase
             && $request->header('Authorization') === ['Bearer '.self::ServiceToken]);
     }
 
+    public function test_query_dana_status_supports_expired_transaction_with_cancelled_debit_status_05_and_audits_safely(): void
+    {
+        $merchant = $this->sandboxProvisionedMerchant();
+        $paymentId = '01K7A2M3N4P5Q6R7S8T9V0W1X9';
+        Http::fake([
+            "https://dana-gateway.test/api/v1/internal/merchants/{$merchant->gateway_merchant_id}/sandbox-tester/transactions/{$paymentId}/dana-status" => Http::response([
+                'data' => [
+                    'merchant_code' => $merchant->merchant_code,
+                    'environment' => 'sandbox',
+                    'payment_id' => $paymentId,
+                    'local_status' => 'expired',
+                    'dana_status' => [
+                        'http_status' => 200,
+                        'response_code' => '2005500',
+                        'latest_transaction_status' => '05',
+                        'request_id' => 'dana-query-expired-05',
+                        'checked_at' => '2026-10-27T12:00:00+07:00',
+                    ],
+                ],
+            ]),
+        ]);
+        $this->actingAdmin();
+
+        $this->getJson($this->danaStatusUrl($merchant->gateway_merchant_id, $paymentId))
+            ->assertOk()
+            ->assertJsonPath('data.local_status', 'expired')
+            ->assertJsonPath('data.dana_status.http_status', 200)
+            ->assertJsonPath('data.dana_status.response_code', '2005500')
+            ->assertJsonPath('data.dana_status.latest_transaction_status', '05')
+            ->assertJsonPath('data.dana_status.request_id', 'dana-query-expired-05')
+            ->assertJsonMissingPath('data.private_key');
+
+        $this->assertDatabaseHas('dana_merchant_provisioning_audits', [
+            'gateway_merchant_id' => $merchant->gateway_merchant_id,
+            'operation' => 'dana_sandbox_tester.dana_payment_status_queried',
+            'status' => 'succeeded',
+            'safe_details->local_status' => 'expired',
+            'safe_details->dana_latest_transaction_status' => '05',
+        ]);
+    }
+
     public function test_tester_history_is_sanitized_before_it_reaches_the_admin_ui(): void
     {
         $merchant = $this->sandboxProvisionedMerchant();
