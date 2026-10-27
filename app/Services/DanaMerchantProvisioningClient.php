@@ -169,6 +169,15 @@ class DanaMerchantProvisioningClient
     }
 
     /** @return array<string, mixed> */
+    public function testDebitStatusTransactionNotFound(int $merchantId): array
+    {
+        $response = $this->send(fn (PendingRequest $request): Response => $request
+            ->post("/api/v1/internal/merchants/{$merchantId}/sandbox-tester/uat/debit-status-transaction-not-found"));
+
+        return $this->sandboxDebitStatusTransactionNotFoundUat($this->decodeSuccessfulResponse($response)['data'] ?? null);
+    }
+
+    /** @return array<string, mixed> */
     public function armDanaSandboxWebhookSimulated500(int $merchantId, ?string $paymentId = null): array
     {
         $payload = [];
@@ -722,6 +731,37 @@ class DanaMerchantProvisioningClient
             || (! is_null($secondRequest['response_message'] ?? null) && ! is_string($secondRequest['response_message']))
             || ! is_array($received)) {
             throw new DanaMerchantProvisioningException('Respons UAT Create Order Sandbox tidak valid.', 502, false);
+        }
+
+        return $result;
+    }
+
+    /** @return array<string, mixed> */
+    private function sandboxDebitStatusTransactionNotFoundUat(mixed $result): array
+    {
+        $uat = is_array($result) ? ($result['uat'] ?? null) : null;
+        $expected = is_array($uat) ? ($uat['expected'] ?? null) : null;
+        $received = is_array($uat) ? ($uat['received'] ?? null) : null;
+        $request = is_array($uat) ? ($uat['request'] ?? null) : null;
+
+        if (! is_array($result)
+            || ! is_string($result['merchant_code'] ?? null)
+            || ($result['environment'] ?? null) !== 'sandbox'
+            || ! is_array($uat)
+            || ($uat['scenario'] ?? null) !== 'debit_status_transaction_not_found'
+            || ! is_bool($uat['passed'] ?? null)
+            || ! is_array($expected)
+            || ($expected['response_code'] ?? null) !== '4045501'
+            || ($expected['response_message'] ?? null) !== 'Transaction Not Found'
+            || ! is_array($received)
+            || ! is_int($received['http_status'] ?? null)
+            || (! is_null($received['response_code'] ?? null) && ! is_string($received['response_code']))
+            || ! is_string($received['response_message'] ?? null)
+            || (! is_null($received['request_id'] ?? null) && ! is_string($received['request_id']))
+            || ! is_array($request)
+            || ($request['original_partner_reference_no'] ?? null) !== '12345678'
+            || ($request['service_code'] ?? null) !== '54') {
+            throw new DanaMerchantProvisioningException('Respons UAT Debit Status Sandbox tidak valid.', 502, false);
         }
 
         return $result;

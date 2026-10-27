@@ -263,6 +263,55 @@ class DanaSandboxTesterApiTest extends TestCase
             ->assertJsonMissing(['private_key', 'api_key', 'signature']);
     }
 
+    public function test_debit_status_transaction_not_found_uat_returns_safe_diagnostics_and_audits(): void
+    {
+        $merchant = $this->sandboxProvisionedMerchant();
+        Http::fake([
+            "https://dana-gateway.test/api/v1/internal/merchants/{$merchant->gateway_merchant_id}/sandbox-tester/uat/debit-status-transaction-not-found" => Http::response([
+                'data' => [
+                    'merchant_code' => $merchant->merchant_code,
+                    'environment' => 'sandbox',
+                    'uat' => [
+                        'scenario' => 'debit_status_transaction_not_found',
+                        'passed' => true,
+                        'expected' => ['response_code' => '4045501', 'response_message' => 'Transaction Not Found'],
+                        'received' => [
+                            'http_status' => 404,
+                            'response_code' => '4045501',
+                            'response_message' => 'Transaction Not Found',
+                            'request_id' => 'dana-notfound-001',
+                        ],
+                        'request' => [
+                            'original_partner_reference_no' => '12345678',
+                            'service_code' => '54',
+                        ],
+                    ],
+                ],
+            ]),
+        ]);
+
+        $this->actingAdmin();
+        $this->postJson($this->debitStatusNotFoundUatUrl($merchant->gateway_merchant_id))
+            ->assertOk()
+            ->assertJsonPath('data.uat.passed', true)
+            ->assertJsonPath('data.uat.scenario', 'debit_status_transaction_not_found')
+            ->assertJsonPath('data.uat.expected.response_code', '4045501')
+            ->assertJsonPath('data.uat.received.http_status', 404)
+            ->assertJsonPath('data.uat.received.response_code', '4045501')
+            ->assertJsonPath('data.uat.received.response_message', 'Transaction Not Found')
+            ->assertJsonPath('data.uat.request.original_partner_reference_no', '12345678')
+            ->assertJsonMissing(['private_key', 'api_key', 'signature']);
+
+        $this->assertDatabaseHas('dana_merchant_provisioning_audits', [
+            'gateway_merchant_id' => $merchant->gateway_merchant_id,
+            'operation' => 'dana_sandbox_tester.uat_debit_status_not_found',
+            'status' => 'succeeded',
+            'safe_details->passed' => true,
+            'safe_details->response_code' => '4045501',
+            'safe_details->original_partner_reference_no' => '12345678',
+        ]);
+    }
+
     public function test_inconsistent_request_uat_safely_passes_through_failure_diagnostics(): void
     {
         $merchant = $this->sandboxProvisionedMerchant();
@@ -866,6 +915,11 @@ class DanaSandboxTesterApiTest extends TestCase
     private function inconsistentRequestUatUrl(int $merchantId): string
     {
         return "/api/v1/admin/dana-gateway-merchants/{$merchantId}/sandbox-tester/uat/create-order-inconsistent-request";
+    }
+
+    private function debitStatusNotFoundUatUrl(int $merchantId): string
+    {
+        return "/api/v1/admin/dana-gateway-merchants/{$merchantId}/sandbox-tester/uat/debit-status-transaction-not-found";
     }
 
     private function armWebhook500UatUrl(int $merchantId): string

@@ -224,6 +224,37 @@ class DanaGatewayMerchantProvisioningController extends Controller
         return response()->json(['data' => $result])->header('Cache-Control', 'no-store');
     }
 
+    public function testDebitStatusTransactionNotFound(int $merchantId, Request $request, DanaMerchantProvisioningClient $client): JsonResponse
+    {
+        $merchant = $this->sandboxProvisionedMerchant($merchantId);
+        if ($merchant === null) {
+            return $this->merchantNotFound();
+        }
+
+        try {
+            $result = $client->testDebitStatusTransactionNotFound($merchantId);
+        } catch (DanaMerchantProvisioningException $exception) {
+            $this->recordManagementAudit($request, $merchant, 'dana_sandbox_tester.uat_debit_status_not_found', 'failed', $exception->gatewayStatus, $exception->retryable, [
+                'original_partner_reference_no' => '12345678',
+            ]);
+
+            return $this->gatewayError($exception)->header('Cache-Control', 'no-store');
+        }
+
+        $uat = is_array($result['uat'] ?? null) ? $result['uat'] : [];
+        $passed = ($uat['passed'] ?? false) === true;
+
+        $this->recordManagementAudit($request, $merchant, 'dana_sandbox_tester.uat_debit_status_not_found', $passed ? 'succeeded' : 'failed', 200, false, [
+            'original_partner_reference_no' => '12345678',
+            'passed' => $passed,
+            'response_code' => $uat['received']['response_code'] ?? null,
+            'response_message' => $uat['received']['response_message'] ?? null,
+            'request_id' => $uat['received']['request_id'] ?? null,
+        ]);
+
+        return response()->json(['data' => $result])->header('Cache-Control', 'no-store');
+    }
+
     public function armDanaSandboxWebhookSimulated500(int $merchantId, Request $request, DanaMerchantProvisioningClient $client): JsonResponse
     {
         if ($this->sandboxProvisionedMerchant($merchantId) === null) {
