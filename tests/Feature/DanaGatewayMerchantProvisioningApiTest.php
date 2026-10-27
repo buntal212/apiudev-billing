@@ -271,6 +271,22 @@ class DanaGatewayMerchantProvisioningApiTest extends TestCase
         $this->assertContains('admin', $middleware);
     }
 
+    public function test_merchant_management_panel_read_routes_use_a_dedicated_bucket(): void
+    {
+        $routes = app('router')->getRoutes();
+
+        foreach ([
+            '/api/v1/admin/dana-gateway-merchants/101/readiness',
+            '/api/v1/admin/dana-gateway-merchants/101/api-keys',
+            '/api/v1/admin/dana-gateway-merchants/101/api-key-issuances',
+        ] as $uri) {
+            $middleware = $routes->match(Request::create($uri, 'GET'))->middleware();
+
+            $this->assertContains('throttle:admin-dana-gateway-management-read', $middleware);
+            $this->assertNotContains('throttle:admin-dana-gateway-read', $middleware);
+        }
+    }
+
     /** @return array{code: string, name: string, email: string, environment: string} */
     private function payload(array $overrides = []): array
     {

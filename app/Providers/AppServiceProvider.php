@@ -30,6 +30,13 @@ class AppServiceProvider extends ServiceProvider
             return Limit::perMinute(10)->by('admin-dana-gateway-read:'.$request->user()?->getAuthIdentifier().':'.$request->ip());
         });
 
+        // Satu tampilan status merchant memerlukan readiness, API keys, dan
+        // riwayat issuance. Bucket khusus mencegah tiga GET tersebut
+        // menghabiskan kuota baca admin umum, tetap terisolasi per admin+IP.
+        RateLimiter::for('admin-dana-gateway-management-read', function (Request $request): Limit {
+            return Limit::perMinute(30)->by('admin-dana-gateway-management-read:'.$request->user()?->getAuthIdentifier().':'.$request->ip());
+        });
+
         RateLimiter::for('admin-sandbox-audit-read', function (Request $request): Limit {
             return Limit::perMinute(30)->by('admin-sandbox-audit-read:'.$request->user()?->getAuthIdentifier().':'.$request->ip());
         });
