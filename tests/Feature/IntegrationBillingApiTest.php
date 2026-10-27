@@ -11,6 +11,8 @@ use App\Models\Invoice;
 use App\Models\PaymentAttempt;
 use App\Models\Subscription;
 use App\Models\SubscriptionPlan;
+use App\Services\InvoiceSettlementService;
+use App\Services\VerifiedGatewayPayment;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\Client\Request as HttpRequest;
 use Illuminate\Support\Facades\Http;
@@ -275,12 +277,87 @@ class IntegrationBillingApiTest extends TestCase
             ->assertJsonPath('data.payment.payment_code', '00020101021226570011ID.DANA.WWW.QRIS.SAMPLE')
             ->assertJsonPath('data.payment.payment_instruction.type', 'payment_code');
 
+        $attempt = PaymentAttempt::query()->sole();
+        $this->assertSame('udev-central', $attempt->gateway_merchant_code);
+        $this->assertSame('udev_central', $attempt->metadata['billing_recipient'] ?? null);
+
         $this->withToken($token)
             ->getJson("/api/v1/integrations/invoices/{$invoice->invoice_number}")
             ->assertOk()
             ->assertJsonPath('data.payment.payment_method', 'qris')
             ->assertJsonPath('data.payment.qr_content', null)
             ->assertJsonPath('data.payment.payment_code', '00020101021226570011ID.DANA.WWW.QRIS.SAMPLE');
+    }
+
+    public function test_integration_reads_paid_invoice_and_extended_subscription_only_after_verified_settlement(): void
+    {
+        [$application, $token] = $this->integrationToken();
+        $customer = ApplicationCustomer::factory()->create([
+            'application_id' => $application->id,
+            'external_customer_id' => 'SALON-STATUS-001',
+        ]);
+        $plan = SubscriptionPlan::factory()->create([
+            'application_id' => $application->id,
+            'code' => 'STATUS-QRIS-30',
+            'price' => '10000.00',
+        ]);
+        $subscription = Subscription::factory()->create([
+            'application_customer_id' => $customer->id,
+            'subscription_plan_id' => $plan->id,
+            'expires_at' => now()->addDays(7),
+        ]);
+        $previousExpiry = $subscription->expires_at->toImmutable();
+        $invoice = Invoice::factory()->create([
+            'application_customer_id' => $customer->id,
+            'subscription_plan_id' => $plan->id,
+            'subscription_id' => $subscription->id,
+            'amount' => '10000.00',
+            'currency' => 'IDR',
+            'duration_days' => 30,
+            'period_count' => 1,
+        ]);
+        $attempt = PaymentAttempt::factory()->create([
+            'invoice_id' => $invoice->id,
+            'provider' => 'dana',
+            'merchant_reference' => $invoice->invoice_number.'-A1',
+            'gateway_merchant_code' => 'udev-central',
+            'gateway_environment' => 'sandbox',
+            'gateway_payment_id' => 'dana-sandbox-status-001',
+            'amount' => $invoice->amount,
+            'currency' => $invoice->currency,
+            'status' => PaymentAttempt::StatusSucceeded,
+            'completed_at' => now(),
+            'metadata' => ['billing_recipient' => 'udev_central', 'payment_method' => 'qris'],
+        ]);
+
+        app(InvoiceSettlementService::class)->settle(
+            $attempt,
+            VerifiedGatewayPayment::paid(
+                provider: 'dana',
+                gatewayPaymentId: 'dana-sandbox-status-001',
+                merchantOrderId: $attempt->merchant_reference,
+                amountMinor: 10000,
+                currency: 'IDR',
+                merchantCode: 'udev-central',
+                environment: 'sandbox',
+                paidAt: now(),
+            ),
+        );
+
+        $this->withToken($token)
+            ->getJson("/api/v1/integrations/invoices/{$invoice->invoice_number}")
+            ->assertOk()
+            ->assertJsonPath('data.status', Invoice::StatusPaid)
+            ->assertJsonPath('data.payment.payment_method', 'qris')
+            ->assertJsonPath('data.tracking.settlement_status', 'completed');
+
+        $this->withToken($token)
+            ->getJson('/api/v1/integrations/customers/SALON-STATUS-001/subscription')
+            ->assertOk()
+            ->assertJsonPath('data.subscription.status', Subscription::StatusActive)
+            ->assertJsonPath('data.subscription.plan_code', $plan->code);
+
+        $this->assertTrue($subscription->fresh()->expires_at->equalTo($previousExpiry->addDays(30)));
     }
 
     /** @return array{0: Application, 1: string} */
