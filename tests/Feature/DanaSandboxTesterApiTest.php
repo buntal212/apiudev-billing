@@ -412,6 +412,57 @@ class DanaSandboxTesterApiTest extends TestCase
         ]);
     }
 
+    public function test_debit_status_invalid_signature_uat_returns_safe_diagnostics_and_audits(): void
+    {
+        $merchant = $this->sandboxProvisionedMerchant();
+        Http::fake([
+            "https://dana-gateway.test/api/v1/internal/merchants/{$merchant->gateway_merchant_id}/sandbox-tester/uat/debit-status-invalid-signature" => Http::response([
+                'data' => [
+                    'merchant_code' => $merchant->merchant_code,
+                    'environment' => 'sandbox',
+                    'uat' => [
+                        'scenario' => 'debit_status_invalid_signature',
+                        'passed' => true,
+                        'expected' => ['response_code' => '4015500', 'response_message' => 'Unauthorized'],
+                        'received' => [
+                            'http_status' => 401,
+                            'response_code' => '4015500',
+                            'response_message' => 'Unauthorized. Invalid Signature',
+                            'request_id' => 'dana-invalid-sig-001',
+                        ],
+                        'request' => [
+                            'service_code' => '54',
+                            'signature_override' => 'invalid_signature',
+                        ],
+                    ],
+                ],
+            ], 200),
+        ]);
+
+        $this->actingAdmin();
+
+        $this->postJson($this->debitStatusInvalidSignatureUatUrl($merchant->gateway_merchant_id))
+            ->assertOk()
+            ->assertJsonPath('data.uat.passed', true)
+            ->assertJsonPath('data.uat.scenario', 'debit_status_invalid_signature')
+            ->assertJsonPath('data.uat.expected.response_code', '4015500')
+            ->assertJsonPath('data.uat.received.http_status', 401)
+            ->assertJsonPath('data.uat.received.response_code', '4015500')
+            ->assertJsonPath('data.uat.received.response_message', 'Unauthorized. Invalid Signature')
+            ->assertJsonPath('data.uat.request.service_code', '54')
+            ->assertJsonPath('data.uat.request.signature_override', 'invalid_signature')
+            ->assertJsonMissing(['private_key', 'api_key', 'signature']);
+
+        $this->assertDatabaseHas('dana_merchant_provisioning_audits', [
+            'gateway_merchant_id' => $merchant->gateway_merchant_id,
+            'operation' => 'dana_sandbox_tester.uat_debit_status_invalid_signature',
+            'status' => 'succeeded',
+            'safe_details->passed' => true,
+            'safe_details->response_code' => '4015500',
+            'safe_details->signature_override' => 'invalid_signature',
+        ]);
+    }
+
     public function test_inconsistent_request_uat_safely_passes_through_failure_diagnostics(): void
     {
         $merchant = $this->sandboxProvisionedMerchant();
@@ -1030,6 +1081,11 @@ class DanaSandboxTesterApiTest extends TestCase
     private function debitStatusInternalServerErrorUatUrl(int $merchantId): string
     {
         return "/api/v1/admin/dana-gateway-merchants/{$merchantId}/sandbox-tester/uat/debit-status-internal-server-error";
+    }
+
+    private function debitStatusInvalidSignatureUatUrl(int $merchantId): string
+    {
+        return "/api/v1/admin/dana-gateway-merchants/{$merchantId}/sandbox-tester/uat/debit-status-invalid-signature";
     }
 
     private function armWebhook500UatUrl(int $merchantId): string
