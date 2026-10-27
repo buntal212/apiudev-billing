@@ -916,8 +916,29 @@ class DanaMerchantProvisioningClient
         if (array_key_exists('timeline', $payment) && (! is_array($payment['timeline']) || collect($payment['timeline'])->contains(fn (mixed $event): bool => ! is_array($event)))) {
             throw new DanaMerchantProvisioningException('Respons audit pembayaran gateway tidak valid.', 502, false);
         }
+        if (array_key_exists('checkout_url', $payment) && ! is_string($payment['checkout_url']) && $payment['checkout_url'] !== null) {
+            throw new DanaMerchantProvisioningException('Respons audit pembayaran gateway tidak valid.', 502, false);
+        }
+        if (array_key_exists('checkout_available', $payment) && ! is_bool($payment['checkout_available']) && $payment['checkout_available'] !== null) {
+            throw new DanaMerchantProvisioningException('Respons audit pembayaran gateway tidak valid.', 502, false);
+        }
+        if (array_key_exists('expires_at', $payment) && ! is_string($payment['expires_at']) && $payment['expires_at'] !== null) {
+            throw new DanaMerchantProvisioningException('Respons audit pembayaran gateway tidak valid.', 502, false);
+        }
+        if (array_key_exists('payment_instruction', $payment) && ! is_array($payment['payment_instruction']) && $payment['payment_instruction'] !== null) {
+            throw new DanaMerchantProvisioningException('Respons audit pembayaran gateway tidak valid.', 502, false);
+        }
 
-        return collect($payment)->only([...$required, 'payment_method', 'provider_order_reference', 'timeline'])->all();
+        return collect($payment)->only([
+            ...$required,
+            'payment_method',
+            'provider_order_reference',
+            'timeline',
+            'checkout_url',
+            'checkout_available',
+            'expires_at',
+            'payment_instruction',
+        ])->all();
     }
 
     /** @return array<string, mixed> */

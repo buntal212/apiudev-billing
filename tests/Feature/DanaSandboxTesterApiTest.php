@@ -610,6 +610,58 @@ class DanaSandboxTesterApiTest extends TestCase
         $this->getJson("{$paymentsUrl}/{$paymentId}")->assertForbidden();
     }
 
+    public function test_sandbox_payment_detail_preserves_checkout_url_and_instruction(): void
+    {
+        $merchant = $this->sandboxProvisionedMerchant();
+        $paymentId = '01K7A2M3N4P5Q6R7S8T9V0W1X9';
+        $admin = User::factory()->create(['is_admin' => true]);
+        DanaSandboxResultContext::query()->create([
+            'admin_user_id' => $admin->id,
+            'gateway_merchant_id' => $merchant->gateway_merchant_id,
+            'gateway_payment_id' => $paymentId,
+            'context_hash' => hash('sha256', 'detail-checkout-context'),
+            'idempotency_fingerprint' => hash('sha256', 'detail-checkout-test'),
+            'expires_at' => now()->addMinutes(20),
+        ]);
+        Http::fake([
+            "https://dana-gateway.test/api/v1/internal/merchants/{$merchant->gateway_merchant_id}/payments/{$paymentId}/audit" => Http::response([
+                'data' => [
+                    'id' => $paymentId,
+                    'merchant_reference' => 'UDEV-SANDBOX-CHK',
+                    'provider_order_reference' => 'DANA-ORDER-CHK',
+                    'amount_minor' => 10_000,
+                    'currency' => 'IDR',
+                    'status' => 'pending',
+                    'payment_method' => 'qris',
+                    'created_at' => '2026-10-17T10:00:00+07:00',
+                    'updated_at' => '2026-10-17T10:00:00+07:00',
+                    'gateway_verified_at' => null,
+                    'checkout_url' => 'https://checkout.sandbox.dana.id/session/audit-chk',
+                    'checkout_available' => true,
+                    'expires_at' => '2026-10-17T10:15:00+07:00',
+                    'payment_instruction' => [
+                        'type' => 'qris_mpm',
+                        'method' => 'qris',
+                        'label' => 'QRIS',
+                        'message' => 'Pindai QRIS',
+                        'qr_content' => '00020101021226590014ID.DANA.WWW',
+                    ],
+                    'timeline' => [],
+                ],
+            ]),
+        ]);
+
+        Sanctum::actingAs($admin, ['admin:access']);
+        $this->getJson("/api/v1/admin/dana-gateway-merchants/{$merchant->gateway_merchant_id}/sandbox-tester/payments/{$paymentId}")
+            ->assertOk()
+            ->assertJsonPath('data.id', $paymentId)
+            ->assertJsonPath('data.status', 'pending')
+            ->assertJsonPath('data.checkout_available', true)
+            ->assertJsonPath('data.checkout_url', 'https://checkout.sandbox.dana.id/session/audit-chk')
+            ->assertJsonPath('data.payment_instruction.type', 'qris_mpm')
+            ->assertJsonPath('data.payment_instruction.qr_content', '00020101021226590014ID.DANA.WWW');
+    }
+
     public function test_gateway_audit_retry_after_is_forwarded_safely(): void
     {
         $merchant = $this->sandboxProvisionedMerchant();
