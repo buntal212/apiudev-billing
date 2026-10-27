@@ -310,6 +310,42 @@ class DanaSandboxTesterApiTest extends TestCase
             ->assertJsonMissing(['private_key', 'api_key', 'signature']);
     }
 
+    public function test_arm_sandbox_webhook_simulated_500_uat_returns_only_safe_diagnostics(): void
+    {
+        $merchant = $this->sandboxProvisionedMerchant();
+        Http::fake([
+            "https://dana-gateway.test/api/v1/internal/merchants/{$merchant->gateway_merchant_id}/sandbox-tester/uat/arm-webhook-500" => Http::response([
+                'data' => [
+                    'merchant_code' => $merchant->merchant_code,
+                    'environment' => 'sandbox',
+                    'uat' => [
+                        'scenario' => 'finish_notify_simulated_500',
+                        'armed' => true,
+                        'payment_id' => '01M5TESTPAYMENT00000000001',
+                        'partner_reference_no' => '01M5TESTPAYMENT00000000001',
+                        'expected' => [
+                            'http_status' => 500,
+                            'response_code' => '5005601',
+                            'response_message' => 'Internal Server Error',
+                        ],
+                        'single_use' => true,
+                        'expires_in_minutes' => 10,
+                        'expires_at' => '2026-10-27T19:50:00+07:00',
+                    ],
+                ],
+            ]),
+        ]);
+
+        $this->actingAdmin();
+        $this->postJson($this->armWebhook500UatUrl($merchant->gateway_merchant_id), ['payment_id' => '01M5TESTPAYMENT00000000001'])
+            ->assertOk()
+            ->assertJsonPath('data.uat.scenario', 'finish_notify_simulated_500')
+            ->assertJsonPath('data.uat.armed', true)
+            ->assertJsonPath('data.uat.expected.http_status', 500)
+            ->assertJsonPath('data.uat.expected.response_code', '5005601')
+            ->assertJsonMissing(['private_key', 'api_key', 'signature']);
+    }
+
     public function test_creating_transaction_binds_a_hashed_result_context_before_returning_checkout(): void
     {
         $merchant = $this->sandboxProvisionedMerchant();
@@ -737,6 +773,11 @@ class DanaSandboxTesterApiTest extends TestCase
     private function inconsistentRequestUatUrl(int $merchantId): string
     {
         return "/api/v1/admin/dana-gateway-merchants/{$merchantId}/sandbox-tester/uat/create-order-inconsistent-request";
+    }
+
+    private function armWebhook500UatUrl(int $merchantId): string
+    {
+        return "/api/v1/admin/dana-gateway-merchants/{$merchantId}/sandbox-tester/uat/arm-webhook-500";
     }
 
     private function transactionUrl(int $merchantId): string

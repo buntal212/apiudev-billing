@@ -224,6 +224,22 @@ class DanaGatewayMerchantProvisioningController extends Controller
         return response()->json(['data' => $result])->header('Cache-Control', 'no-store');
     }
 
+    public function armDanaSandboxWebhookSimulated500(int $merchantId, Request $request, DanaMerchantProvisioningClient $client): JsonResponse
+    {
+        if ($this->sandboxProvisionedMerchant($merchantId) === null) {
+            return $this->merchantNotFound();
+        }
+
+        $paymentId = $request->input('payment_id');
+        try {
+            $result = $client->armDanaSandboxWebhookSimulated500($merchantId, is_string($paymentId) ? $paymentId : null);
+        } catch (DanaMerchantProvisioningException $exception) {
+            return $this->gatewayError($exception)->header('Cache-Control', 'no-store');
+        }
+
+        return response()->json(['data' => $result])->header('Cache-Control', 'no-store');
+    }
+
     public function createDanaSandboxTestTransaction(int $merchantId, StoreDanaSandboxTestTransactionRequest $request, DanaMerchantProvisioningClient $client, DanaSandboxResultContextService $contextService): JsonResponse
     {
         $merchant = $this->sandboxProvisionedMerchant($merchantId);

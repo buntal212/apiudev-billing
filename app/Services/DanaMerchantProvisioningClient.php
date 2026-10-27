@@ -168,6 +168,20 @@ class DanaMerchantProvisioningClient
         return $this->sandboxCreateOrderInconsistentRequestUat($this->decodeSuccessfulResponse($response)['data'] ?? null);
     }
 
+    /** @return array<string, mixed> */
+    public function armDanaSandboxWebhookSimulated500(int $merchantId, ?string $paymentId = null): array
+    {
+        $payload = [];
+        if (is_string($paymentId) && $paymentId !== '') {
+            $payload['payment_id'] = $paymentId;
+        }
+
+        $response = $this->send(fn (PendingRequest $request): Response => $request
+            ->post("/api/v1/internal/merchants/{$merchantId}/sandbox-tester/uat/arm-webhook-500", $payload));
+
+        return $this->sandboxArmWebhookSimulated500Uat($this->decodeSuccessfulResponse($response)['data'] ?? null);
+    }
+
     /**
      * @param  array{amount_minor: int, payment_method: string, return_context: string}  $attributes
      * @return array<string, mixed>
@@ -708,6 +722,32 @@ class DanaMerchantProvisioningClient
             || (! is_null($secondRequest['response_message'] ?? null) && ! is_string($secondRequest['response_message']))
             || ! is_array($received)) {
             throw new DanaMerchantProvisioningException('Respons UAT Create Order Sandbox tidak valid.', 502, false);
+        }
+
+        return $result;
+    }
+
+    /** @return array<string, mixed> */
+    private function sandboxArmWebhookSimulated500Uat(mixed $result): array
+    {
+        $uat = is_array($result) ? ($result['uat'] ?? null) : null;
+        $expected = is_array($uat) ? ($uat['expected'] ?? null) : null;
+
+        if (! is_array($result)
+            || ! is_string($result['merchant_code'] ?? null)
+            || ($result['environment'] ?? null) !== 'sandbox'
+            || ! is_array($uat)
+            || ($uat['scenario'] ?? null) !== 'finish_notify_simulated_500'
+            || ($uat['armed'] ?? null) !== true
+            || ! is_string($uat['payment_id'] ?? null)
+            || ! is_string($uat['partner_reference_no'] ?? null)
+            || ! is_array($expected)
+            || ($expected['http_status'] ?? null) !== 500
+            || ($expected['response_code'] ?? null) !== '5005601'
+            || ($expected['response_message'] ?? null) !== 'Internal Server Error'
+            || ($uat['single_use'] ?? null) !== true
+            || ! is_int($uat['expires_in_minutes'] ?? null)) {
+            throw new DanaMerchantProvisioningException('Respons arming UAT Webhook 500 DANA Sandbox tidak valid.', 502, false);
         }
 
         return $result;
