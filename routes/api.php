@@ -116,6 +116,7 @@ Route::prefix('v1/admin')
                 Route::post('{merchantId}/sandbox-tester/uat/create-order-inconsistent-request', [DanaGatewayMerchantProvisioningController::class, 'testCreateOrderInconsistentRequest'])->whereNumber('merchantId');
                 Route::post('{merchantId}/sandbox-tester/uat/debit-status-transaction-not-found', [DanaGatewayMerchantProvisioningController::class, 'testDebitStatusTransactionNotFound'])->whereNumber('merchantId');
                 Route::post('{merchantId}/sandbox-tester/uat/debit-status-missing-timestamp', [DanaGatewayMerchantProvisioningController::class, 'testDebitStatusMissingTimestamp'])->whereNumber('merchantId');
+                Route::post('{merchantId}/sandbox-tester/uat/debit-status-internal-server-error', [DanaGatewayMerchantProvisioningController::class, 'testDebitStatusInternalServerError'])->whereNumber('merchantId');
                 Route::post('{merchantId}/sandbox-tester/uat/arm-webhook-500', [DanaGatewayMerchantProvisioningController::class, 'armDanaSandboxWebhookSimulated500'])->whereNumber('merchantId');
                 Route::get('{merchantId}/sandbox-tester/transactions', [DanaGatewayMerchantProvisioningController::class, 'danaSandboxTestHistory'])->whereNumber('merchantId');
                 Route::get('{merchantId}/sandbox-tester/transactions/{paymentId}/status', [DanaGatewayMerchantProvisioningController::class, 'danaSandboxTestTransactionStatus'])->whereNumber('merchantId')->whereUlid('paymentId');
