@@ -52,7 +52,7 @@ class IntegrationInvoiceResource extends JsonResource
                     ? 'ready'
                     : ($attempt->checkoutOutbox?->status === 'failed' ? 'failed' : 'processing'),
                 'checkout_url' => $attempt->checkout_url,
-                'qr_content' => $attempt->metadata['qr_content'] ?? $attempt->metadata['payment_code'] ?? null,
+                'qr_content' => $attempt->metadata['qr_content'] ?? null,
                 'payment_code' => $attempt->metadata['payment_code'] ?? null,
                 'payment_instruction' => $attempt->metadata['payment_instruction'] ?? null,
                 'checkout_expires_at' => $attempt->checkout_expires_at?->toISOString(),

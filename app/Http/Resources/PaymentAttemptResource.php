@@ -31,7 +31,7 @@ class PaymentAttemptResource extends JsonResource
             'failure_message' => $this->failure_message,
             'metadata' => $this->metadata,
             'payment_method' => $this->metadata['payment_method'] ?? 'dana_wallet',
-            'qr_content' => $this->metadata['qr_content'] ?? $this->metadata['payment_code'] ?? null,
+            'qr_content' => $this->metadata['qr_content'] ?? null,
             'payment_code' => $this->metadata['payment_code'] ?? null,
             'payment_instruction' => $this->metadata['payment_instruction'] ?? null,
             'checkout_url' => $this->checkout_url,

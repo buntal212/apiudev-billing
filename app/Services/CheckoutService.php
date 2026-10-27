@@ -287,11 +287,15 @@ class CheckoutService
 
             $currentMetadata = is_array($attempt->metadata) ? $attempt->metadata : [];
             if ($paymentCode !== null) {
-                $currentMetadata['qr_content'] = $paymentCode;
                 $currentMetadata['payment_code'] = $paymentCode;
             }
             if ($instruction !== null) {
                 $currentMetadata['payment_instruction'] = $instruction;
+                if (($instruction['type'] ?? null) === 'qris_mpm'
+                    && is_string($instruction['qr_content'] ?? null)
+                    && $instruction['qr_content'] !== '') {
+                    $currentMetadata['qr_content'] = $instruction['qr_content'];
+                }
             }
 
             $attempt->update([

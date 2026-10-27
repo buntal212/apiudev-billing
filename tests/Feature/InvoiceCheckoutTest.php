@@ -330,6 +330,8 @@ class InvoiceCheckoutTest extends TestCase
                 return Http::response(['data' => []]);
             }
 
+            $this->assertSame('qris', $request->data()['metadata']['udev_sandbox_payment_method'] ?? null);
+
             $attempt = PaymentAttempt::query()->sole();
 
             return Http::response([
@@ -360,12 +362,15 @@ class InvoiceCheckoutTest extends TestCase
             ->assertOk()
             ->assertJsonPath('data.payment_method', 'qris')
             ->assertJsonPath('data.checkout_status', 'ready')
-            ->assertJsonPath('data.qr_content', '00020101021226570011ID.DANA.WWW')
+            ->assertJsonPath('data.qr_content', null)
+            ->assertJsonPath('data.payment_code', '00020101021226570011ID.DANA.WWW')
+            ->assertJsonPath('data.payment_instruction.type', 'payment_code')
             ->assertJsonPath('data.checkout_url', null);
 
         $attempt = PaymentAttempt::query()->sole();
         $this->assertSame('qris', $attempt->metadata['payment_method']);
-        $this->assertSame('00020101021226570011ID.DANA.WWW', $attempt->metadata['qr_content']);
+        $this->assertSame('00020101021226570011ID.DANA.WWW', $attempt->metadata['payment_code']);
+        $this->assertArrayNotHasKey('qr_content', $attempt->metadata);
     }
 
     public function test_admin_can_checkout_with_each_supported_virtual_account_method(): void

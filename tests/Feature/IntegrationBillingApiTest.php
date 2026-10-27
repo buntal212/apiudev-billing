@@ -204,7 +204,7 @@ class IntegrationBillingApiTest extends TestCase
             ->assertJsonPath('data.0.invoice_number', $invoice->invoice_number);
     }
 
-    public function test_integration_client_can_checkout_invoice_using_qris_and_view_qr_content(): void
+    public function test_integration_client_can_checkout_invoice_using_qris_custom_checkout_payment_code(): void
     {
         [$application, $token] = $this->integrationToken();
         $customer = ApplicationCustomer::factory()->create([
@@ -264,13 +264,16 @@ class IntegrationBillingApiTest extends TestCase
             ->assertJsonPath('data.payment.provider', 'dana')
             ->assertJsonPath('data.payment.payment_method', 'qris')
             ->assertJsonPath('data.payment.checkout_status', 'ready')
-            ->assertJsonPath('data.payment.qr_content', '00020101021226570011ID.DANA.WWW.QRIS.SAMPLE');
+            ->assertJsonPath('data.payment.qr_content', null)
+            ->assertJsonPath('data.payment.payment_code', '00020101021226570011ID.DANA.WWW.QRIS.SAMPLE')
+            ->assertJsonPath('data.payment.payment_instruction.type', 'payment_code');
 
         $this->withToken($token)
             ->getJson("/api/v1/integrations/invoices/{$invoice->invoice_number}")
             ->assertOk()
             ->assertJsonPath('data.payment.payment_method', 'qris')
-            ->assertJsonPath('data.payment.qr_content', '00020101021226570011ID.DANA.WWW.QRIS.SAMPLE');
+            ->assertJsonPath('data.payment.qr_content', null)
+            ->assertJsonPath('data.payment.payment_code', '00020101021226570011ID.DANA.WWW.QRIS.SAMPLE');
     }
 
     /** @return array{0: Application, 1: string} */
