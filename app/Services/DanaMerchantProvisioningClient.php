@@ -169,6 +169,24 @@ class DanaMerchantProvisioningClient
     }
 
     /** @return array<string, mixed> */
+    public function testIpgCreateOrderSuccess(int $merchantId): array
+    {
+        $response = $this->send(fn (PendingRequest $request): Response => $request
+            ->post("/api/v1/internal/merchants/{$merchantId}/sandbox-tester/uat/ipg-create-order-success"));
+
+        return $this->sandboxIpgCreateOrderSuccessUat($this->decodeSuccessfulResponse($response)['data'] ?? null);
+    }
+
+    /** @return array<string, mixed> */
+    public function testIpgCreateOrderMissingTimestamp(int $merchantId): array
+    {
+        $response = $this->send(fn (PendingRequest $request): Response => $request
+            ->post("/api/v1/internal/merchants/{$merchantId}/sandbox-tester/uat/ipg-create-order-missing-timestamp"));
+
+        return $this->sandboxIpgCreateOrderMissingTimestampUat($this->decodeSuccessfulResponse($response)['data'] ?? null);
+    }
+
+    /** @return array<string, mixed> */
     public function testDebitStatusTransactionNotFound(int $merchantId): array
     {
         $response = $this->send(fn (PendingRequest $request): Response => $request
@@ -758,6 +776,70 @@ class DanaMerchantProvisioningClient
             || (! is_null($secondRequest['response_message'] ?? null) && ! is_string($secondRequest['response_message']))
             || ! is_array($received)) {
             throw new DanaMerchantProvisioningException('Respons UAT Create Order Sandbox tidak valid.', 502, false);
+        }
+
+        return $result;
+    }
+
+    /** @return array<string, mixed> */
+    private function sandboxIpgCreateOrderSuccessUat(mixed $result): array
+    {
+        $uat = is_array($result) ? ($result['uat'] ?? null) : null;
+        $expected = is_array($uat) ? ($uat['expected'] ?? null) : null;
+        $received = is_array($uat) ? ($uat['received'] ?? null) : null;
+        $request = is_array($uat) ? ($uat['request'] ?? null) : null;
+
+        if (! is_array($result)
+            || ! is_string($result['merchant_code'] ?? null)
+            || ($result['environment'] ?? null) !== 'sandbox'
+            || ! is_array($uat)
+            || ($uat['scenario'] ?? null) !== 'ipg_create_order_success'
+            || ! is_bool($uat['passed'] ?? null)
+            || ! is_array($expected)
+            || ($expected['response_code'] ?? null) !== '2005400'
+            || ($expected['response_message'] ?? null) !== 'Successful'
+            || ! is_array($received)
+            || ! is_int($received['http_status'] ?? null)
+            || (! is_null($received['response_code'] ?? null) && ! is_string($received['response_code']))
+            || ! is_string($received['response_message'] ?? null)
+            || (! is_null($received['reference_no'] ?? null) && ! is_string($received['reference_no']))
+            || (! is_null($received['web_redirect_url'] ?? null) && ! is_string($received['web_redirect_url']))
+            || (! is_null($received['request_id'] ?? null) && ! is_string($received['request_id']))
+            || ! is_array($request)
+            || ($request['endpoint'] ?? null) !== '/rest/redirection/v1.0/debit/payment-host-to-host'
+            || ($request['x_timestamp_sent'] ?? null) !== true) {
+            throw new DanaMerchantProvisioningException('Respons UAT IPG Cashier Pay Sandbox tidak valid.', 502, false);
+        }
+
+        return $result;
+    }
+
+    /** @return array<string, mixed> */
+    private function sandboxIpgCreateOrderMissingTimestampUat(mixed $result): array
+    {
+        $uat = is_array($result) ? ($result['uat'] ?? null) : null;
+        $expected = is_array($uat) ? ($uat['expected'] ?? null) : null;
+        $received = is_array($uat) ? ($uat['received'] ?? null) : null;
+        $request = is_array($uat) ? ($uat['request'] ?? null) : null;
+
+        if (! is_array($result)
+            || ! is_string($result['merchant_code'] ?? null)
+            || ($result['environment'] ?? null) !== 'sandbox'
+            || ! is_array($uat)
+            || ($uat['scenario'] ?? null) !== 'ipg_create_order_missing_x_timestamp'
+            || ! is_bool($uat['passed'] ?? null)
+            || ! is_array($expected)
+            || ($expected['response_code'] ?? null) !== '4005402'
+            || ($expected['response_message'] ?? null) !== 'Invalid Mandatory Field X-TIMESTAMP'
+            || ! is_array($received)
+            || ! is_int($received['http_status'] ?? null)
+            || (! is_null($received['response_code'] ?? null) && ! is_string($received['response_code']))
+            || ! is_string($received['response_message'] ?? null)
+            || (! is_null($received['request_id'] ?? null) && ! is_string($received['request_id']))
+            || ! is_array($request)
+            || ($request['endpoint'] ?? null) !== '/rest/redirection/v1.0/debit/payment-host-to-host'
+            || ($request['x_timestamp_sent'] ?? null) !== false) {
+            throw new DanaMerchantProvisioningException('Respons UAT IPG Cashier Pay Sandbox tidak valid.', 502, false);
         }
 
         return $result;

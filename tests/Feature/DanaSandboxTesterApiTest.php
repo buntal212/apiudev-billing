@@ -213,6 +213,104 @@ class DanaSandboxTesterApiTest extends TestCase
             ->assertJsonMissing(['private_key', 'api_key', 'signature']);
     }
 
+    public function test_ipg_create_order_success_uat_returns_safe_dana_diagnostics_and_audits(): void
+    {
+        $merchant = $this->sandboxProvisionedMerchant();
+        Http::fake([
+            "https://dana-gateway.test/api/v1/internal/merchants/{$merchant->gateway_merchant_id}/sandbox-tester/uat/ipg-create-order-success" => Http::response([
+                'data' => [
+                    'merchant_code' => $merchant->merchant_code,
+                    'environment' => 'sandbox',
+                    'uat' => [
+                        'scenario' => 'ipg_create_order_success',
+                        'passed' => true,
+                        'expected' => ['response_code' => '2005400', 'response_message' => 'Successful'],
+                        'received' => [
+                            'http_status' => 200,
+                            'response_code' => '2005400',
+                            'response_message' => 'Successful',
+                            'reference_no' => '2026102877770000000001',
+                            'web_redirect_url' => 'https://sandbox-gateway.partner.co.id/checkout?token=ipg-token-001',
+                            'request_id' => 'uat-ipg-success-001',
+                        ],
+                        'request' => [
+                            'endpoint' => '/rest/redirection/v1.0/debit/payment-host-to-host',
+                            'x_timestamp_sent' => true,
+                        ],
+                    ],
+                ],
+            ]),
+        ]);
+
+        $this->actingAdmin();
+        $this->postJson($this->ipgCreateOrderSuccessUatUrl($merchant->gateway_merchant_id))
+            ->assertOk()
+            ->assertJsonPath('data.uat.passed', true)
+            ->assertJsonPath('data.uat.received.response_code', '2005400')
+            ->assertJsonPath('data.uat.received.response_message', 'Successful')
+            ->assertJsonPath('data.uat.received.reference_no', '2026102877770000000001')
+            ->assertJsonPath('data.uat.received.web_redirect_url', 'https://sandbox-gateway.partner.co.id/checkout?token=ipg-token-001')
+            ->assertJsonPath('data.uat.request.endpoint', '/rest/redirection/v1.0/debit/payment-host-to-host')
+            ->assertJsonPath('data.uat.request.x_timestamp_sent', true)
+            ->assertJsonMissing(['private_key', 'api_key', 'signature']);
+
+        $audit = DanaMerchantProvisioningAudit::query()
+            ->where('operation', 'dana_sandbox_tester.uat_ipg_create_order_success')
+            ->sole();
+        $this->assertSame('succeeded', $audit->status);
+        $this->assertSame($merchant->merchant_code, $audit->merchant_code);
+        $this->assertSame($merchant->gateway_merchant_id, $audit->gateway_merchant_id);
+        $this->assertSame('/rest/redirection/v1.0/debit/payment-host-to-host', $audit->safe_details['endpoint']);
+        $this->assertTrue($audit->safe_details['passed']);
+    }
+
+    public function test_ipg_missing_timestamp_uat_returns_safe_dana_diagnostics_and_audits(): void
+    {
+        $merchant = $this->sandboxProvisionedMerchant();
+        Http::fake([
+            "https://dana-gateway.test/api/v1/internal/merchants/{$merchant->gateway_merchant_id}/sandbox-tester/uat/ipg-create-order-missing-timestamp" => Http::response([
+                'data' => [
+                    'merchant_code' => $merchant->merchant_code,
+                    'environment' => 'sandbox',
+                    'uat' => [
+                        'scenario' => 'ipg_create_order_missing_x_timestamp',
+                        'passed' => true,
+                        'expected' => ['response_code' => '4005402', 'response_message' => 'Invalid Mandatory Field X-TIMESTAMP'],
+                        'received' => [
+                            'http_status' => 400,
+                            'response_code' => '4005402',
+                            'response_message' => 'Invalid Mandatory Field X-TIMESTAMP',
+                            'request_id' => 'uat-ipg-missing-ts-001',
+                        ],
+                        'request' => [
+                            'endpoint' => '/rest/redirection/v1.0/debit/payment-host-to-host',
+                            'x_timestamp_sent' => false,
+                        ],
+                    ],
+                ],
+            ]),
+        ]);
+
+        $this->actingAdmin();
+        $this->postJson($this->ipgMissingTimestampUatUrl($merchant->gateway_merchant_id))
+            ->assertOk()
+            ->assertJsonPath('data.uat.passed', true)
+            ->assertJsonPath('data.uat.received.response_code', '4005402')
+            ->assertJsonPath('data.uat.received.response_message', 'Invalid Mandatory Field X-TIMESTAMP')
+            ->assertJsonPath('data.uat.request.endpoint', '/rest/redirection/v1.0/debit/payment-host-to-host')
+            ->assertJsonPath('data.uat.request.x_timestamp_sent', false)
+            ->assertJsonMissing(['private_key', 'api_key', 'signature']);
+
+        $audit = DanaMerchantProvisioningAudit::query()
+            ->where('operation', 'dana_sandbox_tester.uat_ipg_create_order_missing_timestamp')
+            ->sole();
+        $this->assertSame('succeeded', $audit->status);
+        $this->assertSame($merchant->merchant_code, $audit->merchant_code);
+        $this->assertSame($merchant->gateway_merchant_id, $audit->gateway_merchant_id);
+        $this->assertSame('/rest/redirection/v1.0/debit/payment-host-to-host', $audit->safe_details['endpoint']);
+        $this->assertTrue($audit->safe_details['passed']);
+    }
+
     public function test_inconsistent_request_uat_returns_only_safe_dana_diagnostics(): void
     {
         $merchant = $this->sandboxProvisionedMerchant();
@@ -1066,6 +1164,16 @@ class DanaSandboxTesterApiTest extends TestCase
     private function inconsistentRequestUatUrl(int $merchantId): string
     {
         return "/api/v1/admin/dana-gateway-merchants/{$merchantId}/sandbox-tester/uat/create-order-inconsistent-request";
+    }
+
+    private function ipgCreateOrderSuccessUatUrl(int $merchantId): string
+    {
+        return "/api/v1/admin/dana-gateway-merchants/{$merchantId}/sandbox-tester/uat/ipg-create-order-success";
+    }
+
+    private function ipgMissingTimestampUatUrl(int $merchantId): string
+    {
+        return "/api/v1/admin/dana-gateway-merchants/{$merchantId}/sandbox-tester/uat/ipg-create-order-missing-timestamp";
     }
 
     private function debitStatusNotFoundUatUrl(int $merchantId): string
