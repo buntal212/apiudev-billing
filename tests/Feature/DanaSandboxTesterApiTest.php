@@ -213,6 +213,56 @@ class DanaSandboxTesterApiTest extends TestCase
             ->assertJsonMissing(['private_key', 'api_key', 'signature']);
     }
 
+    public function test_inconsistent_request_uat_returns_only_safe_dana_diagnostics(): void
+    {
+        $merchant = $this->sandboxProvisionedMerchant();
+        Http::fake([
+            "https://dana-gateway.test/api/v1/internal/merchants/{$merchant->gateway_merchant_id}/sandbox-tester/uat/create-order-inconsistent-request" => Http::response([
+                'data' => [
+                    'merchant_code' => $merchant->merchant_code,
+                    'environment' => 'sandbox',
+                    'uat' => [
+                        'scenario' => 'create_order_inconsistent_request',
+                        'passed' => true,
+                        'expected' => ['response_code' => '4045418', 'response_message' => 'Inconsistent Request'],
+                        'first_request' => [
+                            'amount' => '100000.00',
+                            'http_status' => 200,
+                            'response_code' => '2005400',
+                            'response_message' => 'Successful',
+                            'request_id' => 'uat-inc-req-001',
+                        ],
+                        'second_request' => [
+                            'amount' => '200000.00',
+                            'http_status' => 404,
+                            'response_code' => '4045418',
+                            'response_message' => 'Inconsistent Request',
+                            'request_id' => 'uat-inc-req-002',
+                        ],
+                        'received' => [
+                            'amount' => '200000.00',
+                            'http_status' => 404,
+                            'response_code' => '4045418',
+                            'response_message' => 'Inconsistent Request',
+                            'request_id' => 'uat-inc-req-002',
+                        ],
+                    ],
+                ],
+            ]),
+        ]);
+
+        $this->actingAdmin();
+        $this->postJson($this->inconsistentRequestUatUrl($merchant->gateway_merchant_id))
+            ->assertOk()
+            ->assertJsonPath('data.uat.passed', true)
+            ->assertJsonPath('data.uat.first_request.response_code', '2005400')
+            ->assertJsonPath('data.uat.first_request.amount', '100000.00')
+            ->assertJsonPath('data.uat.second_request.response_code', '4045418')
+            ->assertJsonPath('data.uat.second_request.response_message', 'Inconsistent Request')
+            ->assertJsonPath('data.uat.second_request.amount', '200000.00')
+            ->assertJsonMissing(['private_key', 'api_key', 'signature']);
+    }
+
     public function test_creating_transaction_binds_a_hashed_result_context_before_returning_checkout(): void
     {
         $merchant = $this->sandboxProvisionedMerchant();
@@ -635,6 +685,11 @@ class DanaSandboxTesterApiTest extends TestCase
     private function invalidAmountFormatUatUrl(int $merchantId): string
     {
         return "/api/v1/admin/dana-gateway-merchants/{$merchantId}/sandbox-tester/uat/create-order-invalid-amount-format";
+    }
+
+    private function inconsistentRequestUatUrl(int $merchantId): string
+    {
+        return "/api/v1/admin/dana-gateway-merchants/{$merchantId}/sandbox-tester/uat/create-order-inconsistent-request";
     }
 
     private function transactionUrl(int $merchantId): string
