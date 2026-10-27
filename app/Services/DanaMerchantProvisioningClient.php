@@ -150,6 +150,15 @@ class DanaMerchantProvisioningClient
         return $this->sandboxCreateOrderMissingTimestampUat($this->decodeSuccessfulResponse($response)['data'] ?? null);
     }
 
+    /** @return array<string, mixed> */
+    public function testCreateOrderInvalidAmountFormat(int $merchantId): array
+    {
+        $response = $this->send(fn (PendingRequest $request): Response => $request
+            ->post("/api/v1/internal/merchants/{$merchantId}/sandbox-tester/uat/create-order-invalid-amount-format"));
+
+        return $this->sandboxCreateOrderInvalidAmountFormatUat($this->decodeSuccessfulResponse($response)['data'] ?? null);
+    }
+
     /**
      * @param  array{amount_minor: int, payment_method: string, return_context: string}  $attributes
      * @return array<string, mixed>
@@ -627,6 +636,36 @@ class DanaMerchantProvisioningClient
             || ! is_null($received['request_id'] ?? null) && ! is_string($received['request_id'])
             || ! is_array($request)
             || ($request['x_timestamp_sent'] ?? null) !== false) {
+            throw new DanaMerchantProvisioningException('Respons UAT Create Order Sandbox tidak valid.', 502, false);
+        }
+
+        return $result;
+    }
+
+    /** @return array<string, mixed> */
+    private function sandboxCreateOrderInvalidAmountFormatUat(mixed $result): array
+    {
+        $uat = is_array($result) ? ($result['uat'] ?? null) : null;
+        $expected = is_array($uat) ? ($uat['expected'] ?? null) : null;
+        $received = is_array($uat) ? ($uat['received'] ?? null) : null;
+        $request = is_array($uat) ? ($uat['request'] ?? null) : null;
+
+        if (! is_array($result)
+            || ! is_string($result['merchant_code'] ?? null)
+            || ($result['environment'] ?? null) !== 'sandbox'
+            || ! is_array($uat)
+            || ($uat['scenario'] ?? null) !== 'create_order_invalid_amount_format'
+            || ! is_bool($uat['passed'] ?? null)
+            || ! is_array($expected)
+            || ($expected['response_code'] ?? null) !== '4005401'
+            || ($expected['response_message'] ?? null) !== 'Invalid Field Format amount'
+            || ! is_array($received)
+            || ! is_int($received['http_status'] ?? null)
+            || ! is_null($received['response_code'] ?? null) && ! is_string($received['response_code'])
+            || ! is_string($received['response_message'] ?? null)
+            || ! is_null($received['request_id'] ?? null) && ! is_string($received['request_id'])
+            || ! is_array($request)
+            || ($request['amount_format_valid'] ?? null) !== false) {
             throw new DanaMerchantProvisioningException('Respons UAT Create Order Sandbox tidak valid.', 502, false);
         }
 

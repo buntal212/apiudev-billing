@@ -184,6 +184,35 @@ class DanaSandboxTesterApiTest extends TestCase
             ->assertJsonMissing(['private_key', 'api_key', 'signature']);
     }
 
+    public function test_invalid_amount_format_uat_returns_only_safe_dana_diagnostics(): void
+    {
+        $merchant = $this->sandboxProvisionedMerchant();
+        Http::fake([
+            "https://dana-gateway.test/api/v1/internal/merchants/{$merchant->gateway_merchant_id}/sandbox-tester/uat/create-order-invalid-amount-format" => Http::response([
+                'data' => [
+                    'merchant_code' => $merchant->merchant_code,
+                    'environment' => 'sandbox',
+                    'uat' => [
+                        'scenario' => 'create_order_invalid_amount_format',
+                        'passed' => true,
+                        'expected' => ['response_code' => '4005401', 'response_message' => 'Invalid Field Format amount'],
+                        'received' => ['http_status' => 400, 'response_code' => '4005401', 'response_message' => 'Invalid Field Format amount', 'request_id' => 'uat-invalid-amount-001'],
+                        'request' => ['amount_format_valid' => false],
+                    ],
+                ],
+            ]),
+        ]);
+
+        $this->actingAdmin();
+        $this->postJson($this->invalidAmountFormatUatUrl($merchant->gateway_merchant_id))
+            ->assertOk()
+            ->assertJsonPath('data.uat.passed', true)
+            ->assertJsonPath('data.uat.received.response_code', '4005401')
+            ->assertJsonPath('data.uat.received.response_message', 'Invalid Field Format amount')
+            ->assertJsonPath('data.uat.request.amount_format_valid', false)
+            ->assertJsonMissing(['private_key', 'api_key', 'signature']);
+    }
+
     public function test_creating_transaction_binds_a_hashed_result_context_before_returning_checkout(): void
     {
         $merchant = $this->sandboxProvisionedMerchant();
@@ -601,6 +630,11 @@ class DanaSandboxTesterApiTest extends TestCase
     private function missingTimestampUatUrl(int $merchantId): string
     {
         return "/api/v1/admin/dana-gateway-merchants/{$merchantId}/sandbox-tester/uat/create-order-missing-timestamp";
+    }
+
+    private function invalidAmountFormatUatUrl(int $merchantId): string
+    {
+        return "/api/v1/admin/dana-gateway-merchants/{$merchantId}/sandbox-tester/uat/create-order-invalid-amount-format";
     }
 
     private function transactionUrl(int $merchantId): string
