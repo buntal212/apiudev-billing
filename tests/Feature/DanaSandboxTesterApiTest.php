@@ -644,7 +644,7 @@ class DanaSandboxTesterApiTest extends TestCase
                         'method' => 'qris',
                         'label' => 'QRIS',
                         'message' => 'Pindai QRIS',
-                        'qr_content' => '00020101021226590014ID.DANA.WWW',
+                        'qr_content' => '00020101021226570011ID.DANA.WWW011893600915000295707502090029570750303UMI51380014ID.CO.QRIS.WWW02090029570750303UMI5204737253033605405100005802ID5905VZPAY6015Kota Jakarta Se61051224062710119anjartyrtyrtyy1234560440011ID.DANA.WWW0425MER202609041029168370062863046D16',
                     ],
                     'timeline' => [],
                 ],
@@ -659,7 +659,7 @@ class DanaSandboxTesterApiTest extends TestCase
             ->assertJsonPath('data.checkout_available', true)
             ->assertJsonPath('data.checkout_url', 'https://checkout.sandbox.dana.id/session/audit-chk')
             ->assertJsonPath('data.payment_instruction.type', 'qris_mpm')
-            ->assertJsonPath('data.payment_instruction.qr_content', '00020101021226590014ID.DANA.WWW');
+            ->assertJsonPath('data.payment_instruction.qr_content', '00020101021226570011ID.DANA.WWW011893600915000295707502090029570750303UMI51380014ID.CO.QRIS.WWW02090029570750303UMI5204737253033605405100005802ID5905VZPAY6015Kota Jakarta Se61051224062710119anjartyrtyrtyy1234560440011ID.DANA.WWW0425MER202609041029168370062863046D16');
     }
 
     public function test_gateway_audit_retry_after_is_forwarded_safely(): void
