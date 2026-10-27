@@ -701,11 +701,11 @@ class DanaMerchantProvisioningClient
             || ($expected['response_message'] ?? null) !== 'Inconsistent Request'
             || ! is_array($firstRequest)
             || ! is_int($firstRequest['http_status'] ?? null)
-            || ! is_null($firstRequest['response_code'] ?? null) && ! is_string($firstRequest['response_code'])
+            || (! is_null($firstRequest['response_code'] ?? null) && ! is_string($firstRequest['response_code']))
             || ! is_array($secondRequest)
             || ! is_int($secondRequest['http_status'] ?? null)
-            || ! is_null($secondRequest['response_code'] ?? null) && ! is_string($secondRequest['response_code'])
-            || ! is_string($secondRequest['response_message'] ?? null)
+            || (! is_null($secondRequest['response_code'] ?? null) && ! is_string($secondRequest['response_code']))
+            || (! is_null($secondRequest['response_message'] ?? null) && ! is_string($secondRequest['response_message']))
             || ! is_array($received)) {
             throw new DanaMerchantProvisioningException('Respons UAT Create Order Sandbox tidak valid.', 502, false);
         }
