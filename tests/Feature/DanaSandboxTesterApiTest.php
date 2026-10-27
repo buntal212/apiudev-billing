@@ -155,6 +155,35 @@ class DanaSandboxTesterApiTest extends TestCase
         ]);
     }
 
+    public function test_missing_timestamp_uat_returns_only_safe_dana_diagnostics(): void
+    {
+        $merchant = $this->sandboxProvisionedMerchant();
+        Http::fake([
+            "https://dana-gateway.test/api/v1/internal/merchants/{$merchant->gateway_merchant_id}/sandbox-tester/uat/create-order-missing-timestamp" => Http::response([
+                'data' => [
+                    'merchant_code' => $merchant->merchant_code,
+                    'environment' => 'sandbox',
+                    'uat' => [
+                        'scenario' => 'create_order_missing_x_timestamp',
+                        'passed' => true,
+                        'expected' => ['response_code' => '4005402', 'response_message' => 'Invalid Mandatory Field X-TIMESTAMP'],
+                        'received' => ['http_status' => 400, 'response_code' => '4005402', 'response_message' => 'Invalid Mandatory Field X-TIMESTAMP', 'request_id' => 'uat-missing-timestamp-001'],
+                        'request' => ['x_timestamp_sent' => false],
+                    ],
+                ],
+            ]),
+        ]);
+
+        $this->actingAdmin();
+        $this->postJson($this->missingTimestampUatUrl($merchant->gateway_merchant_id))
+            ->assertOk()
+            ->assertJsonPath('data.uat.passed', true)
+            ->assertJsonPath('data.uat.received.response_code', '4005402')
+            ->assertJsonPath('data.uat.received.response_message', 'Invalid Mandatory Field X-TIMESTAMP')
+            ->assertJsonPath('data.uat.request.x_timestamp_sent', false)
+            ->assertJsonMissing(['private_key', 'api_key', 'signature']);
+    }
+
     public function test_creating_transaction_binds_a_hashed_result_context_before_returning_checkout(): void
     {
         $merchant = $this->sandboxProvisionedMerchant();
@@ -567,6 +596,11 @@ class DanaSandboxTesterApiTest extends TestCase
     private function validationUrl(int $merchantId): string
     {
         return "/api/v1/admin/dana-gateway-merchants/{$merchantId}/sandbox-tester/validation";
+    }
+
+    private function missingTimestampUatUrl(int $merchantId): string
+    {
+        return "/api/v1/admin/dana-gateway-merchants/{$merchantId}/sandbox-tester/uat/create-order-missing-timestamp";
     }
 
     private function transactionUrl(int $merchantId): string

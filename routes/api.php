@@ -111,6 +111,7 @@ Route::prefix('v1/admin')
                 Route::get('/', [DanaGatewayMerchantProvisioningController::class, 'index']);
                 Route::get('{merchantId}/dana-configuration', [DanaGatewayMerchantProvisioningController::class, 'storedDanaConfiguration'])->whereNumber('merchantId');
                 Route::get('{merchantId}/sandbox-tester/validation', [DanaGatewayMerchantProvisioningController::class, 'validateDanaSandboxTester'])->whereNumber('merchantId');
+                Route::post('{merchantId}/sandbox-tester/uat/create-order-missing-timestamp', [DanaGatewayMerchantProvisioningController::class, 'testCreateOrderMissingTimestamp'])->whereNumber('merchantId');
                 Route::get('{merchantId}/sandbox-tester/transactions', [DanaGatewayMerchantProvisioningController::class, 'danaSandboxTestHistory'])->whereNumber('merchantId');
                 Route::get('{merchantId}/sandbox-tester/transactions/{paymentId}/status', [DanaGatewayMerchantProvisioningController::class, 'danaSandboxTestTransactionStatus'])->whereNumber('merchantId')->whereUlid('paymentId');
                 Route::get('{merchantId}/sandbox-tester/transactions/{paymentId}/dana-status', [DanaGatewayMerchantProvisioningController::class, 'queryDanaSandboxPaymentStatus'])->whereNumber('merchantId')->whereUlid('paymentId');
