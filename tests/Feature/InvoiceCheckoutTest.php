@@ -368,6 +368,56 @@ class InvoiceCheckoutTest extends TestCase
         $this->assertSame('00020101021226570011ID.DANA.WWW', $attempt->metadata['qr_content']);
     }
 
+    public function test_admin_can_checkout_with_each_supported_virtual_account_method(): void
+    {
+        foreach (['va_bri' => 'BRI', 'va_pani' => 'PANI', 'va_cimb' => 'CIMB', 'va_btpn' => 'BTPN'] as $method => $bank) {
+            [$invoice] = $this->invoiceWithGateway();
+
+            Http::fake(function (HttpRequest $request) use ($method, $bank): mixed {
+                if ($request->method() === 'GET') {
+                    return Http::response(['data' => []]);
+                }
+
+                $attempt = PaymentAttempt::query()->latest('id')->firstOrFail();
+
+                return Http::response([
+                    'data' => [
+                        'id' => "gateway-{$method}-{$attempt->id}",
+                        'merchant_order_id' => $attempt->merchant_reference,
+                        'amount_minor' => 10000,
+                        'currency' => 'IDR',
+                        'status' => 'pending',
+                        'checkout_url' => null,
+                        'expires_at' => now()->addMinutes(15)->toISOString(),
+                        'metadata' => [
+                            'udev_sandbox_payment_instruction' => [
+                                'method' => $method,
+                                'label' => "Virtual Account {$bank}",
+                                'type' => 'virtual_account',
+                                'payment_code' => "8808{$attempt->id}",
+                            ],
+                        ],
+                    ],
+                ]);
+            });
+
+            $this->actingAdmin()
+                ->postJson("/api/v1/admin/invoices/{$invoice->id}/checkout", [
+                    'payment_method' => $method,
+                ], ['Idempotency-Key' => "checkout-{$method}-{$invoice->id}"])
+                ->assertOk()
+                ->assertJsonPath('data.payment_method', $method)
+                ->assertJsonPath('data.checkout_status', 'ready')
+                ->assertJsonPath('data.payment_instruction.type', 'virtual_account')
+                ->assertJsonPath('data.checkout_url', null)
+                ->assertJsonStructure(['data' => ['expires_at']]);
+
+            $attempt = PaymentAttempt::query()->where('invoice_id', $invoice->id)->sole();
+            $this->assertSame($method, $attempt->metadata['payment_method']);
+            $this->assertSame('virtual_account', $attempt->metadata['payment_instruction']['type']);
+        }
+    }
+
     public function test_checkout_handles_expired_attempt_and_creates_new_attempt_on_retry(): void
     {
         [$invoice] = $this->invoiceWithGateway();
