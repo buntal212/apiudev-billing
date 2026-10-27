@@ -312,6 +312,57 @@ class DanaSandboxTesterApiTest extends TestCase
         ]);
     }
 
+    public function test_debit_status_missing_timestamp_uat_returns_safe_diagnostics_and_audits(): void
+    {
+        $merchant = $this->sandboxProvisionedMerchant();
+        Http::fake([
+            "https://dana-gateway.test/api/v1/internal/merchants/{$merchant->gateway_merchant_id}/sandbox-tester/uat/debit-status-missing-timestamp" => Http::response([
+                'data' => [
+                    'merchant_code' => $merchant->merchant_code,
+                    'environment' => 'sandbox',
+                    'uat' => [
+                        'scenario' => 'debit_status_missing_x_timestamp',
+                        'passed' => true,
+                        'expected' => ['response_code' => '4005502', 'response_message' => 'Invalid Mandatory Field X-TIMESTAMP'],
+                        'received' => [
+                            'http_status' => 400,
+                            'response_code' => '4005502',
+                            'response_message' => 'Invalid Mandatory Field X-TIMESTAMP',
+                            'request_id' => 'dana-notimestamp-001',
+                        ],
+                        'request' => [
+                            'x_timestamp_sent' => false,
+                            'service_code' => '54',
+                        ],
+                    ],
+                ],
+            ], 200),
+        ]);
+
+        $this->actingAdmin();
+
+        $this->postJson($this->debitStatusMissingTimestampUatUrl($merchant->gateway_merchant_id))
+            ->assertOk()
+            ->assertJsonPath('data.uat.passed', true)
+            ->assertJsonPath('data.uat.scenario', 'debit_status_missing_x_timestamp')
+            ->assertJsonPath('data.uat.expected.response_code', '4005502')
+            ->assertJsonPath('data.uat.received.http_status', 400)
+            ->assertJsonPath('data.uat.received.response_code', '4005502')
+            ->assertJsonPath('data.uat.received.response_message', 'Invalid Mandatory Field X-TIMESTAMP')
+            ->assertJsonPath('data.uat.request.x_timestamp_sent', false)
+            ->assertJsonPath('data.uat.request.service_code', '54')
+            ->assertJsonMissing(['private_key', 'api_key', 'signature']);
+
+        $this->assertDatabaseHas('dana_merchant_provisioning_audits', [
+            'gateway_merchant_id' => $merchant->gateway_merchant_id,
+            'operation' => 'dana_sandbox_tester.uat_debit_status_missing_timestamp',
+            'status' => 'succeeded',
+            'safe_details->passed' => true,
+            'safe_details->response_code' => '4005502',
+            'safe_details->x_timestamp_sent' => false,
+        ]);
+    }
+
     public function test_inconsistent_request_uat_safely_passes_through_failure_diagnostics(): void
     {
         $merchant = $this->sandboxProvisionedMerchant();
@@ -920,6 +971,11 @@ class DanaSandboxTesterApiTest extends TestCase
     private function debitStatusNotFoundUatUrl(int $merchantId): string
     {
         return "/api/v1/admin/dana-gateway-merchants/{$merchantId}/sandbox-tester/uat/debit-status-transaction-not-found";
+    }
+
+    private function debitStatusMissingTimestampUatUrl(int $merchantId): string
+    {
+        return "/api/v1/admin/dana-gateway-merchants/{$merchantId}/sandbox-tester/uat/debit-status-missing-timestamp";
     }
 
     private function armWebhook500UatUrl(int $merchantId): string
