@@ -473,6 +473,77 @@ class DanaSandboxTesterApiTest extends TestCase
         $this->assertTrue($audit->safe_details['passed']);
     }
 
+    public function test_ipg_inconsistent_request_uat_returns_safe_dana_diagnostics_and_audits(): void
+    {
+        $merchant = $this->sandboxProvisionedMerchant();
+        Http::fake([
+            "https://dana-gateway.test/api/v1/internal/merchants/{$merchant->gateway_merchant_id}/sandbox-tester/uat/ipg-create-order-inconsistent-request" => Http::response([
+                'data' => [
+                    'merchant_code' => $merchant->merchant_code,
+                    'environment' => 'sandbox',
+                    'uat' => [
+                        'scenario' => 'ipg_create_order_inconsistent_request',
+                        'passed' => true,
+                        'expected' => ['response_code' => '4045418', 'response_message' => 'Inconsistent Request'],
+                        'first_request' => [
+                            'amount' => '10000.00',
+                            'http_status' => 200,
+                            'response_code' => '2005400',
+                            'response_message' => 'Successful',
+                            'request_id' => 'uat-ipg-inc-001',
+                        ],
+                        'second_request' => [
+                            'amount' => '20000.00',
+                            'http_status' => 404,
+                            'response_code' => '4045418',
+                            'response_message' => 'Inconsistent Request',
+                            'request_id' => 'uat-ipg-inc-002',
+                        ],
+                        'received' => [
+                            'http_status' => 404,
+                            'response_code' => '4045418',
+                            'response_message' => 'Inconsistent Request',
+                            'request_id' => 'uat-ipg-inc-002',
+                        ],
+                        'request' => [
+                            'endpoint' => '/rest/redirection/v1.0/debit/payment-host-to-host',
+                            'partner_reference_no' => 'PARTNER-REF-IPG-INC-001',
+                            'first_amount' => '10000.00',
+                            'second_amount' => '20000.00',
+                            'product_code' => '51051000100000000001',
+                            'support_deep_link_checkout_url' => 'true',
+                        ],
+                    ],
+                ],
+            ]),
+        ]);
+
+        $this->actingAdmin();
+        $this->postJson($this->ipgInconsistentRequestUatUrl($merchant->gateway_merchant_id))
+            ->assertOk()
+            ->assertJsonPath('data.uat.passed', true)
+            ->assertJsonPath('data.uat.first_request.response_code', '2005400')
+            ->assertJsonPath('data.uat.first_request.amount', '10000.00')
+            ->assertJsonPath('data.uat.second_request.response_code', '4045418')
+            ->assertJsonPath('data.uat.second_request.amount', '20000.00')
+            ->assertJsonPath('data.uat.request.endpoint', '/rest/redirection/v1.0/debit/payment-host-to-host')
+            ->assertJsonPath('data.uat.request.product_code', '51051000100000000001')
+            ->assertJsonMissing(['private_key', 'api_key', 'signature']);
+
+        $audit = DanaMerchantProvisioningAudit::query()
+            ->where('operation', 'dana_sandbox_tester.uat_ipg_create_order_inconsistent_request')
+            ->sole();
+        $this->assertSame('failed', $audit->status);
+        $this->assertSame($merchant->merchant_code, $audit->merchant_code);
+        $this->assertSame($merchant->gateway_merchant_id, $audit->gateway_merchant_id);
+        $this->assertSame('/rest/redirection/v1.0/debit/payment-host-to-host', $audit->safe_details['endpoint']);
+        $this->assertSame('PARTNER-REF-IPG-INC-001', $audit->safe_details['partner_reference_no']);
+        $this->assertSame('10000.00', $audit->safe_details['first_amount']);
+        $this->assertSame('20000.00', $audit->safe_details['second_amount']);
+        $this->assertSame('FAILED', $audit->safe_details['transaction_status']);
+        $this->assertTrue($audit->safe_details['passed']);
+    }
+
     public function test_inconsistent_request_uat_returns_only_safe_dana_diagnostics(): void
     {
         $merchant = $this->sandboxProvisionedMerchant();
@@ -1351,6 +1422,11 @@ class DanaSandboxTesterApiTest extends TestCase
     private function ipgInvalidMerchantUatUrl(int $merchantId): string
     {
         return "/api/v1/admin/dana-gateway-merchants/{$merchantId}/sandbox-tester/uat/ipg-create-order-invalid-merchant";
+    }
+
+    private function ipgInconsistentRequestUatUrl(int $merchantId): string
+    {
+        return "/api/v1/admin/dana-gateway-merchants/{$merchantId}/sandbox-tester/uat/ipg-create-order-inconsistent-request";
     }
 
     private function debitStatusNotFoundUatUrl(int $merchantId): string

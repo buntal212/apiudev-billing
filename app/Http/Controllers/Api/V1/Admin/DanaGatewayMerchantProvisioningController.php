@@ -396,6 +396,49 @@ class DanaGatewayMerchantProvisioningController extends Controller
         return response()->json(['data' => $result])->header('Cache-Control', 'no-store');
     }
 
+    public function testIpgCreateOrderInconsistentRequest(int $merchantId, Request $request, DanaMerchantProvisioningClient $client): JsonResponse
+    {
+        $merchant = $this->sandboxProvisionedMerchant($merchantId);
+        if ($merchant === null) {
+            return $this->merchantNotFound();
+        }
+
+        try {
+            $result = $client->testIpgCreateOrderInconsistentRequest($merchantId);
+        } catch (DanaMerchantProvisioningException $exception) {
+            $this->recordManagementAudit($request, $merchant, 'dana_sandbox_tester.uat_ipg_create_order_inconsistent_request', 'failed', $exception->gatewayStatus, $exception->retryable, [
+                'endpoint' => '/rest/redirection/v1.0/debit/payment-host-to-host',
+                'first_amount' => '10000.00',
+                'second_amount' => '20000.00',
+                'transaction_status' => 'FAILED',
+            ]);
+
+            return $this->gatewayError($exception)->header('Cache-Control', 'no-store');
+        }
+
+        $uat = is_array($result['uat'] ?? null) ? $result['uat'] : [];
+        $passed = ($uat['passed'] ?? false) === true;
+        $firstReq = is_array($uat['first_request'] ?? null) ? $uat['first_request'] : [];
+        $secondReq = is_array($uat['second_request'] ?? null) ? $uat['second_request'] : [];
+        $req = is_array($uat['request'] ?? null) ? $uat['request'] : [];
+
+        $this->recordManagementAudit($request, $merchant, 'dana_sandbox_tester.uat_ipg_create_order_inconsistent_request', 'failed', 200, false, [
+            'endpoint' => '/rest/redirection/v1.0/debit/payment-host-to-host',
+            'partner_reference_no' => $req['partner_reference_no'] ?? null,
+            'first_amount' => '10000.00',
+            'second_amount' => '20000.00',
+            'passed' => $passed,
+            'transaction_status' => 'FAILED',
+            'first_response_code' => $firstReq['response_code'] ?? null,
+            'second_response_code' => $secondReq['response_code'] ?? null,
+            'response_code' => $uat['received']['response_code'] ?? null,
+            'response_message' => $uat['received']['response_message'] ?? null,
+            'request_id' => $uat['received']['request_id'] ?? null,
+        ]);
+
+        return response()->json(['data' => $result])->header('Cache-Control', 'no-store');
+    }
+
     public function testDebitStatusTransactionNotFound(int $merchantId, Request $request, DanaMerchantProvisioningClient $client): JsonResponse
     {
         $merchant = $this->sandboxProvisionedMerchant($merchantId);
