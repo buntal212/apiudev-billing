@@ -408,7 +408,7 @@ class DanaSandboxTesterApiTest extends TestCase
             ->assertJsonMissing(['private_key', 'api_key', 'signature']);
 
         $audit = DanaMerchantProvisioningAudit::query()
-            ->where('operation', 'dana_sandbox_tester.uat_ipg_create_order_transaction_not_permitted')
+            ->where('operation', 'dana_sandbox_tester.uat_ipg_create_order_tx_not_permitted')
             ->sole();
         $this->assertSame('failed', $audit->status);
         $this->assertSame($merchant->merchant_code, $audit->merchant_code);
@@ -531,7 +531,7 @@ class DanaSandboxTesterApiTest extends TestCase
             ->assertJsonMissing(['private_key', 'api_key', 'signature']);
 
         $audit = DanaMerchantProvisioningAudit::query()
-            ->where('operation', 'dana_sandbox_tester.uat_ipg_create_order_inconsistent_request')
+            ->where('operation', 'dana_sandbox_tester.uat_ipg_create_order_inconsistent_req')
             ->sole();
         $this->assertSame('failed', $audit->status);
         $this->assertSame($merchant->merchant_code, $audit->merchant_code);
@@ -642,7 +642,7 @@ class DanaSandboxTesterApiTest extends TestCase
             ->assertJsonMissing(['private_key', 'api_key', 'signature']);
 
         $audit = DanaMerchantProvisioningAudit::query()
-            ->where('operation', 'dana_sandbox_tester.uat_ipg_create_order_exceeds_amount_limit')
+            ->where('operation', 'dana_sandbox_tester.uat_ipg_create_order_exceeds_amount')
             ->sole();
         $this->assertSame('failed', $audit->status);
         $this->assertSame($merchant->merchant_code, $audit->merchant_code);
@@ -651,6 +651,45 @@ class DanaSandboxTesterApiTest extends TestCase
         $this->assertSame('5000000000.00', $audit->safe_details['amount_value']);
         $this->assertSame('FAILED', $audit->safe_details['transaction_status']);
         $this->assertTrue($audit->safe_details['passed']);
+    }
+
+    public function test_all_dana_sandbox_tester_uat_audit_operations_do_not_exceed_mysql_varchar_60_limit(): void
+    {
+        $controllerFile = app_path('Http/Controllers/Api/V1/Admin/DanaGatewayMerchantProvisioningController.php');
+        $this->assertFileExists($controllerFile);
+
+        $code = (string) file_get_contents($controllerFile);
+        preg_match_all('/recordManagementAudit\([^,]+,[^,]+,\s*\'([^\']+)\'/', $code, $matches);
+        $operations = array_values(array_unique($matches[1] ?? []));
+
+        $this->assertNotEmpty($operations, 'Daftar audit operations pada DanaGatewayMerchantProvisioningController tidak boleh kosong.');
+
+        $expectedUatOperations = [
+            'dana_sandbox_tester.uat_ipg_create_order_success',
+            'dana_sandbox_tester.uat_ipg_create_order_missing_timestamp',
+            'dana_sandbox_tester.uat_ipg_create_order_general_error',
+            'dana_sandbox_tester.uat_ipg_create_order_tx_not_permitted',
+            'dana_sandbox_tester.uat_ipg_create_order_invalid_merchant',
+            'dana_sandbox_tester.uat_ipg_create_order_inconsistent_req',
+            'dana_sandbox_tester.uat_ipg_create_order_invalid_signature',
+            'dana_sandbox_tester.uat_ipg_create_order_exceeds_amount',
+        ];
+
+        foreach ($expectedUatOperations as $expectedOp) {
+            $this->assertContains(
+                $expectedOp,
+                $operations,
+                "Operasi UAT [{$expectedOp}] harus terdaftar pada controller."
+            );
+        }
+
+        foreach ($operations as $operation) {
+            $this->assertLessThanOrEqual(
+                60,
+                strlen($operation),
+                "Nama operasi audit [{$operation}] melebihi batas 60 karakter kolom MySQL VARCHAR(60)."
+            );
+        }
     }
 
     public function test_inconsistent_request_uat_returns_only_safe_dana_diagnostics(): void

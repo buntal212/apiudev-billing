@@ -336,7 +336,7 @@ class DanaGatewayMerchantProvisioningController extends Controller
         try {
             $result = $client->testIpgCreateOrderTransactionNotPermitted($merchantId);
         } catch (DanaMerchantProvisioningException $exception) {
-            $this->recordManagementAudit($request, $merchant, 'dana_sandbox_tester.uat_ipg_create_order_transaction_not_permitted', 'failed', $exception->gatewayStatus, $exception->retryable, [
+            $this->recordManagementAudit($request, $merchant, 'dana_sandbox_tester.uat_ipg_create_order_tx_not_permitted', 'failed', $exception->gatewayStatus, $exception->retryable, [
                 'endpoint' => '/rest/redirection/v1.0/debit/payment-host-to-host',
                 'amount_value' => '435415.00',
                 'transaction_status' => 'FAILED',
@@ -348,7 +348,7 @@ class DanaGatewayMerchantProvisioningController extends Controller
         $uat = is_array($result['uat'] ?? null) ? $result['uat'] : [];
         $passed = ($uat['passed'] ?? false) === true;
 
-        $this->recordManagementAudit($request, $merchant, 'dana_sandbox_tester.uat_ipg_create_order_transaction_not_permitted', 'failed', 200, false, [
+        $this->recordManagementAudit($request, $merchant, 'dana_sandbox_tester.uat_ipg_create_order_tx_not_permitted', 'failed', 200, false, [
             'endpoint' => '/rest/redirection/v1.0/debit/payment-host-to-host',
             'amount_value' => '435415.00',
             'passed' => $passed,
@@ -406,7 +406,7 @@ class DanaGatewayMerchantProvisioningController extends Controller
         try {
             $result = $client->testIpgCreateOrderInconsistentRequest($merchantId);
         } catch (DanaMerchantProvisioningException $exception) {
-            $this->recordManagementAudit($request, $merchant, 'dana_sandbox_tester.uat_ipg_create_order_inconsistent_request', 'failed', $exception->gatewayStatus, $exception->retryable, [
+            $this->recordManagementAudit($request, $merchant, 'dana_sandbox_tester.uat_ipg_create_order_inconsistent_req', 'failed', $exception->gatewayStatus, $exception->retryable, [
                 'endpoint' => '/rest/redirection/v1.0/debit/payment-host-to-host',
                 'first_amount' => '10000.00',
                 'second_amount' => '20000.00',
@@ -422,7 +422,7 @@ class DanaGatewayMerchantProvisioningController extends Controller
         $secondReq = is_array($uat['second_request'] ?? null) ? $uat['second_request'] : [];
         $req = is_array($uat['request'] ?? null) ? $uat['request'] : [];
 
-        $this->recordManagementAudit($request, $merchant, 'dana_sandbox_tester.uat_ipg_create_order_inconsistent_request', 'failed', 200, false, [
+        $this->recordManagementAudit($request, $merchant, 'dana_sandbox_tester.uat_ipg_create_order_inconsistent_req', 'failed', 200, false, [
             'endpoint' => '/rest/redirection/v1.0/debit/payment-host-to-host',
             'partner_reference_no' => $req['partner_reference_no'] ?? null,
             'first_amount' => '10000.00',
@@ -484,7 +484,7 @@ class DanaGatewayMerchantProvisioningController extends Controller
         try {
             $result = $client->testIpgCreateOrderExceedsAmountLimit($merchantId);
         } catch (DanaMerchantProvisioningException $exception) {
-            $this->recordManagementAudit($request, $merchant, 'dana_sandbox_tester.uat_ipg_create_order_exceeds_amount_limit', 'failed', $exception->gatewayStatus, $exception->retryable, [
+            $this->recordManagementAudit($request, $merchant, 'dana_sandbox_tester.uat_ipg_create_order_exceeds_amount', 'failed', $exception->gatewayStatus, $exception->retryable, [
                 'endpoint' => '/rest/redirection/v1.0/debit/payment-host-to-host',
                 'amount_value' => '5000000000.00',
                 'transaction_status' => 'FAILED',
@@ -496,7 +496,7 @@ class DanaGatewayMerchantProvisioningController extends Controller
         $uat = is_array($result['uat'] ?? null) ? $result['uat'] : [];
         $passed = ($uat['passed'] ?? false) === true;
 
-        $this->recordManagementAudit($request, $merchant, 'dana_sandbox_tester.uat_ipg_create_order_exceeds_amount_limit', 'failed', 200, false, [
+        $this->recordManagementAudit($request, $merchant, 'dana_sandbox_tester.uat_ipg_create_order_exceeds_amount', 'failed', 200, false, [
             'endpoint' => '/rest/redirection/v1.0/debit/payment-host-to-host',
             'amount_value' => '5000000000.00',
             'passed' => $passed,
