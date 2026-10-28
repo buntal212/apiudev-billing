@@ -365,6 +365,60 @@ class DanaSandboxTesterApiTest extends TestCase
         $this->assertTrue($audit->safe_details['passed']);
     }
 
+    public function test_ipg_transaction_not_permitted_uat_returns_safe_dana_diagnostics_and_audits(): void
+    {
+        $merchant = $this->sandboxProvisionedMerchant();
+        Http::fake([
+            "https://dana-gateway.test/api/v1/internal/merchants/{$merchant->gateway_merchant_id}/sandbox-tester/uat/ipg-create-order-transaction-not-permitted" => Http::response([
+                'data' => [
+                    'merchant_code' => $merchant->merchant_code,
+                    'environment' => 'sandbox',
+                    'uat' => [
+                        'scenario' => 'ipg_create_order_transaction_not_permitted',
+                        'passed' => true,
+                        'expected' => ['response_code' => '4035415', 'response_message' => 'Transaction Not Permitted'],
+                        'received' => [
+                            'http_status' => 403,
+                            'response_code' => '4035415',
+                            'response_message' => 'Transaction Not Permitted',
+                            'request_id' => 'dana-req-4035415-001',
+                        ],
+                        'request' => [
+                            'endpoint' => '/rest/redirection/v1.0/debit/payment-host-to-host',
+                            'x_timestamp_sent' => true,
+                            'amount_value' => '435415.00',
+                            'product_code' => '51051000100000000001',
+                            'support_deep_link_checkout_url' => 'true',
+                        ],
+                    ],
+                ],
+            ]),
+        ]);
+
+        $this->actingAdmin();
+        $this->postJson($this->ipgTransactionNotPermittedUatUrl($merchant->gateway_merchant_id))
+            ->assertOk()
+            ->assertJsonPath('data.uat.passed', true)
+            ->assertJsonPath('data.uat.received.http_status', 403)
+            ->assertJsonPath('data.uat.received.response_code', '4035415')
+            ->assertJsonPath('data.uat.received.response_message', 'Transaction Not Permitted')
+            ->assertJsonPath('data.uat.request.endpoint', '/rest/redirection/v1.0/debit/payment-host-to-host')
+            ->assertJsonPath('data.uat.request.amount_value', '435415.00')
+            ->assertJsonPath('data.uat.request.product_code', '51051000100000000001')
+            ->assertJsonMissing(['private_key', 'api_key', 'signature']);
+
+        $audit = DanaMerchantProvisioningAudit::query()
+            ->where('operation', 'dana_sandbox_tester.uat_ipg_create_order_transaction_not_permitted')
+            ->sole();
+        $this->assertSame('failed', $audit->status);
+        $this->assertSame($merchant->merchant_code, $audit->merchant_code);
+        $this->assertSame($merchant->gateway_merchant_id, $audit->gateway_merchant_id);
+        $this->assertSame('/rest/redirection/v1.0/debit/payment-host-to-host', $audit->safe_details['endpoint']);
+        $this->assertSame('435415.00', $audit->safe_details['amount_value']);
+        $this->assertSame('FAILED', $audit->safe_details['transaction_status']);
+        $this->assertTrue($audit->safe_details['passed']);
+    }
+
     public function test_inconsistent_request_uat_returns_only_safe_dana_diagnostics(): void
     {
         $merchant = $this->sandboxProvisionedMerchant();
@@ -1233,6 +1287,11 @@ class DanaSandboxTesterApiTest extends TestCase
     private function ipgGeneralErrorUatUrl(int $merchantId): string
     {
         return "/api/v1/admin/dana-gateway-merchants/{$merchantId}/sandbox-tester/uat/ipg-create-order-general-error";
+    }
+
+    private function ipgTransactionNotPermittedUatUrl(int $merchantId): string
+    {
+        return "/api/v1/admin/dana-gateway-merchants/{$merchantId}/sandbox-tester/uat/ipg-create-order-transaction-not-permitted";
     }
 
     private function debitStatusNotFoundUatUrl(int $merchantId): string
