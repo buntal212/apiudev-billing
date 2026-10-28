@@ -361,6 +361,41 @@ class DanaGatewayMerchantProvisioningController extends Controller
         return response()->json(['data' => $result])->header('Cache-Control', 'no-store');
     }
 
+    public function testIpgCreateOrderInvalidMerchant(int $merchantId, Request $request, DanaMerchantProvisioningClient $client): JsonResponse
+    {
+        $merchant = $this->sandboxProvisionedMerchant($merchantId);
+        if ($merchant === null) {
+            return $this->merchantNotFound();
+        }
+
+        try {
+            $result = $client->testIpgCreateOrderInvalidMerchant($merchantId);
+        } catch (DanaMerchantProvisioningException $exception) {
+            $this->recordManagementAudit($request, $merchant, 'dana_sandbox_tester.uat_ipg_create_order_invalid_merchant', 'failed', $exception->gatewayStatus, $exception->retryable, [
+                'endpoint' => '/rest/redirection/v1.0/debit/payment-host-to-host',
+                'amount_value' => '445408.00',
+                'transaction_status' => 'FAILED',
+            ]);
+
+            return $this->gatewayError($exception)->header('Cache-Control', 'no-store');
+        }
+
+        $uat = is_array($result['uat'] ?? null) ? $result['uat'] : [];
+        $passed = ($uat['passed'] ?? false) === true;
+
+        $this->recordManagementAudit($request, $merchant, 'dana_sandbox_tester.uat_ipg_create_order_invalid_merchant', 'failed', 200, false, [
+            'endpoint' => '/rest/redirection/v1.0/debit/payment-host-to-host',
+            'amount_value' => '445408.00',
+            'passed' => $passed,
+            'transaction_status' => 'FAILED',
+            'response_code' => $uat['received']['response_code'] ?? null,
+            'response_message' => $uat['received']['response_message'] ?? null,
+            'request_id' => $uat['received']['request_id'] ?? null,
+        ]);
+
+        return response()->json(['data' => $result])->header('Cache-Control', 'no-store');
+    }
+
     public function testDebitStatusTransactionNotFound(int $merchantId, Request $request, DanaMerchantProvisioningClient $client): JsonResponse
     {
         $merchant = $this->sandboxProvisionedMerchant($merchantId);

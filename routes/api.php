@@ -118,6 +118,7 @@ Route::prefix('v1/admin')
                 Route::post('{merchantId}/sandbox-tester/uat/ipg-create-order-missing-timestamp', [DanaGatewayMerchantProvisioningController::class, 'testIpgCreateOrderMissingTimestamp'])->whereNumber('merchantId');
                 Route::post('{merchantId}/sandbox-tester/uat/ipg-create-order-general-error', [DanaGatewayMerchantProvisioningController::class, 'testIpgCreateOrderGeneralError'])->whereNumber('merchantId');
                 Route::post('{merchantId}/sandbox-tester/uat/ipg-create-order-transaction-not-permitted', [DanaGatewayMerchantProvisioningController::class, 'testIpgCreateOrderTransactionNotPermitted'])->whereNumber('merchantId');
+                Route::post('{merchantId}/sandbox-tester/uat/ipg-create-order-invalid-merchant', [DanaGatewayMerchantProvisioningController::class, 'testIpgCreateOrderInvalidMerchant'])->whereNumber('merchantId');
                 Route::post('{merchantId}/sandbox-tester/uat/debit-status-transaction-not-found', [DanaGatewayMerchantProvisioningController::class, 'testDebitStatusTransactionNotFound'])->whereNumber('merchantId');
                 Route::post('{merchantId}/sandbox-tester/uat/debit-status-missing-timestamp', [DanaGatewayMerchantProvisioningController::class, 'testDebitStatusMissingTimestamp'])->whereNumber('merchantId');
                 Route::post('{merchantId}/sandbox-tester/uat/debit-status-internal-server-error', [DanaGatewayMerchantProvisioningController::class, 'testDebitStatusInternalServerError'])->whereNumber('merchantId');
