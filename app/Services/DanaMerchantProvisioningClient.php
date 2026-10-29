@@ -232,17 +232,17 @@ class DanaMerchantProvisioningClient
     }
 
     /** @return array<string, mixed> */
-    public function testIpgCreateOrderExceedsAmountLimit(int $merchantId, ?int $amount = null): array
+    public function testIpgCreateOrderExceedsAmountLimit(int $merchantId, int|string|null $amount = null): array
     {
-        $payload = [];
-        if ($amount !== null) {
-            $payload['amount'] = $amount;
-        }
+        $normalizedAmount = match ((string) $amount) {
+            '10000000', '10000000.00' => 10000000,
+            default => 5000000000,
+        };
 
         $response = $this->send(fn (PendingRequest $request): Response => $request
-            ->post("/api/v1/internal/merchants/{$merchantId}/sandbox-tester/uat/ipg-create-order-exceeds-amount-limit", $payload));
+            ->post("/api/v1/internal/merchants/{$merchantId}/sandbox-tester/uat/ipg-create-order-exceeds-amount-limit", ['amount' => $normalizedAmount]));
 
-        return $this->sandboxIpgCreateOrderExceedsAmountLimitUat($this->decodeSuccessfulResponse($response)['data'] ?? null);
+        return $this->sandboxIpgCreateOrderExceedsAmountLimitUat($this->decodeSuccessfulResponse($response)['data'] ?? null, $normalizedAmount);
     }
 
     /** @return array<string, mixed> */
@@ -487,6 +487,7 @@ class DanaMerchantProvisioningClient
         }
 
         return Http::acceptJson()
+            ->asJson()
             ->baseUrl(rtrim($baseUrl, '/'))
             ->withToken($token)
             ->timeout((int) config('services.dana_merchant_provisioning.timeout', 8))
@@ -1066,8 +1067,9 @@ class DanaMerchantProvisioningClient
     }
 
     /** @return array<string, mixed> */
-    private function sandboxIpgCreateOrderExceedsAmountLimitUat(mixed $result): array
+    private function sandboxIpgCreateOrderExceedsAmountLimitUat(mixed $result, int $expectedAmount = 5000000000): array
     {
+        $expectedAmountValue = $expectedAmount === 10000000 ? '10000000.00' : '5000000000.00';
         $uat = is_array($result) ? ($result['uat'] ?? null) : null;
         $expected = is_array($uat) ? ($uat['expected'] ?? null) : null;
         $received = is_array($uat) ? ($uat['received'] ?? null) : null;
@@ -1090,7 +1092,7 @@ class DanaMerchantProvisioningClient
             || ! is_array($request)
             || ($request['endpoint'] ?? null) !== '/rest/redirection/v1.0/debit/payment-host-to-host'
             || ($request['x_timestamp_sent'] ?? null) !== true
-            || ! in_array($request['amount_value'] ?? null, ['5000000000.00', '10000000.00'], true)
+            || ($request['amount_value'] ?? null) !== $expectedAmountValue
             || ($request['product_code'] ?? null) !== '51051000100000000001') {
             throw new DanaMerchantProvisioningException('Respons UAT IPG Cashier Pay Sandbox tidak valid.', 502, false);
         }

@@ -481,7 +481,15 @@ class DanaGatewayMerchantProvisioningController extends Controller
             return $this->merchantNotFound();
         }
 
-        $amount = $request->has('amount') ? $request->integer('amount') : null;
+        $validated = $request->validate([
+            'amount' => ['nullable', 'in:10000000,5000000000,10000000.00,5000000000.00'],
+        ]);
+
+        $rawAmount = $validated['amount'] ?? null;
+        $amount = match ((string) $rawAmount) {
+            '10000000', '10000000.00' => 10000000,
+            default => 5000000000,
+        };
         $expectedAmountValue = $amount === 10000000 ? '10000000.00' : '5000000000.00';
 
         try {
@@ -501,7 +509,7 @@ class DanaGatewayMerchantProvisioningController extends Controller
 
         $this->recordManagementAudit($request, $merchant, 'dana_sandbox_tester.uat_ipg_create_order_exceeds_amount', 'failed', 200, false, [
             'endpoint' => '/rest/redirection/v1.0/debit/payment-host-to-host',
-            'amount_value' => $uat['request']['amount_value'] ?? $expectedAmountValue,
+            'amount_value' => $expectedAmountValue,
             'passed' => $passed,
             'transaction_status' => 'FAILED',
             'response_code' => $uat['received']['response_code'] ?? null,
