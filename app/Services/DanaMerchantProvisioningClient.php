@@ -232,10 +232,15 @@ class DanaMerchantProvisioningClient
     }
 
     /** @return array<string, mixed> */
-    public function testIpgCreateOrderExceedsAmountLimit(int $merchantId): array
+    public function testIpgCreateOrderExceedsAmountLimit(int $merchantId, ?int $amount = null): array
     {
+        $payload = [];
+        if ($amount !== null) {
+            $payload['amount'] = $amount;
+        }
+
         $response = $this->send(fn (PendingRequest $request): Response => $request
-            ->post("/api/v1/internal/merchants/{$merchantId}/sandbox-tester/uat/ipg-create-order-exceeds-amount-limit"));
+            ->post("/api/v1/internal/merchants/{$merchantId}/sandbox-tester/uat/ipg-create-order-exceeds-amount-limit", $payload));
 
         return $this->sandboxIpgCreateOrderExceedsAmountLimitUat($this->decodeSuccessfulResponse($response)['data'] ?? null);
     }
@@ -1085,7 +1090,7 @@ class DanaMerchantProvisioningClient
             || ! is_array($request)
             || ($request['endpoint'] ?? null) !== '/rest/redirection/v1.0/debit/payment-host-to-host'
             || ($request['x_timestamp_sent'] ?? null) !== true
-            || ($request['amount_value'] ?? null) !== '5000000000.00'
+            || ! in_array($request['amount_value'] ?? null, ['5000000000.00', '10000000.00'], true)
             || ($request['product_code'] ?? null) !== '51051000100000000001') {
             throw new DanaMerchantProvisioningException('Respons UAT IPG Cashier Pay Sandbox tidak valid.', 502, false);
         }

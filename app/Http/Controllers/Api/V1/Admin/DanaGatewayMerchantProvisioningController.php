@@ -481,12 +481,15 @@ class DanaGatewayMerchantProvisioningController extends Controller
             return $this->merchantNotFound();
         }
 
+        $amount = $request->has('amount') ? $request->integer('amount') : null;
+        $expectedAmountValue = $amount === 10000000 ? '10000000.00' : '5000000000.00';
+
         try {
-            $result = $client->testIpgCreateOrderExceedsAmountLimit($merchantId);
+            $result = $client->testIpgCreateOrderExceedsAmountLimit($merchantId, $amount);
         } catch (DanaMerchantProvisioningException $exception) {
             $this->recordManagementAudit($request, $merchant, 'dana_sandbox_tester.uat_ipg_create_order_exceeds_amount', 'failed', $exception->gatewayStatus, $exception->retryable, [
                 'endpoint' => '/rest/redirection/v1.0/debit/payment-host-to-host',
-                'amount_value' => '5000000000.00',
+                'amount_value' => $expectedAmountValue,
                 'transaction_status' => 'FAILED',
             ]);
 
@@ -498,7 +501,7 @@ class DanaGatewayMerchantProvisioningController extends Controller
 
         $this->recordManagementAudit($request, $merchant, 'dana_sandbox_tester.uat_ipg_create_order_exceeds_amount', 'failed', 200, false, [
             'endpoint' => '/rest/redirection/v1.0/debit/payment-host-to-host',
-            'amount_value' => '5000000000.00',
+            'amount_value' => $uat['request']['amount_value'] ?? $expectedAmountValue,
             'passed' => $passed,
             'transaction_status' => 'FAILED',
             'response_code' => $uat['received']['response_code'] ?? null,
