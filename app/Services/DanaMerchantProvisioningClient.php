@@ -234,10 +234,10 @@ class DanaMerchantProvisioningClient
     /** @return array<string, mixed> */
     public function testIpgCreateOrderExceedsAmountLimit(int $merchantId, int|string|null $amount = null): array
     {
-        $normalizedAmount = match ((string) $amount) {
-            '10000000', '10000000.00' => 10000000,
-            default => 5000000000,
-        };
+        $normalizedAmount = $amount !== null && $amount !== '' ? (int) $amount : 10000001;
+        if ($normalizedAmount < 1 || $normalizedAmount > 10000000000) {
+            throw new \InvalidArgumentException('Nominal UAT IPG Cashier Pay Exceeds Amount Limit harus berupa bilangan bulat IDR positif antara 1 dan 10.000.000.000.');
+        }
 
         $response = $this->send(fn (PendingRequest $request): Response => $request
             ->post("/api/v1/internal/merchants/{$merchantId}/sandbox-tester/uat/ipg-create-order-exceeds-amount-limit", ['amount' => $normalizedAmount]));
@@ -1067,9 +1067,9 @@ class DanaMerchantProvisioningClient
     }
 
     /** @return array<string, mixed> */
-    private function sandboxIpgCreateOrderExceedsAmountLimitUat(mixed $result, int $expectedAmount = 5000000000): array
+    private function sandboxIpgCreateOrderExceedsAmountLimitUat(mixed $result, int $expectedAmount = 10000001): array
     {
-        $expectedAmountValue = $expectedAmount === 10000000 ? '10000000.00' : '5000000000.00';
+        $expectedAmountValue = sprintf('%.2f', $expectedAmount);
         $uat = is_array($result) ? ($result['uat'] ?? null) : null;
         $expected = is_array($uat) ? ($uat['expected'] ?? null) : null;
         $received = is_array($uat) ? ($uat['received'] ?? null) : null;

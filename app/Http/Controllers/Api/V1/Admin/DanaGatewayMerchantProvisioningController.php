@@ -482,15 +482,13 @@ class DanaGatewayMerchantProvisioningController extends Controller
         }
 
         $validated = $request->validate([
-            'amount' => ['nullable', 'in:10000000,5000000000,10000000.00,5000000000.00'],
+            'amount' => ['nullable', 'integer', 'min:1', 'max:10000000000'],
         ]);
 
-        $rawAmount = $validated['amount'] ?? null;
-        $amount = match ((string) $rawAmount) {
-            '10000000', '10000000.00' => 10000000,
-            default => 5000000000,
-        };
-        $expectedAmountValue = $amount === 10000000 ? '10000000.00' : '5000000000.00';
+        $amount = array_key_exists('amount', $validated) && $validated['amount'] !== null
+            ? (int) $validated['amount']
+            : 10000001;
+        $expectedAmountValue = sprintf('%.2f', $amount);
 
         try {
             $result = $client->testIpgCreateOrderExceedsAmountLimit($merchantId, $amount);

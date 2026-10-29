@@ -620,7 +620,7 @@ class DanaSandboxTesterApiTest extends TestCase
                         'request' => [
                             'endpoint' => '/rest/redirection/v1.0/debit/payment-host-to-host',
                             'x_timestamp_sent' => true,
-                            'amount_value' => '5000000000.00',
+                            'amount_value' => '10000001.00',
                             'product_code' => '51051000100000000001',
                             'support_deep_link_checkout_url' => 'true',
                         ],
@@ -637,7 +637,7 @@ class DanaSandboxTesterApiTest extends TestCase
             ->assertJsonPath('data.uat.received.response_code', '4035402')
             ->assertJsonPath('data.uat.received.response_message', 'Exceeds Transaction Amount Limit')
             ->assertJsonPath('data.uat.request.endpoint', '/rest/redirection/v1.0/debit/payment-host-to-host')
-            ->assertJsonPath('data.uat.request.amount_value', '5000000000.00')
+            ->assertJsonPath('data.uat.request.amount_value', '10000001.00')
             ->assertJsonPath('data.uat.request.product_code', '51051000100000000001')
             ->assertJsonMissing(['private_key', 'api_key', 'signature']);
 
@@ -648,11 +648,89 @@ class DanaSandboxTesterApiTest extends TestCase
         $this->assertSame($merchant->merchant_code, $audit->merchant_code);
         $this->assertSame($merchant->gateway_merchant_id, $audit->gateway_merchant_id);
         $this->assertSame('/rest/redirection/v1.0/debit/payment-host-to-host', $audit->safe_details['endpoint']);
-        $this->assertSame('5000000000.00', $audit->safe_details['amount_value']);
+        $this->assertSame('10000001.00', $audit->safe_details['amount_value']);
         $this->assertSame('FAILED', $audit->safe_details['transaction_status']);
         $this->assertTrue($audit->safe_details['passed']);
 
+        Http::assertSent(fn (Request $request): bool => $request['amount'] === 10000001);
+    }
+
+    public function test_ipg_exceeds_amount_limit_uat_supports_official_5_billion_nominal_option(): void
+    {
+        $merchant = $this->sandboxProvisionedMerchant();
+        Http::fake([
+            "https://dana-gateway.test/api/v1/internal/merchants/{$merchant->gateway_merchant_id}/sandbox-tester/uat/ipg-create-order-exceeds-amount-limit" => Http::response([
+                'data' => [
+                    'merchant_code' => $merchant->merchant_code,
+                    'environment' => 'sandbox',
+                    'uat' => [
+                        'scenario' => 'ipg_create_order_exceeds_amount_limit',
+                        'passed' => true,
+                        'expected' => ['response_code' => '4035402', 'response_message' => 'Exceeds Transaction Amount Limit'],
+                        'received' => [
+                            'http_status' => 403,
+                            'response_code' => '4035402',
+                            'response_message' => 'Exceeds Transaction Amount Limit',
+                            'request_id' => 'uat-ipg-limit-5b',
+                        ],
+                        'request' => [
+                            'endpoint' => '/rest/redirection/v1.0/debit/payment-host-to-host',
+                            'x_timestamp_sent' => true,
+                            'amount_value' => '5000000000.00',
+                            'product_code' => '51051000100000000001',
+                            'support_deep_link_checkout_url' => 'true',
+                        ],
+                    ],
+                ],
+            ]),
+        ]);
+
+        $this->actingAdmin();
+        $this->postJson($this->ipgExceedsAmountLimitUatUrl($merchant->gateway_merchant_id), ['amount' => 5000000000])
+            ->assertOk()
+            ->assertJsonPath('data.uat.passed', true)
+            ->assertJsonPath('data.uat.request.amount_value', '5000000000.00');
+
         Http::assertSent(fn (Request $request): bool => $request['amount'] === 5000000000);
+    }
+
+    public function test_ipg_exceeds_amount_limit_uat_supports_admin_custom_manual_nominal(): void
+    {
+        $merchant = $this->sandboxProvisionedMerchant();
+        Http::fake([
+            "https://dana-gateway.test/api/v1/internal/merchants/{$merchant->gateway_merchant_id}/sandbox-tester/uat/ipg-create-order-exceeds-amount-limit" => Http::response([
+                'data' => [
+                    'merchant_code' => $merchant->merchant_code,
+                    'environment' => 'sandbox',
+                    'uat' => [
+                        'scenario' => 'ipg_create_order_exceeds_amount_limit',
+                        'passed' => true,
+                        'expected' => ['response_code' => '4035402', 'response_message' => 'Exceeds Transaction Amount Limit'],
+                        'received' => [
+                            'http_status' => 403,
+                            'response_code' => '4035402',
+                            'response_message' => 'Exceeds Transaction Amount Limit',
+                            'request_id' => 'uat-ipg-limit-custom',
+                        ],
+                        'request' => [
+                            'endpoint' => '/rest/redirection/v1.0/debit/payment-host-to-host',
+                            'x_timestamp_sent' => true,
+                            'amount_value' => '25000000.00',
+                            'product_code' => '51051000100000000001',
+                            'support_deep_link_checkout_url' => 'true',
+                        ],
+                    ],
+                ],
+            ]),
+        ]);
+
+        $this->actingAdmin();
+        $this->postJson($this->ipgExceedsAmountLimitUatUrl($merchant->gateway_merchant_id), ['amount' => 25000000])
+            ->assertOk()
+            ->assertJsonPath('data.uat.passed', true)
+            ->assertJsonPath('data.uat.request.amount_value', '25000000.00');
+
+        Http::assertSent(fn (Request $request): bool => $request['amount'] === 25000000);
     }
 
     public function test_ipg_exceeds_amount_limit_uat_supports_10000000_amount_option_from_dana_support(): void
@@ -752,7 +830,24 @@ class DanaSandboxTesterApiTest extends TestCase
         $merchant = $this->sandboxProvisionedMerchant();
 
         $this->actingAdmin();
-        $this->postJson($this->ipgExceedsAmountLimitUatUrl($merchant->gateway_merchant_id), ['amount' => 12345])
+
+        // Zero
+        $this->postJson($this->ipgExceedsAmountLimitUatUrl($merchant->gateway_merchant_id), ['amount' => 0])
+            ->assertStatus(422)
+            ->assertJsonValidationErrors(['amount']);
+
+        // Negative
+        $this->postJson($this->ipgExceedsAmountLimitUatUrl($merchant->gateway_merchant_id), ['amount' => -500])
+            ->assertStatus(422)
+            ->assertJsonValidationErrors(['amount']);
+
+        // Non-integer float
+        $this->postJson($this->ipgExceedsAmountLimitUatUrl($merchant->gateway_merchant_id), ['amount' => 1000.5])
+            ->assertStatus(422)
+            ->assertJsonValidationErrors(['amount']);
+
+        // Exceeds safe limit (above 10 Billion)
+        $this->postJson($this->ipgExceedsAmountLimitUatUrl($merchant->gateway_merchant_id), ['amount' => 10000000001])
             ->assertStatus(422)
             ->assertJsonValidationErrors(['amount']);
     }
