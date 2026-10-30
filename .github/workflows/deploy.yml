@@ -333,6 +333,14 @@ jobs:
             sudo -n systemctl reload php-fpm-83 2>/dev/null || sudo -n systemctl reload php8.3-fpm 2>/dev/null || true
           fi
 
+          echo '=== Verifikasi HTTP endpoint production ==='
+          (
+            cd "$APP_DIR"
+            "$PHP_BIN" artisan doku:verify-endpoint \
+              --url="https://apiudev.udumbara.my.id/api/v1/admin/doku-gateway/merchants" \
+              --no-interaction
+          )
+
           ACTIVATION_STARTED=0
           DEPLOY_OK=1
           echo '=== Deployment successful ==='

@@ -162,6 +162,8 @@ Route::prefix('v1/admin')
             Route::get('merchants', [DokuGatewayAdminController::class, 'indexMerchants'])->name('merchants');
             Route::get('configuration', [DokuGatewayAdminController::class, 'showConfiguration'])->name('configuration');
             Route::put('configuration', [DokuGatewayAdminController::class, 'updateConfiguration'])->name('configuration.update');
+            Route::post('generate-key', [DokuGatewayAdminController::class, 'generateRsaKeyPair'])->name('generate-key');
+            Route::post('recover-key', [DokuGatewayAdminController::class, 'recoverPreviousKey'])->name('recover-key');
             Route::post('test-token', [DokuGatewayAdminController::class, 'testB2BToken'])->name('test-token');
             Route::get('audits', [DokuGatewayAdminController::class, 'indexAudits'])->name('audits');
         });

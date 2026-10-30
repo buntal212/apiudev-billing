@@ -6,6 +6,7 @@ use App\Http\Controllers\Controller;
 use App\Http\Requests\StoreDokuConfigurationRequest;
 use App\Models\DokuGatewayAudit;
 use App\Models\DokuMerchantCredential;
+use App\Models\DokuMerchantKeyBackup;
 use App\Services\DokuAuditService;
 use App\Services\DokuGatewayProvisioningClient;
 use App\Services\DokuSecretStore;
@@ -24,13 +25,9 @@ class DokuGatewayAdminController extends Controller
 
     public function indexMerchants(): JsonResponse
     {
-        try {
-            $existing = DokuMerchantCredential::query()
-                ->where('environment', 'sandbox')
-                ->get();
-        } catch (\Throwable) {
-            $existing = collect();
-        }
+        $existing = DokuMerchantCredential::query()
+            ->where('environment', 'sandbox')
+            ->get();
 
         $configuredCodes = $existing->pluck('merchant_code')->all();
 
@@ -74,16 +71,16 @@ class DokuGatewayAdminController extends Controller
     {
         $merchantCode = (string) $request->query('merchant_code', 'udev-central');
 
-        try {
-            $cred = DokuMerchantCredential::query()
-                ->where('merchant_code', $merchantCode)
-                ->where('environment', 'sandbox')
-                ->first();
-        } catch (\Throwable) {
-            $cred = null;
-        }
+        $cred = DokuMerchantCredential::query()
+            ->where('merchant_code', $merchantCode)
+            ->where('environment', 'sandbox')
+            ->first();
 
         $cacheStatus = $this->gatewayClient->checkCacheStatus($merchantCode, 'sandbox');
+        $hasRecoveryBackup = DokuMerchantKeyBackup::query()
+            ->where('merchant_code', $merchantCode)
+            ->where('environment', 'sandbox')
+            ->exists();
 
         if ($cred === null) {
             return response()->json([
@@ -105,6 +102,7 @@ class DokuGatewayAdminController extends Controller
                     'last_token_test_message' => null,
                     'token_cache_active' => false,
                     'token_cache_remaining_seconds' => 0,
+                    'has_recovery_backup' => $hasRecoveryBackup,
                 ],
             ]);
         }
@@ -128,6 +126,7 @@ class DokuGatewayAdminController extends Controller
                 'last_token_test_message' => $cred->last_token_test_message,
                 'token_cache_active' => $cacheStatus['is_active'],
                 'token_cache_remaining_seconds' => $cacheStatus['remaining_seconds'],
+                'has_recovery_backup' => $hasRecoveryBackup,
             ],
         ]);
     }
@@ -189,6 +188,206 @@ class DokuGatewayAdminController extends Controller
                 'has_private_key' => true,
                 'public_key' => $cred->public_key,
                 'public_key_fingerprint' => $cred->public_key_fingerprint,
+            ],
+        ]);
+    }
+
+    public function generateRsaKeyPair(Request $request): JsonResponse
+    {
+        $request->validate([
+            'merchant_code' => ['required', 'string', 'max:60'],
+            'confirm_rotation' => ['nullable', 'boolean'],
+        ]);
+
+        $merchantCode = (string) $request->input('merchant_code');
+        $confirmRotation = (bool) $request->input('confirm_rotation', false);
+
+        $cred = DokuMerchantCredential::query()
+            ->where('merchant_code', $merchantCode)
+            ->where('environment', 'sandbox')
+            ->first();
+
+        $hasExistingKey = $cred !== null && ! empty($cred->encrypted_private_key);
+
+        if ($hasExistingKey && ! $confirmRotation) {
+            return response()->json([
+                'status' => 'confirmation_required',
+                'message' => "Kredensial RSA sudah terdaftar untuk merchant {$merchantCode}. Konfirmasi rotasi diperlukan sebelum mengganti pasangan kunci aktif.",
+                'data' => [
+                    'merchant_code' => $merchantCode,
+                    'current_fingerprint' => $cred->public_key_fingerprint,
+                    'requires_confirmation' => true,
+                    'has_recovery_backup' => DokuMerchantKeyBackup::query()
+                        ->where('merchant_code', $merchantCode)
+                        ->where('environment', 'sandbox')
+                        ->exists(),
+                ],
+            ], 409);
+        }
+
+        // Jika rotasi dikonfirmasi, cadangkan kunci lama ke tabel backup
+        if ($hasExistingKey && $confirmRotation) {
+            DokuMerchantKeyBackup::create([
+                'merchant_code' => $cred->merchant_code,
+                'environment' => 'sandbox',
+                'encrypted_private_key' => $cred->encrypted_private_key,
+                'key_nonce' => $cred->key_nonce,
+                'key_tag' => $cred->key_tag,
+                'key_version' => $cred->key_version,
+                'public_key' => (string) $cred->public_key,
+                'public_key_fingerprint' => (string) $cred->public_key_fingerprint,
+                'rotated_at' => now(),
+                'admin_user_id' => $request->user()?->id,
+                'reason' => 'rotation',
+            ]);
+        }
+
+        // Hasilkan RSA 2048-bit key pair baru
+        $pair = $this->signatureService->generateRsaKeyPair(2048);
+
+        // Enkripsi private key dengan AES-256-GCM
+        $encrypted = $this->secretStore->encryptPrivateKey($pair['private_key'], $merchantCode, 'v1');
+
+        $merchantName = $cred?->merchant_name ?: ($merchantCode === 'udev-central' ? 'UDEV Central Billing' : $merchantCode);
+        $clientId = $cred?->client_id ?: '';
+
+        $cred = DokuMerchantCredential::updateOrCreate(
+            [
+                'merchant_code' => $merchantCode,
+                'environment' => 'sandbox',
+            ],
+            [
+                'merchant_name' => $merchantName,
+                'client_id' => $clientId,
+                'is_active' => $cred?->is_active ?? true,
+                'encrypted_private_key' => $encrypted['ciphertext'],
+                'key_nonce' => $encrypted['nonce'],
+                'key_tag' => $encrypted['tag'],
+                'key_version' => $encrypted['key_version'],
+                'public_key' => $pair['public_key'],
+                'public_key_fingerprint' => $pair['fingerprint'],
+            ]
+        );
+
+        $action = $hasExistingKey ? 'key.rotated' : 'key.generated';
+        $this->auditService->record(
+            merchantCode: $merchantCode,
+            action: $action,
+            status: 'success',
+            responseCode: '200',
+            metadata: [
+                'merchant_name' => $cred->merchant_name,
+                'public_key_fingerprint' => $pair['fingerprint'],
+                'key_bits' => 2048,
+                'is_rotation' => $hasExistingKey,
+            ],
+            request: $request
+        );
+
+        \Illuminate\Support\Facades\Cache::forget("doku_snap_b2b_token:{$merchantCode}:sandbox");
+
+        return response()->json([
+            'status' => 'success',
+            'message' => 'Pasangan RSA Key Pair 2048-bit berhasil dibuat dan disimpan terenkripsi.',
+            'data' => [
+                'merchant_code' => $cred->merchant_code,
+                'merchant_name' => $cred->merchant_name,
+                'environment' => 'sandbox',
+                'is_configured' => true,
+                'has_private_key' => true,
+                'public_key' => $cred->public_key,
+                'public_key_fingerprint' => $cred->public_key_fingerprint,
+                'is_rotated' => $hasExistingKey,
+                'has_recovery_backup' => DokuMerchantKeyBackup::query()
+                    ->where('merchant_code', $merchantCode)
+                    ->where('environment', 'sandbox')
+                    ->exists(),
+            ],
+        ]);
+    }
+
+    public function recoverPreviousKey(Request $request): JsonResponse
+    {
+        $request->validate([
+            'merchant_code' => ['required', 'string', 'max:60'],
+        ]);
+
+        $merchantCode = (string) $request->input('merchant_code');
+
+        $backup = DokuMerchantKeyBackup::query()
+            ->where('merchant_code', $merchantCode)
+            ->where('environment', 'sandbox')
+            ->latest('rotated_at')
+            ->first();
+
+        if ($backup === null) {
+            return response()->json([
+                'status' => 'failed',
+                'message' => "Tidak ditemukan cadangan kunci RSA sebelumnya untuk merchant {$merchantCode}.",
+            ], 422);
+        }
+
+        $cred = DokuMerchantCredential::query()
+            ->where('merchant_code', $merchantCode)
+            ->where('environment', 'sandbox')
+            ->firstOrFail();
+
+        // Cadangkan kunci saat ini sebagai arsip pra-pemulihan agar riwayat tidak hilang
+        DokuMerchantKeyBackup::create([
+            'merchant_code' => $cred->merchant_code,
+            'environment' => 'sandbox',
+            'encrypted_private_key' => $cred->encrypted_private_key,
+            'key_nonce' => $cred->key_nonce,
+            'key_tag' => $cred->key_tag,
+            'key_version' => $cred->key_version,
+            'public_key' => (string) $cred->public_key,
+            'public_key_fingerprint' => (string) $cred->public_key_fingerprint,
+            'rotated_at' => now(),
+            'admin_user_id' => $request->user()?->id,
+            'reason' => 'pre_recovery_archive',
+        ]);
+
+        // Pulihkan kunci dari backup
+        $cred->update([
+            'encrypted_private_key' => $backup->encrypted_private_key,
+            'key_nonce' => $backup->key_nonce,
+            'key_tag' => $backup->key_tag,
+            'key_version' => $backup->key_version,
+            'public_key' => $backup->public_key,
+            'public_key_fingerprint' => $backup->public_key_fingerprint,
+        ]);
+
+        // Hapus cadangan yang baru saja dipulihkan agar tumpukan rollback rapi
+        $backup->delete();
+
+        $this->auditService->record(
+            merchantCode: $merchantCode,
+            action: 'key.recovered',
+            status: 'success',
+            responseCode: '200',
+            metadata: [
+                'restored_fingerprint' => $cred->public_key_fingerprint,
+            ],
+            request: $request
+        );
+
+        \Illuminate\Support\Facades\Cache::forget("doku_snap_b2b_token:{$merchantCode}:sandbox");
+
+        return response()->json([
+            'status' => 'success',
+            'message' => 'Pasangan kunci RSA sebelumnya berhasil dipulihkan.',
+            'data' => [
+                'merchant_code' => $cred->merchant_code,
+                'merchant_name' => $cred->merchant_name,
+                'environment' => 'sandbox',
+                'is_configured' => true,
+                'has_private_key' => true,
+                'public_key' => $cred->public_key,
+                'public_key_fingerprint' => $cred->public_key_fingerprint,
+                'has_recovery_backup' => DokuMerchantKeyBackup::query()
+                    ->where('merchant_code', $merchantCode)
+                    ->where('environment', 'sandbox')
+                    ->exists(),
             ],
         ]);
     }

@@ -4,6 +4,7 @@ namespace Tests\Feature;
 
 use App\Models\DokuGatewayAudit;
 use App\Models\DokuMerchantCredential;
+use App\Models\DokuMerchantKeyBackup;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Cache;
@@ -112,19 +113,159 @@ PEM;
     {
         Sanctum::actingAs($this->admin, ['admin:access']);
 
-        \Illuminate\Support\Facades\Artisan::call('route:cache');
+        // 1. Verifikasi endpoint dapat diakses secara normal
+        $response = $this->getJson('/api/v1/admin/doku-gateway/merchants');
+        $response->assertStatus(200)
+            ->assertJson(['status' => 'success']);
 
-        try {
-            $response = $this->getJson('/api/v1/admin/doku-gateway/merchants');
-            $response->assertStatus(200)
-                ->assertJson(['status' => 'success']);
+        // 2. Verifikasi rute terdaftar dengan URI dan action yang tepat
+        $route = \Illuminate\Support\Facades\Route::getRoutes()->getByAction('App\Http\Controllers\Api\V1\Admin\DokuGatewayAdminController@indexMerchants');
+        $this->assertNotNull($route);
+        $this->assertEquals('api/v1/admin/doku-gateway/merchants', $route->uri());
 
-            $showResponse = $this->getJson('/api/v1/admin/doku-gateway/configuration?merchant_code=udev-central');
-            $showResponse->assertStatus(200)
-                ->assertJson(['status' => 'success']);
-        } finally {
-            \Illuminate\Support\Facades\Artisan::call('route:clear');
-        }
+        // 3. Verifikasi bahwa kompilasi route:cache sukses tanpa kegagalan serialisasi
+        $exitCode = \Illuminate\Support\Facades\Artisan::call('route:cache');
+        $this->assertSame(0, $exitCode);
+        \Illuminate\Support\Facades\Artisan::call('route:clear');
+    }
+
+    public function test_admin_can_generate_rsa_key_pair(): void
+    {
+        Sanctum::actingAs($this->admin, ['admin:access']);
+
+        $response = $this->postJson('/api/v1/admin/doku-gateway/generate-key', [
+            'merchant_code' => 'udev-central',
+        ]);
+
+        $response->assertStatus(200)
+            ->assertJson([
+                'status' => 'success',
+                'data' => [
+                    'merchant_code' => 'udev-central',
+                    'is_configured' => true,
+                    'has_private_key' => true,
+                    'is_rotated' => false,
+                ],
+            ]);
+
+        $publicKey = $response->json('data.public_key');
+        $fingerprint = $response->json('data.public_key_fingerprint');
+
+        $this->assertStringContainsString('-----BEGIN PUBLIC KEY-----', $publicKey);
+        $this->assertEquals(64, strlen($fingerprint));
+
+        // Pastikan TIDAK pernah mengekspos private key
+        $this->assertArrayNotHasKey('private_key', $response->json('data'));
+        $this->assertStringNotContainsString('BEGIN RSA PRIVATE KEY', json_encode($response->json()));
+        $this->assertStringNotContainsString('BEGIN PRIVATE KEY', json_encode($response->json()));
+
+        // Verifikasi database menyimpan encrypted private key yang valid
+        $cred = DokuMerchantCredential::where('merchant_code', 'udev-central')->firstOrFail();
+        $this->assertNotEmpty($cred->encrypted_private_key);
+        $this->assertStringNotContainsString('BEGIN', $cred->encrypted_private_key);
+        $this->assertEquals($publicKey, $cred->public_key);
+        $this->assertEquals($fingerprint, $cred->public_key_fingerprint);
+
+        // Verifikasi audit log mencatat aksi tanpa membocorkan private key
+        $audit = DokuGatewayAudit::where('merchant_code', 'udev-central')
+            ->where('action', 'key.generated')
+            ->firstOrFail();
+
+        $this->assertEquals('success', $audit->status);
+        $this->assertStringNotContainsString('BEGIN', json_encode($audit->metadata));
+        $this->assertEquals($fingerprint, $audit->metadata['public_key_fingerprint']);
+    }
+
+    public function test_generating_key_when_key_exists_requires_confirmation(): void
+    {
+        Sanctum::actingAs($this->admin, ['admin:access']);
+
+        // Generate key pertama kali
+        $this->postJson('/api/v1/admin/doku-gateway/generate-key', [
+            'merchant_code' => 'udev-central',
+        ])->assertStatus(200);
+
+        $initialCred = DokuMerchantCredential::where('merchant_code', 'udev-central')->firstOrFail();
+
+        // Coba generate lagi tanpa konfirmasi rotasi -> Wajib ditolak dengan 409
+        $response = $this->postJson('/api/v1/admin/doku-gateway/generate-key', [
+            'merchant_code' => 'udev-central',
+            'confirm_rotation' => false,
+        ]);
+
+        $response->assertStatus(409)
+            ->assertJson([
+                'status' => 'confirmation_required',
+                'data' => [
+                    'merchant_code' => 'udev-central',
+                    'requires_confirmation' => true,
+                ],
+            ]);
+
+        // Pastikan key lama tidak berubah
+        $freshCred = DokuMerchantCredential::where('merchant_code', 'udev-central')->firstOrFail();
+        $this->assertEquals($initialCred->encrypted_private_key, $freshCred->encrypted_private_key);
+    }
+
+    public function test_admin_can_rotate_rsa_key_pair_and_recover_previous_key(): void
+    {
+        Sanctum::actingAs($this->admin, ['admin:access']);
+
+        // 1. Generate key pertama
+        $res1 = $this->postJson('/api/v1/admin/doku-gateway/generate-key', [
+            'merchant_code' => 'udev-central',
+        ]);
+        $res1->assertStatus(200);
+        $firstPublicKey = $res1->json('data.public_key');
+        $firstFingerprint = $res1->json('data.public_key_fingerprint');
+
+        // 2. Rotasi key dengan konfirmasi
+        $res2 = $this->postJson('/api/v1/admin/doku-gateway/generate-key', [
+            'merchant_code' => 'udev-central',
+            'confirm_rotation' => true,
+        ]);
+        $res2->assertStatus(200)
+            ->assertJson([
+                'status' => 'success',
+                'data' => [
+                    'is_rotated' => true,
+                    'has_recovery_backup' => true,
+                ],
+            ]);
+
+        $secondPublicKey = $res2->json('data.public_key');
+        $secondFingerprint = $res2->json('data.public_key_fingerprint');
+
+        $this->assertNotEquals($firstFingerprint, $secondFingerprint);
+
+        // Verifikasi tabel backup memiliki key pertama
+        $backup = DokuMerchantKeyBackup::where('merchant_code', 'udev-central')->firstOrFail();
+        $this->assertEquals($firstFingerprint, $backup->public_key_fingerprint);
+        $this->assertEquals($firstPublicKey, $backup->public_key);
+
+        // Verifikasi audit log mencatat aksi key.rotated
+        $this->assertTrue(DokuGatewayAudit::where('merchant_code', 'udev-central')->where('action', 'key.rotated')->exists());
+
+        // 3. Pulihkan key lama (Rollback / Recover)
+        $recoverRes = $this->postJson('/api/v1/admin/doku-gateway/recover-key', [
+            'merchant_code' => 'udev-central',
+        ]);
+
+        $recoverRes->assertStatus(200)
+            ->assertJson([
+                'status' => 'success',
+                'data' => [
+                    'public_key_fingerprint' => $firstFingerprint,
+                ],
+            ]);
+
+        // Verifikasi database mengembalikan key pertama
+        $recoveredCred = DokuMerchantCredential::where('merchant_code', 'udev-central')->firstOrFail();
+        $this->assertEquals($firstFingerprint, $recoveredCred->public_key_fingerprint);
+        $this->assertEquals($firstPublicKey, $recoveredCred->public_key);
+
+        // Verifikasi audit mencatat key.recovered
+        $this->assertTrue(DokuGatewayAudit::where('merchant_code', 'udev-central')->where('action', 'key.recovered')->exists());
     }
 
     public function test_admin_can_save_and_retrieve_credentials_with_encrypted_private_key_and_masking(): void
@@ -435,5 +576,63 @@ PEM;
         $cred = DokuMerchantCredential::where('merchant_code', 'udev-central')->first();
         $this->assertNotNull($cred);
         $this->assertSame('MALL-MIGRATE-SAFE', $cred->client_id);
+    }
+
+    public function test_verify_doku_production_endpoint_command_success(): void
+    {
+        Http::fake([
+            'https://apiudev.udumbara.my.id/api/v1/admin/doku-gateway/merchants' => Http::response([
+                'status' => 'success',
+                'data' => [
+                    ['merchant_code' => 'udev-central'],
+                ],
+            ], 200),
+        ]);
+
+        $exitCode = \Illuminate\Support\Facades\Artisan::call('doku:verify-endpoint', [
+            '--url' => 'https://apiudev.udumbara.my.id/api/v1/admin/doku-gateway/merchants',
+        ]);
+
+        $this->assertSame(0, $exitCode);
+
+        // Verifikasi ephemeral token telah dihapus
+        $this->assertDatabaseMissing('personal_access_tokens', [
+            'name' => 'ci-verify-doku-endpoint',
+        ]);
+    }
+
+    public function test_verify_doku_production_endpoint_command_fails_on_404(): void
+    {
+        Http::fake([
+            'https://apiudev.udumbara.my.id/api/v1/admin/doku-gateway/merchants' => Http::response([
+                'message' => 'Data yang Anda cari tidak ditemukan.',
+            ], 404),
+        ]);
+
+        $exitCode = \Illuminate\Support\Facades\Artisan::call('doku:verify-endpoint', [
+            '--url' => 'https://apiudev.udumbara.my.id/api/v1/admin/doku-gateway/merchants',
+        ]);
+
+        $this->assertSame(1, $exitCode);
+
+        // Verifikasi ephemeral token tetap dibersihkan
+        $this->assertDatabaseMissing('personal_access_tokens', [
+            'name' => 'ci-verify-doku-endpoint',
+        ]);
+    }
+
+    public function test_verify_doku_production_endpoint_command_fails_on_auth_failure(): void
+    {
+        Http::fake([
+            'https://apiudev.udumbara.my.id/api/v1/admin/doku-gateway/merchants' => Http::response([
+                'message' => 'Sesi Anda telah berakhir. Silakan masuk kembali.',
+            ], 401),
+        ]);
+
+        $exitCode = \Illuminate\Support\Facades\Artisan::call('doku:verify-endpoint', [
+            '--url' => 'https://apiudev.udumbara.my.id/api/v1/admin/doku-gateway/merchants',
+        ]);
+
+        $this->assertSame(1, $exitCode);
     }
 }
