@@ -10,6 +10,7 @@ use App\Http\Controllers\Api\V1\Admin\ApplicationIntegrationTokenController;
 use App\Http\Controllers\Api\V1\Admin\ApplicationPaymentGatewayController;
 use App\Http\Controllers\Api\V1\Admin\BillingGatewayTransactionController;
 use App\Http\Controllers\Api\V1\Admin\DanaGatewayMerchantProvisioningController;
+use App\Http\Controllers\Api\V1\Admin\DokuGatewayAdminController;
 use App\Http\Controllers\Api\V1\Admin\InvoiceCheckoutController;
 use App\Http\Controllers\Api\V1\Admin\InvoiceController;
 use App\Http\Controllers\Api\V1\Admin\PartnerController;
@@ -156,6 +157,13 @@ Route::prefix('v1/admin')
                 Route::post('{merchantId}/api-key-issuances/{issuanceId}/cancel', [DanaGatewayMerchantProvisioningController::class, 'cancelIssuance'])->whereNumber(['merchantId', 'issuanceId']);
                 Route::delete('{merchantId}/api-keys/{apiKeyId}', [DanaGatewayMerchantProvisioningController::class, 'revokeApiKey'])->whereNumber(['merchantId', 'apiKeyId']);
             });
+        });
+        Route::prefix('doku-gateway')->name('doku-gateway.')->group(function (): void {
+            Route::get('merchants', [DokuGatewayAdminController::class, 'indexMerchants'])->name('merchants');
+            Route::get('configuration', [DokuGatewayAdminController::class, 'showConfiguration'])->name('configuration');
+            Route::put('configuration', [DokuGatewayAdminController::class, 'updateConfiguration'])->name('configuration.update');
+            Route::post('test-token', [DokuGatewayAdminController::class, 'testB2BToken'])->name('test-token');
+            Route::get('audits', [DokuGatewayAdminController::class, 'indexAudits'])->name('audits');
         });
         Route::apiResource('application-customers', ApplicationCustomerController::class)
             ->only(['index', 'store', 'show', 'update']);

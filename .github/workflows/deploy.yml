@@ -205,9 +205,12 @@ jobs:
               "$PHP_BIN" artisan package:discover --no-interaction
               "$PHP_BIN" artisan config:clear --no-interaction
               "$PHP_BIN" artisan config:cache --no-interaction
+              "$PHP_BIN" artisan route:clear --no-interaction
               "$PHP_BIN" artisan route:cache --no-interaction
               "$PHP_BIN" artisan route:list --path=payment-gateway/billing-transactions \
                 --no-interaction | grep -F 'billing-transactions'
+              "$PHP_BIN" artisan route:list --path=doku-gateway \
+                --no-interaction | grep -F 'doku-gateway/merchants'
             )
           }
 
@@ -317,6 +320,19 @@ jobs:
           ACTIVATION_STARTED=1
           rsync -a --delete "${EXCLUDES[@]}" "$STAGING_DIR/" "$APP_DIR/"
           build_cache "$APP_DIR"
+
+          echo '=== Running non-destructive database migrations ==='
+          (
+            cd "$APP_DIR"
+            "$PHP_BIN" artisan migrate --force --no-interaction
+          )
+
+          echo '=== Resetting OPcache / PHP bytecache ==='
+          "$PHP_BIN" -r 'if (function_exists("opcache_reset")) { opcache_reset(); }' || true
+          if command -v systemctl >/dev/null 2>&1; then
+            sudo -n systemctl reload php-fpm-83 2>/dev/null || sudo -n systemctl reload php8.3-fpm 2>/dev/null || true
+          fi
+
           ACTIVATION_STARTED=0
           DEPLOY_OK=1
           echo '=== Deployment successful ==='

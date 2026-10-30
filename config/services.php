@@ -74,4 +74,13 @@ return [
         'keys' => json_decode((string) env('DANA_MERCHANT_SECRET_STORE_KEYS', '{}'), true) ?: [],
     ],
 
+    'doku_gateway' => [
+        'environment' => env('DOKU_GATEWAY_ENVIRONMENT', 'sandbox'),
+        'gateway_service_url' => env('DOKU_GATEWAY_SERVICE_URL', 'http://127.0.0.1:8001'),
+        'service_token' => env('DOKU_GATEWAY_SERVICE_TOKEN', 'doku_service_secret_token_sandbox_64chars_key'),
+        'timeout' => (int) env('DOKU_GATEWAY_TIMEOUT', 10),
+        'connect_timeout' => (int) env('DOKU_GATEWAY_CONNECT_TIMEOUT', 5),
+        'secret_store_key' => env('DOKU_SECRET_STORE_KEY'),
+    ],
+
 ];
