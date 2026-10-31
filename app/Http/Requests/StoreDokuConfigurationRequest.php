@@ -19,12 +19,14 @@ class StoreDokuConfigurationRequest extends ApiFormRequest
             'merchant_name' => ['required', 'string', 'max:100'],
             'client_id' => ['required', 'string', 'max:100'],
             'private_key' => [
-                'required',
+                'nullable',
                 'string',
                 function ($attribute, $value, $fail) {
-                    $res = @openssl_pkey_get_private($value);
-                    if ($res === false) {
-                        $fail('Private key harus merupakan RSA private key PEM yang valid.');
+                    if (! empty(trim((string) $value))) {
+                        $res = @openssl_pkey_get_private($value);
+                        if ($res === false) {
+                            $fail('Private key harus merupakan RSA private key PEM yang valid.');
+                        }
                     }
                 },
             ],

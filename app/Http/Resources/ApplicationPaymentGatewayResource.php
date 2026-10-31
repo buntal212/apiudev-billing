@@ -22,14 +22,20 @@ class ApplicationPaymentGatewayResource extends JsonResource
                 ->where('merchant_code', $this->gateway_merchant_code)
                 ->where('environment', $this->environment)
                 ->first();
-            $isConfigured = $cred !== null && ! empty($cred->client_id) && ! empty($cred->encrypted_private_key);
+            $hasClientId = ! empty($cred?->client_id);
+            $hasPrivateKey = ! empty($cred?->encrypted_private_key);
             $isActive = (bool) ($cred?->is_active ?? true);
+            $isB2bReady = $hasClientId && $hasPrivateKey && $isActive;
+            $isConfigured = $hasClientId && $hasPrivateKey;
             $readiness = [
                 'merchant_configured' => $cred !== null,
                 'merchant_active' => $isActive,
+                'has_client_id' => $hasClientId,
+                'has_private_key' => $hasPrivateKey,
+                'b2b_ready' => $isB2bReady,
                 'credential_configured' => $isConfigured,
                 'base_url_configured' => true,
-                'ready' => $isActive && $isConfigured,
+                'ready' => $isB2bReady,
             ];
         } else {
             $readiness = app(DanaGatewayMerchantCatalog::class)

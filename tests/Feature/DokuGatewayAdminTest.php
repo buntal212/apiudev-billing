@@ -1070,4 +1070,166 @@ PEM;
             'id' => $mappingId,
         ]);
     }
+
+    public function test_admin_can_save_client_id_without_submitting_private_key_reusing_existing_generated_rsa_key(): void
+    {
+        Sanctum::actingAs($this->admin, ['admin:access']);
+
+        // 1. Generate RSA Key Pair secara otomatis
+        $genRes = $this->postJson('/api/v1/admin/doku-gateway/generate-key', [
+            'merchant_code' => 'udev-central',
+        ]);
+        $genRes->assertStatus(200)
+            ->assertJsonPath('data.has_private_key', true)
+            ->assertJsonPath('data.has_client_id', false)
+            ->assertJsonPath('data.is_b2b_ready', false);
+
+        $initialPublicKey = $genRes->json('data.public_key');
+        $initialFingerprint = $genRes->json('data.public_key_fingerprint');
+
+        $cred = DokuMerchantCredential::where('merchant_code', 'udev-central')->firstOrFail();
+        $initialEncryptedKey = $cred->encrypted_private_key;
+
+        // 2. Simpan Client ID tanpa mengisi private key manual
+        $saveRes = $this->putJson('/api/v1/admin/doku-gateway/configuration', [
+            'merchant_code' => 'udev-central',
+            'merchant_name' => 'UDEV Central Billing',
+            'client_id' => 'DEV-UDEV-CENTRAL-001',
+            'private_key' => '',
+            'environment' => 'sandbox',
+            'is_active' => true,
+        ]);
+
+        $saveRes->assertStatus(200)
+            ->assertJson([
+                'status' => 'success',
+                'data' => [
+                    'merchant_code' => 'udev-central',
+                    'client_id' => 'DEV-UDEV-CENTRAL-001',
+                    'masked_client_id' => 'DEV-****-001',
+                    'has_private_key' => true,
+                    'has_client_id' => true,
+                    'is_b2b_ready' => true,
+                    'is_configured' => true,
+                    'public_key' => $initialPublicKey,
+                    'public_key_fingerprint' => $initialFingerprint,
+                ],
+            ]);
+
+        // Verifikasi private key terenkripsi tetap sama (digunakan kembali tanpa timpa)
+        $cred->refresh();
+        $this->assertSame($initialEncryptedKey, $cred->encrypted_private_key);
+        $this->assertSame($initialFingerprint, $cred->public_key_fingerprint);
+        $this->assertSame('DEV-UDEV-CENTRAL-001', $cred->client_id);
+
+        // 3. Verifikasi show configuration mengembalikan status siap SNAP B2B
+        $showRes = $this->getJson('/api/v1/admin/doku-gateway/configuration?merchant_code=udev-central');
+        $showRes->assertStatus(200)
+            ->assertJsonPath('data.is_b2b_ready', true)
+            ->assertJsonPath('data.has_private_key', true)
+            ->assertJsonPath('data.has_client_id', true)
+            ->assertJsonPath('data.client_id', 'DEV-UDEV-CENTRAL-001');
+
+        // 4. Verifikasi SNAP B2B tester dapat berjalan dengan kunci terenkripsi yang digunakan kembali
+        Http::fake([
+            '*/api/v1/internal/doku/test-b2b-token' => Http::response([
+                'status' => 'success',
+                'data' => [
+                    'status' => 'success',
+                    'response_code' => '2007300',
+                    'response_message' => 'Successful',
+                    'token_type' => 'Bearer',
+                    'expires_in' => 900,
+                    'buffer_seconds' => 60,
+                    'cache_ttl_seconds' => 840,
+                    'is_cached' => false,
+                    'latency_ms' => 15,
+                    'merchant_code' => 'udev-central',
+                    'environment' => 'sandbox',
+                    'target_endpoint' => 'https://api-sandbox.doku.com/authorization/v1/access-token/b2b',
+                    'masked_token' => 'eyJhbGci...********...234567',
+                ],
+            ], 200),
+        ]);
+
+        $testRes = $this->postJson('/api/v1/admin/doku-gateway/test-token', [
+            'merchant_code' => 'udev-central',
+            'force_refresh' => true,
+        ]);
+
+        $testRes->assertStatus(200)
+            ->assertJsonPath('data.status', 'success')
+            ->assertJsonPath('data.response_code', '2007300');
+    }
+
+    public function test_readiness_separates_b2b_from_other_components(): void
+    {
+        Sanctum::actingAs($this->admin, ['admin:access']);
+
+        // Merchant dengan private key tapi tanpa client ID -> tidak siap B2B
+        $this->postJson('/api/v1/admin/doku-gateway/generate-key', [
+            'merchant_code' => 'udev-central',
+        ]);
+
+        $showRes1 = $this->getJson('/api/v1/admin/doku-gateway/configuration?merchant_code=udev-central');
+        $showRes1->assertStatus(200)
+            ->assertJsonPath('data.has_private_key', true)
+            ->assertJsonPath('data.has_client_id', false)
+            ->assertJsonPath('data.is_b2b_ready', false);
+
+        // Uji coba token harus ditolak jika client_id belum ada
+        $testFailRes = $this->postJson('/api/v1/admin/doku-gateway/test-token', [
+            'merchant_code' => 'udev-central',
+        ]);
+        $testFailRes->assertStatus(422)
+            ->assertJsonFragment(['status' => 'failed']);
+
+        // Update Client ID -> siap B2B
+        $this->putJson('/api/v1/admin/doku-gateway/configuration', [
+            'merchant_code' => 'udev-central',
+            'merchant_name' => 'UDEV Central Billing',
+            'client_id' => 'DEV-UDEV-CENTRAL-001',
+            'environment' => 'sandbox',
+            'is_active' => true,
+        ])->assertStatus(200);
+
+        $showRes2 = $this->getJson('/api/v1/admin/doku-gateway/configuration?merchant_code=udev-central');
+        $showRes2->assertStatus(200)
+            ->assertJsonPath('data.is_b2b_ready', true);
+
+        // Jika merchant dinonaktifkan -> is_b2b_ready false
+        $this->patchJson('/api/v1/admin/doku-gateway/merchants/udev-central/status', [
+            'is_active' => false,
+        ])->assertStatus(200);
+
+        $showRes3 = $this->getJson('/api/v1/admin/doku-gateway/configuration?merchant_code=udev-central');
+        $showRes3->assertStatus(200)
+            ->assertJsonPath('data.is_b2b_ready', false);
+    }
+
+    public function test_updating_merchant_preserves_client_id_and_does_not_overwrite_with_asterisks(): void
+    {
+        Sanctum::actingAs($this->admin, ['admin:access']);
+
+        $cred = DokuMerchantCredential::create([
+            'merchant_code' => 'mitra-test',
+            'merchant_name' => 'Mitra Test',
+            'client_id' => 'REAL-CLIENT-ID-99999',
+            'environment' => 'sandbox',
+            'is_active' => true,
+        ]);
+
+        // Mengirimkan masked client ID dari dialog tidak boleh menimpa client ID riil di database
+        $response = $this->putJson('/api/v1/admin/doku-gateway/merchants/mitra-test', [
+            'merchant_name' => 'Mitra Test Diperbarui',
+            'client_id' => 'REAL****9999',
+            'is_active' => true,
+        ]);
+
+        $response->assertStatus(200);
+
+        $cred->refresh();
+        $this->assertSame('REAL-CLIENT-ID-99999', $cred->client_id);
+        $this->assertSame('Mitra Test Diperbarui', $cred->merchant_name);
+    }
 }

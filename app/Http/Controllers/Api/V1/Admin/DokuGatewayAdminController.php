@@ -76,18 +76,25 @@ class DokuGatewayAdminController extends Controller
             ->all();
 
         $data = $merchants->map(function (DokuMerchantCredential $cred) use ($mappings, $backupMerchantCodes) {
-            $isConfigured = ! empty($cred->client_id) && ! empty($cred->encrypted_private_key);
+            $hasClientId = ! empty($cred->client_id);
+            $hasPrivateKey = ! empty($cred->encrypted_private_key);
+            $isActive = (bool) $cred->is_active;
+            $isB2bReady = $hasClientId && $hasPrivateKey && $isActive;
+            $isConfigured = $hasClientId && $hasPrivateKey;
             $merchantMappings = $mappings->get($cred->merchant_code, collect());
 
             return [
                 'id' => $cred->id,
                 'merchant_code' => $cred->merchant_code,
                 'merchant_name' => $cred->merchant_name,
-                'client_id' => $cred->client_id ? $cred->masked_client_id : '',
+                'client_id' => (string) ($cred->client_id ?? ''),
                 'masked_client_id' => $cred->masked_client_id,
                 'environment' => $cred->environment,
                 'is_configured' => $isConfigured,
-                'is_active' => (bool) $cred->is_active,
+                'is_b2b_ready' => $isB2bReady,
+                'is_active' => $isActive,
+                'has_private_key' => $hasPrivateKey,
+                'has_client_id' => $hasClientId,
                 'public_key_fingerprint' => $cred->public_key_fingerprint,
                 'last_token_test_status' => $cred->last_token_test_status,
                 'last_token_tested_at' => $cred->last_token_tested_at?->format('Y-m-d H:i:s'),
@@ -214,7 +221,10 @@ class DokuGatewayAdminController extends Controller
         ];
 
         if (array_key_exists('client_id', $validated)) {
-            $updateData['client_id'] = $validated['client_id'];
+            $incomingClientId = trim((string) $validated['client_id']);
+            if (! str_contains($incomingClientId, '****')) {
+                $updateData['client_id'] = $incomingClientId !== '' ? $incomingClientId : null;
+            }
         }
 
         if (array_key_exists('is_active', $validated)) {
@@ -223,6 +233,12 @@ class DokuGatewayAdminController extends Controller
 
         $merchant->update($updateData);
 
+        $hasClientId = ! empty($merchant->client_id);
+        $hasPrivateKey = ! empty($merchant->encrypted_private_key);
+        $isActive = (bool) $merchant->is_active;
+        $isB2bReady = $hasClientId && $hasPrivateKey && $isActive;
+        $isConfigured = $hasClientId && $hasPrivateKey;
+
         $this->auditService->record(
             merchantCode: $merchant->merchant_code,
             action: 'merchant.updated',
@@ -230,7 +246,10 @@ class DokuGatewayAdminController extends Controller
             responseCode: '200',
             metadata: [
                 'merchant_name' => $merchant->merchant_name,
-                'is_active' => (bool) $merchant->is_active,
+                'is_active' => $isActive,
+                'has_client_id' => $hasClientId,
+                'has_private_key' => $hasPrivateKey,
+                'is_b2b_ready' => $isB2bReady,
             ],
             request: $request
         );
@@ -242,10 +261,14 @@ class DokuGatewayAdminController extends Controller
                 'id' => $merchant->id,
                 'merchant_code' => $merchant->merchant_code,
                 'merchant_name' => $merchant->merchant_name,
+                'client_id' => (string) ($merchant->client_id ?? ''),
                 'masked_client_id' => $merchant->masked_client_id,
                 'environment' => 'sandbox',
-                'is_configured' => ! empty($merchant->client_id) && ! empty($merchant->encrypted_private_key),
-                'is_active' => (bool) $merchant->is_active,
+                'is_configured' => $isConfigured,
+                'is_b2b_ready' => $isB2bReady,
+                'is_active' => $isActive,
+                'has_private_key' => $hasPrivateKey,
+                'has_client_id' => $hasClientId,
             ],
         ]);
     }
@@ -365,8 +388,10 @@ class DokuGatewayAdminController extends Controller
                     'masked_client_id' => '',
                     'environment' => 'sandbox',
                     'is_configured' => false,
+                    'is_b2b_ready' => false,
                     'is_active' => true,
                     'has_private_key' => false,
+                    'has_client_id' => false,
                     'public_key' => null,
                     'public_key_fingerprint' => null,
                     'last_token_tested_at' => null,
@@ -380,19 +405,25 @@ class DokuGatewayAdminController extends Controller
             ]);
         }
 
-        $isConfigured = ! empty($cred->client_id) && ! empty($cred->encrypted_private_key);
+        $hasPrivateKey = ! empty($cred->encrypted_private_key);
+        $hasClientId = ! empty($cred->client_id);
+        $isActive = (bool) $cred->is_active;
+        $isB2bReady = $hasClientId && $hasPrivateKey && $isActive;
+        $isConfigured = $hasPrivateKey || $hasClientId;
 
         return response()->json([
             'status' => 'success',
             'data' => [
                 'merchant_code' => $cred->merchant_code,
                 'merchant_name' => $cred->merchant_name,
-                'client_id' => '', // Jangan kirim plaintext clientId lengkap jika ingin masking murni
+                'client_id' => (string) ($cred->client_id ?? ''),
                 'masked_client_id' => $cred->masked_client_id,
                 'environment' => 'sandbox',
                 'is_configured' => $isConfigured,
-                'is_active' => $cred->is_active,
-                'has_private_key' => ! empty($cred->encrypted_private_key),
+                'is_b2b_ready' => $isB2bReady,
+                'is_active' => $isActive,
+                'has_private_key' => $hasPrivateKey,
+                'has_client_id' => $hasClientId,
                 'public_key' => $cred->public_key,
                 'public_key_fingerprint' => $cred->public_key_fingerprint,
                 'last_token_tested_at' => $cred->last_token_tested_at?->format('Y-m-d H:i:s'),
@@ -410,32 +441,48 @@ class DokuGatewayAdminController extends Controller
     {
         $validated = $request->validated();
         $merchantCode = $validated['merchant_code'];
-        $privateKey = $validated['private_key'];
+        $privateKey = trim((string) ($validated['private_key'] ?? ''));
 
-        // Ekstrak public key & fingerprint dari private key
-        $publicKey = $this->signatureService->extractPublicKey($privateKey);
-        $fingerprint = $publicKey ? $this->signatureService->publicKeyFingerprint($publicKey) : null;
+        $cred = DokuMerchantCredential::query()
+            ->where('merchant_code', $merchantCode)
+            ->where('environment', 'sandbox')
+            ->first();
 
-        // Enkripsi private key dengan AES-256-GCM
-        $encrypted = $this->secretStore->encryptPrivateKey($privateKey, $merchantCode, 'v1');
+        $updateData = [
+            'merchant_name' => $validated['merchant_name'],
+            'client_id' => $validated['client_id'],
+            'is_active' => $validated['is_active'] ?? ($cred?->is_active ?? true),
+        ];
+
+        $isNewKeyProvided = ! empty($privateKey);
+
+        // Jika private key baru diinputkan secara manual, enkripsi dan perbarui pasangan kunci
+        if ($isNewKeyProvided) {
+            $publicKey = $this->signatureService->extractPublicKey($privateKey);
+            $fingerprint = $publicKey ? $this->signatureService->publicKeyFingerprint($publicKey) : null;
+            $encrypted = $this->secretStore->encryptPrivateKey($privateKey, $merchantCode, 'v1');
+
+            $updateData['encrypted_private_key'] = $encrypted['ciphertext'];
+            $updateData['key_nonce'] = $encrypted['nonce'];
+            $updateData['key_tag'] = $encrypted['tag'];
+            $updateData['key_version'] = $encrypted['key_version'];
+            $updateData['public_key'] = $publicKey;
+            $updateData['public_key_fingerprint'] = $fingerprint;
+        }
 
         $cred = DokuMerchantCredential::updateOrCreate(
             [
                 'merchant_code' => $merchantCode,
                 'environment' => 'sandbox',
             ],
-            [
-                'merchant_name' => $validated['merchant_name'],
-                'client_id' => $validated['client_id'],
-                'is_active' => $validated['is_active'] ?? true,
-                'encrypted_private_key' => $encrypted['ciphertext'],
-                'key_nonce' => $encrypted['nonce'],
-                'key_tag' => $encrypted['tag'],
-                'key_version' => $encrypted['key_version'],
-                'public_key' => $publicKey,
-                'public_key_fingerprint' => $fingerprint,
-            ]
+            $updateData
         );
+
+        $hasPrivateKey = ! empty($cred->encrypted_private_key);
+        $hasClientId = ! empty($cred->client_id);
+        $isActive = (bool) $cred->is_active;
+        $isB2bReady = $hasClientId && $hasPrivateKey && $isActive;
+        $isConfigured = $hasPrivateKey || $hasClientId;
 
         $this->auditService->record(
             merchantCode: $merchantCode,
@@ -445,22 +492,28 @@ class DokuGatewayAdminController extends Controller
             metadata: [
                 'merchant_name' => $cred->merchant_name,
                 'client_id_masked' => $cred->masked_client_id,
-                'public_key_fingerprint' => $fingerprint,
+                'public_key_fingerprint' => $cred->public_key_fingerprint,
+                'has_private_key' => $hasPrivateKey,
+                'is_b2b_ready' => $isB2bReady,
+                'key_reused' => ! $isNewKeyProvided && $hasPrivateKey,
             ],
             request: $request
         );
 
         return response()->json([
             'status' => 'success',
-            'message' => 'Kredensial DOKU Sandbox berhasil disimpan secara terenkripsi.',
+            'message' => 'Kredensial DOKU Sandbox berhasil disimpan.',
             'data' => [
                 'merchant_code' => $cred->merchant_code,
                 'merchant_name' => $cred->merchant_name,
+                'client_id' => (string) $cred->client_id,
                 'masked_client_id' => $cred->masked_client_id,
                 'environment' => 'sandbox',
-                'is_configured' => true,
-                'is_active' => $cred->is_active,
-                'has_private_key' => true,
+                'is_configured' => $isConfigured,
+                'is_b2b_ready' => $isB2bReady,
+                'is_active' => $isActive,
+                'has_private_key' => $hasPrivateKey,
+                'has_client_id' => $hasClientId,
                 'public_key' => $cred->public_key,
                 'public_key_fingerprint' => $cred->public_key_fingerprint,
             ],
@@ -634,15 +687,26 @@ class DokuGatewayAdminController extends Controller
 
         \Illuminate\Support\Facades\Cache::forget("doku_snap_b2b_token:{$merchantCode}:sandbox");
 
+        $hasClientId = ! empty($cred->client_id);
+        $hasPrivateKey = ! empty($cred->encrypted_private_key);
+        $isActive = (bool) $cred->is_active;
+        $isB2bReady = $hasClientId && $hasPrivateKey && $isActive;
+        $isConfigured = $hasPrivateKey || $hasClientId;
+
         return response()->json([
             'status' => 'success',
             'message' => 'Pasangan RSA Key Pair 2048-bit berhasil dibuat dan disimpan terenkripsi.',
             'data' => [
                 'merchant_code' => $cred->merchant_code,
                 'merchant_name' => $cred->merchant_name,
+                'client_id' => (string) ($cred->client_id ?? ''),
+                'masked_client_id' => $cred->masked_client_id,
                 'environment' => 'sandbox',
-                'is_configured' => true,
-                'has_private_key' => true,
+                'is_configured' => $isConfigured,
+                'is_b2b_ready' => $isB2bReady,
+                'is_active' => $isActive,
+                'has_private_key' => $hasPrivateKey,
+                'has_client_id' => $hasClientId,
                 'public_key' => $cred->public_key,
                 'public_key_fingerprint' => $cred->public_key_fingerprint,
                 'is_rotated' => $hasExistingKey,
@@ -732,15 +796,26 @@ class DokuGatewayAdminController extends Controller
 
         \Illuminate\Support\Facades\Cache::forget("doku_snap_b2b_token:{$merchantCode}:sandbox");
 
+        $hasClientId = ! empty($cred->client_id);
+        $hasPrivateKey = ! empty($cred->encrypted_private_key);
+        $isActive = (bool) $cred->is_active;
+        $isB2bReady = $hasClientId && $hasPrivateKey && $isActive;
+        $isConfigured = $hasPrivateKey || $hasClientId;
+
         return response()->json([
             'status' => 'success',
             'message' => 'Pasangan kunci RSA sebelumnya berhasil dipulihkan.',
             'data' => [
                 'merchant_code' => $cred->merchant_code,
                 'merchant_name' => $cred->merchant_name,
+                'client_id' => (string) ($cred->client_id ?? ''),
+                'masked_client_id' => $cred->masked_client_id,
                 'environment' => 'sandbox',
-                'is_configured' => true,
-                'has_private_key' => true,
+                'is_configured' => $isConfigured,
+                'is_b2b_ready' => $isB2bReady,
+                'is_active' => $isActive,
+                'has_private_key' => $hasPrivateKey,
+                'has_client_id' => $hasClientId,
                 'public_key' => $cred->public_key,
                 'public_key_fingerprint' => $cred->public_key_fingerprint,
                 'has_recovery_backup' => DokuMerchantKeyBackup::query()
@@ -769,7 +844,21 @@ class DokuGatewayAdminController extends Controller
         if ($cred === null || empty($cred->encrypted_private_key)) {
             return response()->json([
                 'status' => 'failed',
-                'message' => "Kredensial DOKU untuk merchant {$merchantCode} belum dikonfigurasi.",
+                'message' => "RSA Private Key untuk merchant {$merchantCode} belum tersedia. Silakan generate RSA Key Pair terlebih dahulu.",
+            ], 422);
+        }
+
+        if (empty($cred->client_id)) {
+            return response()->json([
+                'status' => 'failed',
+                'message' => "Client ID DOKU untuk merchant {$merchantCode} belum dikonfigurasi.",
+            ], 422);
+        }
+
+        if (! (bool) $cred->is_active) {
+            return response()->json([
+                'status' => 'failed',
+                'message' => "Merchant DOKU {$merchantCode} sedang nonaktif. Aktifkan merchant untuk melakukan pengujian token SNAP B2B.",
             ], 422);
         }
 
