@@ -147,11 +147,22 @@ class VerifyDokuProductionEndpointCommand extends Command
         $sourceDir = '/tmp/doku-payment-latest';
         if (is_dir($sourceDir)) {
             $this->info("Menjalankan sinkronisasi doku-payment service dari {$sourceDir}...");
-            $syncRequest = Request::create('/api/v1/admin/doku-gateway/sync-service', 'POST');
-            $syncRequest->headers->set('Accept', 'application/json');
-            $syncRequest->headers->set('Authorization', 'Bearer ' . $plainToken);
-            $syncResponse = app()->handle($syncRequest);
-            $this->info("Hasil sinkronisasi doku-payment via kernel: " . $syncResponse->getContent());
+            try {
+                $fpmSync = Http::timeout(8)
+                    ->withHeaders([
+                        'Host' => 'apiudev.udumbara.my.id',
+                        'Accept' => 'application/json',
+                    ])
+                    ->withToken($plainToken)
+                    ->post('http://127.0.0.1/api/v1/admin/doku-gateway/sync-service');
+                $this->info("Hasil sinkronisasi doku-payment via PHP-FPM (HTTP {$fpmSync->status()}): " . $fpmSync->body());
+            } catch (\Throwable $e) {
+                $syncRequest = Request::create('/api/v1/admin/doku-gateway/sync-service', 'POST');
+                $syncRequest->headers->set('Accept', 'application/json');
+                $syncRequest->headers->set('Authorization', 'Bearer ' . $plainToken);
+                $syncResponse = app()->handle($syncRequest);
+                $this->info("Hasil sinkronisasi doku-payment via kernel: " . $syncResponse->getContent());
+            }
         }
 
         // 4. Verifikasi konfigurasi URL dan konektivitas inter-service doku-payment

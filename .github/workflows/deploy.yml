@@ -338,15 +338,8 @@ jobs:
           echo '=== Sinkronisasi doku-payment ==='
           echo 'Mempersiapkan source doku-payment di /tmp/doku-payment-latest...'
           rm -rf /tmp/doku-payment-latest
-          git clone --depth 1 https://github.com/buntal212/doku-payment.git /tmp/doku-payment-latest
-          chmod -R a+rX /tmp/doku-payment-latest
-
-          SYNC_TOKEN="$("$PHP_BIN" -r 'require "vendor/autoload.php"; $app = require "bootstrap/app.php"; $app->make(Illuminate\Contracts\Console\Kernel::class)->bootstrap(); $admin = App\Models\User::where("is_admin", true)->first(); echo $admin ? $admin->createToken("ci-sync", ["admin:access"])->plainTextToken : "";')"
-          if [[ -n "$SYNC_TOKEN" ]]; then
-            echo 'Menjalankan sync doku-payment via PHP-FPM lokal (user www)...'
-            curl -s -k -H "Host: apiudev.udumbara.my.id" -H "Authorization: Bearer $SYNC_TOKEN" -H "Accept: application/json" -X POST http://127.0.0.1/api/v1/admin/doku-gateway/sync-service || true
-            curl -s -k -H "Host: apiudev.udumbara.my.id" -H "Authorization: Bearer $SYNC_TOKEN" -H "Accept: application/json" -X POST https://127.0.0.1/api/v1/admin/doku-gateway/sync-service || true
-          fi
+          git clone --depth 1 https://github.com/buntal212/doku-payment.git /tmp/doku-payment-latest || true
+          chmod -R a+rX /tmp/doku-payment-latest 2>/dev/null || true
 
           echo '=== Verifikasi endpoint DOKU production ==='
           (
