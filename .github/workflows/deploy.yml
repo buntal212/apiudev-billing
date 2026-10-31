@@ -335,6 +335,14 @@ jobs:
             sudo -n systemctl reload php-fpm-83 2>/dev/null || sudo -n systemctl reload php8.3-fpm 2>/dev/null || true
           fi
 
+          echo '=== DIAGNOSTICS HOMELAB RUNNER ==='
+          id
+          sudo -n -l 2>&1 || echo "sudo -n -l failed with code: $?"
+          ls -ld /www/wwwroot/doku.udumbara.my.id 2>&1 || true
+          ls -l /www/wwwroot/doku.udumbara.my.id/app/Http/Controllers/Api/V1/Internal/DokuInternalGatewayController.php 2>&1 || true
+          ls -la /usr/local/sbin 2>&1 || true
+          echo '=== END DIAGNOSTICS ==='
+
           echo '=== Sinkronisasi doku-payment ==='
           RUNNER_USER="$(id -un 2>/dev/null || echo 'github-runner-apiudev')"
           for doku_dir in /www/wwwroot/*; do
