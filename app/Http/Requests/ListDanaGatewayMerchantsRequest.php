@@ -18,6 +18,7 @@ class ListDanaGatewayMerchantsRequest extends ApiFormRequest
     {
         return [
             'environment' => ['required', 'in:sandbox,production'],
+            'provider' => ['nullable', 'in:dana,doku'],
         ];
     }
 }

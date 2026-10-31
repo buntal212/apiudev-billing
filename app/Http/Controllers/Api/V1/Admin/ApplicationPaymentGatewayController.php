@@ -87,6 +87,17 @@ class ApplicationPaymentGatewayController extends Controller
                     'environment' => ['DOKU Gateway hanya mendukung environment sandbox.'],
                 ]);
             }
+
+            $exists = DokuMerchantCredential::query()
+                ->where('merchant_code', $attributes['gateway_merchant_code'])
+                ->where('environment', 'sandbox')
+                ->exists();
+
+            if (! $exists) {
+                throw ValidationException::withMessages([
+                    'gateway_merchant_code' => ['Merchant DOKU tidak ditemukan pada sandbox.'],
+                ]);
+            }
         }
         $gateway = ApplicationPaymentGateway::query()->create($attributes);
 
@@ -116,6 +127,19 @@ class ApplicationPaymentGatewayController extends Controller
                 throw ValidationException::withMessages([
                     'environment' => ['DOKU Gateway hanya mendukung environment sandbox.'],
                 ]);
+            }
+
+            if (array_key_exists('gateway_merchant_code', $attributes)) {
+                $exists = DokuMerchantCredential::query()
+                    ->where('merchant_code', $merchantCode)
+                    ->where('environment', 'sandbox')
+                    ->exists();
+
+                if (! $exists) {
+                    throw ValidationException::withMessages([
+                        'gateway_merchant_code' => ['Merchant DOKU tidak ditemukan pada sandbox.'],
+                    ]);
+                }
             }
         }
 

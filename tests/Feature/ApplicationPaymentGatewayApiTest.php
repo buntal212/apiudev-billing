@@ -148,6 +148,151 @@ class ApplicationPaymentGatewayApiTest extends TestCase
         ]);
     }
 
+    public function test_admin_can_filter_mappings_by_provider_doku_and_dana(): void
+    {
+        $appDana = Application::factory()->create(['name' => 'App DANA']);
+        $appDoku = Application::factory()->create(['name' => 'App DOKU']);
+
+        \App\Models\DokuMerchantCredential::create([
+            'merchant_code' => 'doku-store',
+            'merchant_name' => 'DOKU Store',
+            'client_id' => 'MALL-DOKU-01',
+            'encrypted_private_key' => 'encrypted-key',
+            'environment' => 'sandbox',
+            'is_active' => true,
+        ]);
+
+        ApplicationPaymentGateway::query()->create([
+            'application_id' => $appDana->id,
+            'provider' => 'dana',
+            'environment' => 'sandbox',
+            'gateway_merchant_code' => 'merchant-bersama',
+            'is_active' => true,
+        ]);
+
+        ApplicationPaymentGateway::query()->create([
+            'application_id' => $appDoku->id,
+            'provider' => 'doku',
+            'environment' => 'sandbox',
+            'gateway_merchant_code' => 'doku-store',
+            'is_active' => true,
+        ]);
+
+        $this->actingAdmin();
+
+        // 1. Filter provider=doku harus HTTP 200 dan hanya berisi doku
+        $dokuResponse = $this->getJson('/api/v1/admin/payment-gateways?provider=doku&environment=sandbox');
+        $dokuResponse->assertOk()
+            ->assertJsonCount(1, 'data')
+            ->assertJsonPath('data.0.provider', 'doku')
+            ->assertJsonPath('data.0.gateway_merchant_code', 'doku-store')
+            ->assertJsonPath('data.0.readiness.ready', true);
+
+        // 2. Filter provider=dana harus HTTP 200 dan hanya berisi dana
+        $danaResponse = $this->getJson('/api/v1/admin/payment-gateways?provider=dana&environment=sandbox');
+        $danaResponse->assertOk()
+            ->assertJsonCount(1, 'data')
+            ->assertJsonPath('data.0.provider', 'dana')
+            ->assertJsonPath('data.0.gateway_merchant_code', 'merchant-bersama')
+            ->assertJsonPath('data.0.readiness.ready', true);
+    }
+
+    public function test_admin_can_create_update_and_delete_doku_mapping(): void
+    {
+        $app = Application::factory()->create();
+
+        \App\Models\DokuMerchantCredential::create([
+            'merchant_code' => 'doku-crud',
+            'merchant_name' => 'DOKU CRUD Store',
+            'environment' => 'sandbox',
+            'is_active' => true,
+        ]);
+
+        $this->actingAdmin();
+
+        // Create
+        $createRes = $this->postJson('/api/v1/admin/payment-gateways', [
+            'application_id' => $app->id,
+            'provider' => 'doku',
+            'environment' => 'sandbox',
+            'gateway_merchant_code' => 'doku-crud',
+            'is_active' => true,
+        ])->assertCreated()
+            ->assertJsonPath('data.provider', 'doku')
+            ->assertJsonPath('data.environment', 'sandbox')
+            ->assertJsonPath('data.gateway_merchant_code', 'doku-crud');
+
+        $mappingId = $createRes->json('data.id');
+
+        // Update
+        $this->patchJson("/api/v1/admin/payment-gateways/{$mappingId}", [
+            'is_active' => false,
+        ])->assertOk()
+            ->assertJsonPath('data.is_active', false);
+
+        // Delete
+        $this->deleteJson("/api/v1/admin/payment-gateways/{$mappingId}")
+            ->assertOk()
+            ->assertJson([
+                'status' => 'success',
+            ]);
+
+        $this->assertDatabaseMissing('application_payment_gateways', [
+            'id' => $mappingId,
+        ]);
+    }
+
+    public function test_doku_mapping_rejects_production_environment_and_unregistered_merchant(): void
+    {
+        $app = Application::factory()->create();
+        $this->actingAdmin();
+
+        // Reject production for DOKU
+        $this->postJson('/api/v1/admin/payment-gateways', [
+            'application_id' => $app->id,
+            'provider' => 'doku',
+            'environment' => 'production',
+            'gateway_merchant_code' => 'udev-central',
+            'is_active' => true,
+        ])->assertUnprocessable()
+            ->assertJsonValidationErrors('environment');
+
+        // Reject unregistered merchant for DOKU
+        $this->postJson('/api/v1/admin/payment-gateways', [
+            'application_id' => $app->id,
+            'provider' => 'doku',
+            'environment' => 'sandbox',
+            'gateway_merchant_code' => 'merchant-hantu',
+            'is_active' => true,
+        ])->assertUnprocessable()
+            ->assertJsonValidationErrors('gateway_merchant_code');
+    }
+
+    public function test_payment_gateways_merchant_options_supports_provider_doku(): void
+    {
+        \App\Models\DokuMerchantCredential::create([
+            'merchant_code' => 'doku-opt-test',
+            'merchant_name' => 'DOKU Option Test',
+            'client_id' => 'MALL-OPT-01',
+            'encrypted_private_key' => 'enc-key',
+            'environment' => 'sandbox',
+            'is_active' => true,
+        ]);
+
+        $this->actingAdmin();
+
+        $response = $this->getJson('/api/v1/admin/payment-gateways/merchants?environment=sandbox&provider=doku');
+        $response->assertOk()
+            ->assertJsonStructure([
+                'data' => [
+                    '*' => ['code', 'name', 'is_active', 'readiness'],
+                ],
+            ]);
+
+        $codes = collect($response->json('data'))->pluck('code')->all();
+        $this->assertContains('doku-opt-test', $codes);
+    }
+
     /** @return array<string, mixed> */
     private function payload(Application $application, array $overrides = []): array
     {

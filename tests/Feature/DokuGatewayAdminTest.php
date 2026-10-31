@@ -1035,6 +1035,11 @@ PEM;
     {
         Sanctum::actingAs($this->admin, ['admin:access']);
 
+        DokuMerchantCredential::firstOrCreate(
+            ['merchant_code' => 'udev-central', 'environment' => 'sandbox'],
+            ['merchant_name' => 'UDEV Central Billing', 'is_active' => true]
+        );
+
         $app = \App\Models\Application::factory()->create();
 
         // Buat mapping DOKU

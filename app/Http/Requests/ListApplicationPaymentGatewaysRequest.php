@@ -18,7 +18,7 @@ class ListApplicationPaymentGatewaysRequest extends ApiFormRequest
     {
         return [
             'application_id' => ['nullable', 'integer', 'exists:applications,id'],
-            'provider' => ['nullable', 'in:dana'],
+            'provider' => ['nullable', 'in:dana,doku'],
             'environment' => ['nullable', 'in:sandbox,production'],
             'is_active' => ['nullable', 'boolean'],
             'page' => ['nullable', 'integer', 'min:1'],
