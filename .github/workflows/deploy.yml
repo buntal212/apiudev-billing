@@ -336,20 +336,22 @@ jobs:
           fi
 
           echo '=== Sinkronisasi doku-payment ==='
-          for target in /www/wwwroot/doku.udumbara.my.id /www/wwwroot/doku-payment; do
-            if [[ -d "$target" ]]; then
-              echo "Menemukan doku directory: $target"
+          for doku_dir in /www/wwwroot/*; do
+            if [[ -f "$doku_dir/artisan" && -f "$doku_dir/app/Services/DokuSnapTokenClient.php" ]]; then
+              echo "Ditemukan doku-payment service di: $doku_dir"
               (
-                cd "$target"
-                sudo -n chown -R kentang:www "$target" 2>/dev/null || true
-                git config --global --add safe.directory "$target" || true
-                git fetch origin main || true
-                git reset --hard origin/main || true
+                cd "$doku_dir"
+                sudo -n chown -R kentang:www "$doku_dir" 2>/dev/null || true
+                if [[ -d .git ]]; then
+                  git config --global --add safe.directory "$doku_dir" || true
+                  git fetch origin main || true
+                  git reset --hard origin/main || true
+                fi
                 "$PHP_BIN" artisan optimize:clear --no-interaction || true
                 "$PHP_BIN" artisan config:cache --no-interaction || true
                 "$PHP_BIN" artisan route:cache --no-interaction || true
-                echo "Sync doku-payment di $target selesai: $(git rev-parse --short HEAD)"
-              ) || echo "::warning::Gagal sinkronisasi $target"
+                echo "Sync doku-payment di $doku_dir selesai: $(git rev-parse --short HEAD 2>/dev/null || echo 'no-git')"
+              ) || echo "::warning::Gagal sinkronisasi $doku_dir"
             fi
           done
 
