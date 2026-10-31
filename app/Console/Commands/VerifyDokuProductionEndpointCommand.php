@@ -143,29 +143,7 @@ class VerifyDokuProductionEndpointCommand extends Command
 
         $this->info("Health check internal BERHASIL: DELETE /api/v1/admin/doku-gateway/configuration aktif (Status {$delStatus}: rute terdaftar, bukan 405).");
 
-        // 3. Sinkronisasi service doku-payment jika source /tmp tersedia
-        $sourceDir = '/tmp/doku-payment-latest';
-        if (is_dir($sourceDir)) {
-            $this->info("Menjalankan sinkronisasi doku-payment service dari {$sourceDir}...");
-            try {
-                $fpmSync = Http::timeout(8)
-                    ->withHeaders([
-                        'Host' => 'apiudev.udumbara.my.id',
-                        'Accept' => 'application/json',
-                    ])
-                    ->withToken($plainToken)
-                    ->post('http://127.0.0.1/api/v1/admin/doku-gateway/sync-service');
-                $this->info("Hasil sinkronisasi doku-payment via PHP-FPM (HTTP {$fpmSync->status()}): " . $fpmSync->body());
-            } catch (\Throwable $e) {
-                $syncRequest = Request::create('/api/v1/admin/doku-gateway/sync-service', 'POST');
-                $syncRequest->headers->set('Accept', 'application/json');
-                $syncRequest->headers->set('Authorization', 'Bearer ' . $plainToken);
-                $syncResponse = app()->handle($syncRequest);
-                $this->info("Hasil sinkronisasi doku-payment via kernel: " . $syncResponse->getContent());
-            }
-        }
-
-        // 4. Verifikasi konfigurasi URL dan konektivitas inter-service doku-payment
+        // 3. Verifikasi konfigurasi URL dan konektivitas inter-service doku-payment
         $gatewayUrl = rtrim((string) config('services.doku_gateway.gateway_service_url'), '/');
         $serviceToken = (string) config('services.doku_gateway.service_token');
 

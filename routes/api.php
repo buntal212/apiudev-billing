@@ -172,7 +172,6 @@ Route::prefix('v1/admin')
             Route::post('recover-key', [DokuGatewayAdminController::class, 'recoverPreviousKey'])->name('recover-key');
             Route::post('test-token', [DokuGatewayAdminController::class, 'testB2BToken'])->name('test-token');
             Route::get('audits', [DokuGatewayAdminController::class, 'indexAudits'])->name('audits');
-            Route::post('sync-service', [DokuGatewayAdminController::class, 'syncGatewayService'])->name('sync-service');
         });
         Route::apiResource('application-customers', ApplicationCustomerController::class)
             ->only(['index', 'store', 'show', 'update']);

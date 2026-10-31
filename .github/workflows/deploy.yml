@@ -335,24 +335,6 @@ jobs:
             sudo -n systemctl reload php-fpm-83 2>/dev/null || sudo -n systemctl reload php8.3-fpm 2>/dev/null || true
           fi
 
-          echo '=== AUDIT HOMELAB PERMISSIONS & DOKU ENVIRONMENT ==='
-          id
-          sudo -n whoami 2>&1 || echo "sudo whoami failed: $?"
-          sudo -n -u kentang whoami 2>&1 || echo "sudo -u kentang whoami failed: $?"
-          sudo -n /usr/local/sbin/homelab-runner-audit.sh 2>&1 || echo "sudo runner-audit failed: $?"
-          getfacl /www/wwwroot/doku.udumbara.my.id 2>&1 || true
-          cat /usr/local/sbin/homelab-runner-audit.sh 2>&1 || true
-          cat /usr/local/sbin/homelab-runner-cleanup.sh 2>&1 || true
-          echo "Writable by runner under doku.udumbara.my.id:"
-          find /www/wwwroot/doku.udumbara.my.id -maxdepth 3 -writable 2>&1 || true
-          echo '=== END AUDIT ==='
-
-          echo '=== Sinkronisasi doku-payment ==='
-          echo 'Mempersiapkan source doku-payment di /tmp/doku-payment-latest...'
-          rm -rf /tmp/doku-payment-latest
-          git clone --depth 1 https://github.com/buntal212/doku-payment.git /tmp/doku-payment-latest || true
-          chmod -R a+rX /tmp/doku-payment-latest 2>/dev/null || true
-
           echo '=== Verifikasi endpoint DOKU production ==='
           (
             cd "$APP_DIR"
@@ -360,7 +342,6 @@ jobs:
               --internal \
               --no-interaction
           )
-          rm -rf /tmp/doku-payment-latest
 
           ACTIVATION_STARTED=0
           DEPLOY_OK=1
