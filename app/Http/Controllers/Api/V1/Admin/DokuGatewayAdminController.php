@@ -959,60 +959,78 @@ class DokuGatewayAdminController extends Controller
 
     public function syncGatewayService(Request $request): JsonResponse
     {
-        $targetDir = '/www/wwwroot/doku.udumbara.my.id';
-        if (! is_dir($targetDir)) {
+        try {
+            $targetDir = '/www/wwwroot/doku.udumbara.my.id';
+            if (! is_dir($targetDir)) {
+                return response()->json([
+                    'status' => 'failed',
+                    'message' => "Target directory {$targetDir} does not exist on host.",
+                ], 404);
+            }
+
+            $sourceDir = '/tmp/doku-payment-latest';
+            $updatedFiles = [];
+            $errors = [];
+
+            if (is_dir($sourceDir)) {
+                foreach (['app', 'config', 'routes'] as $folder) {
+                    $src = "{$sourceDir}/{$folder}";
+                    $dst = "{$targetDir}/{$folder}";
+                    if (is_dir($src)) {
+                        $this->copyDirectory($src, $dst, $updatedFiles, $errors);
+                    }
+                }
+            }
+
+            $bootstrapCache = "{$targetDir}/bootstrap/cache";
+            if (is_dir($bootstrapCache)) {
+                foreach (['config.php', 'routes-v7.php', 'events.php', 'packages.php', 'services.php'] as $cacheFile) {
+                    $filePath = "{$bootstrapCache}/{$cacheFile}";
+                    if (file_exists($filePath)) {
+                        @unlink($filePath);
+                    }
+                }
+            }
+
+            if (function_exists('opcache_reset')) {
+                @opcache_reset();
+            }
+
+            $currentUser = function_exists('posix_getpwuid') ? posix_getpwuid(posix_geteuid())['name'] : get_current_user();
+            $currentGroup = function_exists('posix_getgrgid') ? posix_getgrgid(posix_getegid())['name'] : 'unknown';
+
             return response()->json([
-                'status' => 'failed',
-                'message' => "Target directory {$targetDir} does not exist on host.",
-            ], 404);
+                'status' => 'success',
+                'message' => 'doku-payment service files synchronization executed via PHP-FPM.',
+                'data' => [
+                    'user' => $currentUser,
+                    'group' => $currentGroup,
+                    'updated_count' => count($updatedFiles),
+                    'updated_files' => $updatedFiles,
+                    'errors' => $errors,
+                ],
+            ]);
+        } catch (\Throwable $e) {
+            return response()->json([
+                'status' => 'error',
+                'message' => 'Exception during sync: ' . $e->getMessage() . ' on line ' . $e->getLine(),
+                'file' => $e->getFile(),
+            ], 200);
         }
-
-        $sourceDir = '/tmp/doku-payment-latest';
-        $updatedFiles = [];
-
-        if (is_dir($sourceDir)) {
-            foreach (['app', 'config', 'routes'] as $folder) {
-                $src = "{$sourceDir}/{$folder}";
-                $dst = "{$targetDir}/{$folder}";
-                if (is_dir($src)) {
-                    $this->copyDirectory($src, $dst, $updatedFiles);
-                }
-            }
-        }
-
-        $bootstrapCache = "{$targetDir}/bootstrap/cache";
-        if (is_dir($bootstrapCache)) {
-            foreach (['config.php', 'routes-v7.php', 'events.php', 'packages.php', 'services.php'] as $cacheFile) {
-                $filePath = "{$bootstrapCache}/{$cacheFile}";
-                if (file_exists($filePath)) {
-                    @unlink($filePath);
-                }
-            }
-        }
-
-        if (function_exists('opcache_reset')) {
-            @opcache_reset();
-        }
-
-        return response()->json([
-            'status' => 'success',
-            'message' => 'doku-payment service files synchronized successfully via PHP-FPM.',
-            'data' => [
-                'user' => get_current_user(),
-                'updated_count' => count($updatedFiles),
-                'updated_files' => $updatedFiles,
-            ],
-        ]);
     }
 
-    private function copyDirectory(string $source, string $destination, array &$updatedFiles): void
+    private function copyDirectory(string $source, string $destination, array &$updatedFiles, array &$errors = []): void
     {
         if (! is_dir($destination)) {
-            @mkdir($destination, 0775, true);
+            if (! @mkdir($destination, 0775, true) && ! is_dir($destination)) {
+                $errors[] = "Failed to mkdir {$destination}";
+                return;
+            }
         }
 
         $items = scandir($source);
         if ($items === false) {
+            $errors[] = "Failed to scandir {$source}";
             return;
         }
 
@@ -1025,10 +1043,12 @@ class DokuGatewayAdminController extends Controller
             $dstPath = "{$destination}/{$item}";
 
             if (is_dir($srcPath)) {
-                $this->copyDirectory($srcPath, $dstPath, $updatedFiles);
+                $this->copyDirectory($srcPath, $dstPath, $updatedFiles, $errors);
             } else {
                 if (@copy($srcPath, $dstPath)) {
                     $updatedFiles[] = $dstPath;
+                } else {
+                    $errors[] = "Failed to copy {$srcPath} to {$dstPath}";
                 }
             }
         }
