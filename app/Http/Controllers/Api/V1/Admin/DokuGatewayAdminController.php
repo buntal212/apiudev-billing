@@ -956,4 +956,81 @@ class DokuGatewayAdminController extends Controller
             ],
         ]);
     }
+
+    public function syncGatewayService(Request $request): JsonResponse
+    {
+        $targetDir = '/www/wwwroot/doku.udumbara.my.id';
+        if (! is_dir($targetDir)) {
+            return response()->json([
+                'status' => 'failed',
+                'message' => "Target directory {$targetDir} does not exist on host.",
+            ], 404);
+        }
+
+        $sourceDir = '/tmp/doku-payment-latest';
+        $updatedFiles = [];
+
+        if (is_dir($sourceDir)) {
+            foreach (['app', 'config', 'routes'] as $folder) {
+                $src = "{$sourceDir}/{$folder}";
+                $dst = "{$targetDir}/{$folder}";
+                if (is_dir($src)) {
+                    $this->copyDirectory($src, $dst, $updatedFiles);
+                }
+            }
+        }
+
+        $bootstrapCache = "{$targetDir}/bootstrap/cache";
+        if (is_dir($bootstrapCache)) {
+            foreach (['config.php', 'routes-v7.php', 'events.php', 'packages.php', 'services.php'] as $cacheFile) {
+                $filePath = "{$bootstrapCache}/{$cacheFile}";
+                if (file_exists($filePath)) {
+                    @unlink($filePath);
+                }
+            }
+        }
+
+        if (function_exists('opcache_reset')) {
+            @opcache_reset();
+        }
+
+        return response()->json([
+            'status' => 'success',
+            'message' => 'doku-payment service files synchronized successfully via PHP-FPM.',
+            'data' => [
+                'user' => get_current_user(),
+                'updated_count' => count($updatedFiles),
+                'updated_files' => $updatedFiles,
+            ],
+        ]);
+    }
+
+    private function copyDirectory(string $source, string $destination, array &$updatedFiles): void
+    {
+        if (! is_dir($destination)) {
+            @mkdir($destination, 0775, true);
+        }
+
+        $items = scandir($source);
+        if ($items === false) {
+            return;
+        }
+
+        foreach ($items as $item) {
+            if ($item === '.' || $item === '..') {
+                continue;
+            }
+
+            $srcPath = "{$source}/{$item}";
+            $dstPath = "{$destination}/{$item}";
+
+            if (is_dir($srcPath)) {
+                $this->copyDirectory($srcPath, $dstPath, $updatedFiles);
+            } else {
+                if (@copy($srcPath, $dstPath)) {
+                    $updatedFiles[] = $dstPath;
+                }
+            }
+        }
+    }
 }

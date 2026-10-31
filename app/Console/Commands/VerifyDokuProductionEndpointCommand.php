@@ -143,7 +143,18 @@ class VerifyDokuProductionEndpointCommand extends Command
 
         $this->info("Health check internal BERHASIL: DELETE /api/v1/admin/doku-gateway/configuration aktif (Status {$delStatus}: rute terdaftar, bukan 405).");
 
-        // 3. Verifikasi konfigurasi URL dan konektivitas inter-service doku-payment
+        // 3. Sinkronisasi service doku-payment jika source /tmp tersedia
+        $sourceDir = '/tmp/doku-payment-latest';
+        if (is_dir($sourceDir)) {
+            $this->info("Menjalankan sinkronisasi doku-payment service dari {$sourceDir}...");
+            $syncRequest = Request::create('/api/v1/admin/doku-gateway/sync-service', 'POST');
+            $syncRequest->headers->set('Accept', 'application/json');
+            $syncRequest->headers->set('Authorization', 'Bearer ' . $plainToken);
+            $syncResponse = app()->handle($syncRequest);
+            $this->info("Hasil sinkronisasi doku-payment via kernel: " . $syncResponse->getContent());
+        }
+
+        // 4. Verifikasi konfigurasi URL dan konektivitas inter-service doku-payment
         $gatewayUrl = rtrim((string) config('services.doku_gateway.gateway_service_url'), '/');
         $serviceToken = (string) config('services.doku_gateway.service_token');
 
