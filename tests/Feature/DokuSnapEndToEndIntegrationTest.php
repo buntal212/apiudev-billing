@@ -115,7 +115,7 @@ PEM;
         $provisioningClient = app(\App\Services\DokuGatewayProvisioningClient::class);
 
         Http::fake([
-            'http://127.0.0.1:8001/api/v1/internal/doku/test-b2b-token' => Http::response([
+            '*/api/v1/internal/doku/test-b2b-token' => Http::response([
                 'status' => 'success',
                 'data' => [
                     'response_code' => '2007300',

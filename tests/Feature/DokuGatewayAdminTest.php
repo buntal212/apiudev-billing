@@ -1232,4 +1232,201 @@ PEM;
         $this->assertSame('REAL-CLIENT-ID-99999', $cred->client_id);
         $this->assertSame('Mitra Test Diperbarui', $cred->merchant_name);
     }
+
+    public function test_test_token_differentiates_gateway_connection_error(): void
+    {
+        Sanctum::actingAs($this->admin, ['admin:access']);
+
+        $this->putJson('/api/v1/admin/doku-gateway/configuration', [
+            'merchant_code' => 'udev-central',
+            'merchant_name' => 'UDEV Central Billing',
+            'client_id' => 'DEV-UDEV-001',
+            'private_key' => self::TestPrivateKey,
+            'environment' => 'sandbox',
+            'is_active' => true,
+        ])->assertStatus(200);
+
+        Http::fake([
+            '*/api/v1/internal/doku/test-b2b-token' => function () {
+                throw new \Illuminate\Http\Client\ConnectionException('Failed to connect to doku-payment port 443: Connection refused');
+            },
+        ]);
+
+        $response = $this->postJson('/api/v1/admin/doku-gateway/test-token', [
+            'merchant_code' => 'udev-central',
+        ]);
+
+        $response->assertStatus(400)
+            ->assertJson([
+                'status' => 'failed',
+                'data' => [
+                    'status' => 'failed',
+                    'http_status' => 503,
+                    'response_code' => '5037300',
+                ],
+            ]);
+
+        $this->assertStringContainsString('doku-payment tidak dapat dihubungi', $response->json('data.response_message'));
+    }
+
+    public function test_test_token_differentiates_gateway_401_interservice_auth_error(): void
+    {
+        Sanctum::actingAs($this->admin, ['admin:access']);
+
+        $this->putJson('/api/v1/admin/doku-gateway/configuration', [
+            'merchant_code' => 'udev-central',
+            'merchant_name' => 'UDEV Central Billing',
+            'client_id' => 'DEV-UDEV-001',
+            'private_key' => self::TestPrivateKey,
+            'environment' => 'sandbox',
+            'is_active' => true,
+        ])->assertStatus(200);
+
+        Http::fake([
+            '*/api/v1/internal/doku/test-b2b-token' => Http::response([
+                'message' => 'Autentikasi layanan internal diperlukan.',
+            ], 401),
+        ]);
+
+        $response = $this->postJson('/api/v1/admin/doku-gateway/test-token', [
+            'merchant_code' => 'udev-central',
+        ]);
+
+        $response->assertStatus(400)
+            ->assertJson([
+                'status' => 'failed',
+                'data' => [
+                    'status' => 'failed',
+                    'http_status' => 401,
+                    'response_code' => '4017300',
+                ],
+            ]);
+
+        $this->assertStringContainsString('Autentikasi antarservice ke doku-payment ditolak', $response->json('data.response_message'));
+    }
+
+    public function test_test_token_differentiates_gateway_404_route_not_found(): void
+    {
+        Sanctum::actingAs($this->admin, ['admin:access']);
+
+        $this->putJson('/api/v1/admin/doku-gateway/configuration', [
+            'merchant_code' => 'udev-central',
+            'merchant_name' => 'UDEV Central Billing',
+            'client_id' => 'DEV-UDEV-001',
+            'private_key' => self::TestPrivateKey,
+            'environment' => 'sandbox',
+            'is_active' => true,
+        ])->assertStatus(200);
+
+        Http::fake([
+            '*/api/v1/internal/doku/test-b2b-token' => Http::response([
+                'message' => 'Route not found.',
+            ], 404),
+        ]);
+
+        $response = $this->postJson('/api/v1/admin/doku-gateway/test-token', [
+            'merchant_code' => 'udev-central',
+        ]);
+
+        $response->assertStatus(400)
+            ->assertJson([
+                'status' => 'failed',
+                'data' => [
+                    'status' => 'failed',
+                    'http_status' => 404,
+                    'response_code' => '4047300',
+                ],
+            ]);
+
+        $this->assertStringContainsString('Endpoint internal doku-payment tidak ditemukan', $response->json('data.response_message'));
+    }
+
+    public function test_test_token_differentiates_gateway_500_internal_error(): void
+    {
+        Sanctum::actingAs($this->admin, ['admin:access']);
+
+        $this->putJson('/api/v1/admin/doku-gateway/configuration', [
+            'merchant_code' => 'udev-central',
+            'merchant_name' => 'UDEV Central Billing',
+            'client_id' => 'DEV-UDEV-001',
+            'private_key' => self::TestPrivateKey,
+            'environment' => 'sandbox',
+            'is_active' => true,
+        ])->assertStatus(200);
+
+        Http::fake([
+            '*/api/v1/internal/doku/test-b2b-token' => Http::response([
+                'message' => 'Exception in gateway internal processing.',
+            ], 500),
+        ]);
+
+        $response = $this->postJson('/api/v1/admin/doku-gateway/test-token', [
+            'merchant_code' => 'udev-central',
+        ]);
+
+        $response->assertStatus(400)
+            ->assertJson([
+                'status' => 'failed',
+                'data' => [
+                    'status' => 'failed',
+                    'http_status' => 500,
+                    'response_code' => '5007300',
+                ],
+            ]);
+
+        $this->assertStringContainsString('Terjadi kesalahan internal pada layanan doku-payment', $response->json('data.response_message'));
+    }
+
+    public function test_test_token_handles_upstream_doku_alb_503_maintenance_faithfully(): void
+    {
+        Sanctum::actingAs($this->admin, ['admin:access']);
+
+        $this->putJson('/api/v1/admin/doku-gateway/configuration', [
+            'merchant_code' => 'udev-central',
+            'merchant_name' => 'UDEV Central Billing',
+            'client_id' => 'DEV-UDEV-001',
+            'private_key' => self::TestPrivateKey,
+            'environment' => 'sandbox',
+            'is_active' => true,
+        ])->assertStatus(200);
+
+        // Gateway mengembalikan data terstruktur dari upstream DOKU ALB
+        Http::fake([
+            '*/api/v1/internal/doku/test-b2b-token' => Http::response([
+                'status' => 'failed',
+                'data' => [
+                    'status' => 'failed',
+                    'http_status' => 503,
+                    'response_code' => '5037300',
+                    'response_message' => 'DOKU Sandbox upstream tidak merespons JSON valid (HTTP 503 Service Temporarily Unavailable). Endpoint upstream mungkin sedang mengalami pemeliharaan.',
+                    'token_type' => '',
+                    'expires_in' => 0,
+                    'buffer_seconds' => 60,
+                    'cache_ttl_seconds' => 0,
+                    'is_cached' => false,
+                    'masked_token' => '',
+                    'latency_ms' => 45,
+                    'merchant_code' => 'udev-central',
+                    'environment' => 'sandbox',
+                    'target_endpoint' => 'https://api-sandbox.doku.com/authorization/v1/access-token/b2b',
+                ],
+            ], 400),
+        ]);
+
+        $response = $this->postJson('/api/v1/admin/doku-gateway/test-token', [
+            'merchant_code' => 'udev-central',
+        ]);
+
+        $response->assertStatus(400)
+            ->assertJson([
+                'status' => 'failed',
+                'data' => [
+                    'status' => 'failed',
+                    'http_status' => 503,
+                    'response_code' => '5037300',
+                ],
+            ]);
+
+        $this->assertStringContainsString('DOKU Sandbox upstream', $response->json('data.response_message'));
+    }
 }

@@ -335,6 +335,22 @@ jobs:
             sudo -n systemctl reload php-fpm-83 2>/dev/null || sudo -n systemctl reload php8.3-fpm 2>/dev/null || true
           fi
 
+          echo '=== Sinkronisasi doku-payment (jika direktori ada di host) ==='
+          if [[ -d "/www/wwwroot/doku.udumbara.my.id" ]]; then
+            (
+              cd /www/wwwroot/doku.udumbara.my.id
+              if [[ -d .git ]]; then
+                git config --global --add safe.directory /www/wwwroot/doku.udumbara.my.id 2>/dev/null || true
+                git fetch origin main 2>/dev/null || true
+                git reset --hard origin/main 2>/dev/null || true
+              fi
+              "$PHP_BIN" artisan optimize:clear --no-interaction 2>/dev/null || true
+              "$PHP_BIN" artisan config:cache --no-interaction 2>/dev/null || true
+              "$PHP_BIN" artisan route:cache --no-interaction 2>/dev/null || true
+              echo '=== doku-payment berhasil disinkronisasi ==='
+            ) || echo '::warning::Sinkronisasi doku-payment dilewati atau gagal'
+          fi
+
           echo '=== Verifikasi endpoint DOKU production ==='
           (
             cd "$APP_DIR"

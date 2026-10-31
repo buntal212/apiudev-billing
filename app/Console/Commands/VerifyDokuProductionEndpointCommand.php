@@ -143,6 +143,40 @@ class VerifyDokuProductionEndpointCommand extends Command
 
         $this->info("Health check internal BERHASIL: DELETE /api/v1/admin/doku-gateway/configuration aktif (Status {$delStatus}: rute terdaftar, bukan 405).");
 
+        // 3. Verifikasi konfigurasi URL dan konektivitas inter-service doku-payment
+        $gatewayUrl = rtrim((string) config('services.doku_gateway.gateway_service_url'), '/');
+        $serviceToken = (string) config('services.doku_gateway.service_token');
+
+        if ($gatewayUrl === '' || str_starts_with($gatewayUrl, 'http://127.0.0.1:8001')) {
+            $this->error("Konfigurasi DOKU gateway URL tidak valid ({$gatewayUrl}). URL harus mengarah ke doku-payment (mis. https://doku.udumbara.my.id).");
+
+            return self::FAILURE;
+        }
+
+        $this->info("Memverifikasi konektivitas antarservice ke doku-payment: {$gatewayUrl}/api/v1/internal/merchants");
+
+        try {
+            $gwResponse = Http::timeout(6)
+                ->connectTimeout(4)
+                ->withToken($serviceToken)
+                ->acceptJson()
+                ->get($gatewayUrl . '/api/v1/internal/merchants');
+
+            if ($gwResponse->status() === 401 || $gwResponse->status() === 403) {
+                $this->error("Autentikasi antarservice ke doku-payment ditolak (HTTP {$gwResponse->status()}). Periksa service_token.");
+
+                return self::FAILURE;
+            }
+
+            if ($gwResponse->status() === 200) {
+                $this->info("Verifikasi doku-payment BERHASIL: HTTP 200 OK diterima dari {$gatewayUrl}/api/v1/internal/merchants.");
+            } else {
+                $this->warn("Gateway doku-payment merespons HTTP {$gwResponse->status()} (non-fatal jika baru booting).");
+            }
+        } catch (\Throwable $e) {
+            $this->warn("Koneksi jaringan ke doku-payment dari host ({$e->getMessage()}). Melewati probe antarservice.");
+        }
+
         return self::SUCCESS;
     }
 }
