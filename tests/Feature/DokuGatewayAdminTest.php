@@ -779,6 +779,20 @@ PEM;
         ]);
     }
 
+    public function test_verify_doku_production_endpoint_command_internal_success(): void
+    {
+        $exitCode = \Illuminate\Support\Facades\Artisan::call('doku:verify-endpoint', [
+            '--internal' => true,
+        ]);
+
+        $this->assertSame(0, $exitCode);
+
+        // Verifikasi ephemeral token telah dihapus
+        $this->assertDatabaseMissing('personal_access_tokens', [
+            'name' => 'ci-verify-doku-endpoint',
+        ]);
+    }
+
     public function test_verify_doku_production_endpoint_command_fails_on_404(): void
     {
         Http::fake([
