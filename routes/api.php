@@ -106,7 +106,7 @@ Route::prefix('v1/admin')
         Route::get('payment-gateway/billing-transactions/{paymentAttempt}', [BillingGatewayTransactionController::class, 'show'])
             ->middleware('throttle:admin-dana-gateway-read');
         Route::apiResource('payment-gateways', ApplicationPaymentGatewayController::class)
-            ->only(['index', 'store', 'update']);
+            ->only(['index', 'store', 'update', 'destroy']);
         Route::prefix('dana-gateway-merchants')->group(function (): void {
             Route::middleware('throttle:admin-dana-gateway-read')->group(function (): void {
                 Route::get('/', [DanaGatewayMerchantProvisioningController::class, 'index']);
@@ -160,6 +160,11 @@ Route::prefix('v1/admin')
         });
         Route::prefix('doku-gateway')->name('doku-gateway.')->group(function (): void {
             Route::get('merchants', [DokuGatewayAdminController::class, 'indexMerchants'])->name('merchants');
+            Route::post('merchants', [DokuGatewayAdminController::class, 'storeMerchant'])->name('merchants.store');
+            Route::get('merchants/{merchantCode}', [DokuGatewayAdminController::class, 'showMerchant'])->name('merchants.show');
+            Route::put('merchants/{merchantCode}', [DokuGatewayAdminController::class, 'updateMerchant'])->name('merchants.update');
+            Route::patch('merchants/{merchantCode}/status', [DokuGatewayAdminController::class, 'toggleMerchantStatus'])->name('merchants.status');
+            Route::delete('merchants/{merchantCode}', [DokuGatewayAdminController::class, 'destroyMerchant'])->name('merchants.destroy');
             Route::get('configuration', [DokuGatewayAdminController::class, 'showConfiguration'])->name('configuration');
             Route::put('configuration', [DokuGatewayAdminController::class, 'updateConfiguration'])->name('configuration.update');
             Route::delete('configuration', [DokuGatewayAdminController::class, 'deleteConfiguration'])->name('configuration.delete');

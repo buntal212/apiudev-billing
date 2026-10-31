@@ -26,4 +26,9 @@ class ApplicationPaymentGatewayPolicy
     {
         return $user->is_admin;
     }
+
+    public function delete(User $user, ApplicationPaymentGateway $gateway): bool
+    {
+        return $user->is_admin;
+    }
 }

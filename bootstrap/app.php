@@ -111,13 +111,32 @@ return Application::configure(basePath: dirname(__DIR__))
 
         $exceptions->render(function (HttpExceptionInterface $exception, Request $request): JsonResponse {
             $status = $exception->getStatusCode();
+            $exceptionMessage = $exception->getMessage();
+
             $message = match ($status) {
+                400 => ! empty($exceptionMessage) ? $exceptionMessage : 'Permintaan tidak valid.',
                 401 => 'Sesi Anda telah berakhir. Silakan masuk kembali.',
                 403 => 'Anda tidak memiliki izin untuk mengakses halaman ini.',
                 404 => 'Data yang Anda cari tidak ditemukan.',
+                405 => 'Metode HTTP tidak diizinkan untuk endpoint ini.',
+                422 => ! empty($exceptionMessage) ? $exceptionMessage : 'Data yang dikirim belum valid.',
                 429 => 'Terlalu banyak percobaan. Silakan tunggu beberapa saat sebelum mencoba kembali.',
-                default => 'Permintaan tidak dapat diproses. Silakan coba kembali.',
+                default => (! empty($exceptionMessage) && ! str_contains($exceptionMessage, 'SQLSTATE'))
+                    ? $exceptionMessage
+                    : 'Permintaan tidak dapat diproses. Silakan coba kembali.',
             };
+
+            if ($status >= 500) {
+                Log::error('Server error processing request: '.$exceptionMessage, [
+                    'path' => $request->path(),
+                    'method' => $request->method(),
+                    'status' => $status,
+                    'exception' => get_class($exception),
+                    'message' => $exceptionMessage,
+                    'file' => $exception->getFile(),
+                    'line' => $exception->getLine(),
+                ]);
+            }
 
             $response = response()->json(['message' => $message], $status);
 

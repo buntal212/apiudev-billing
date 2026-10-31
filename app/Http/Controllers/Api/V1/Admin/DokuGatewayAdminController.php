@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Api\V1\Admin;
 
 use App\Http\Controllers\Controller;
 use App\Http\Requests\StoreDokuConfigurationRequest;
+use App\Models\ApplicationPaymentGateway;
 use App\Models\DokuGatewayAudit;
 use App\Models\DokuMerchantCredential;
 use App\Models\DokuMerchantKeyBackup;
@@ -23,55 +24,319 @@ class DokuGatewayAdminController extends Controller
         private DokuAuditService $auditService,
     ) {}
 
-    public function indexMerchants(): JsonResponse
+    public function indexMerchants(Request $request): JsonResponse
     {
-        $existing = DokuMerchantCredential::query()
-            ->where('environment', 'sandbox')
-            ->get();
+        // Pastikan merchant default udev-central dan larissama tersedia
+        DokuMerchantCredential::query()->firstOrCreate(
+            ['merchant_code' => 'udev-central', 'environment' => 'sandbox'],
+            ['merchant_name' => 'UDEV Central Billing', 'is_active' => true]
+        );
+        DokuMerchantCredential::query()->firstOrCreate(
+            ['merchant_code' => 'larissama', 'environment' => 'sandbox'],
+            ['merchant_name' => 'Larissama', 'is_active' => false]
+        );
 
-        $backupMerchants = DokuMerchantKeyBackup::query()
+        $search = trim((string) $request->query('search', ''));
+        $status = (string) $request->query('status', '');
+
+        $query = DokuMerchantCredential::query()
+            ->where('environment', 'sandbox');
+
+        if ($search !== '') {
+            $query->where(function ($q) use ($search) {
+                $q->where('merchant_code', 'like', "%{$search}%")
+                    ->orWhere('merchant_name', 'like', "%{$search}%");
+            });
+        }
+
+        if ($status === 'active') {
+            $query->where('is_active', true);
+        } elseif ($status === 'inactive') {
+            $query->where('is_active', false);
+        } elseif ($status === 'configured') {
+            $query->whereNotNull('client_id')->whereNotNull('encrypted_private_key');
+        } elseif ($status === 'unconfigured') {
+            $query->where(function ($q) {
+                $q->whereNull('client_id')->orWhereNull('encrypted_private_key');
+            });
+        }
+
+        $merchants = $query->orderBy('id')->get();
+
+        $mappings = ApplicationPaymentGateway::query()
+            ->with('application:id,code,name')
+            ->where('provider', 'doku')
             ->where('environment', 'sandbox')
-            ->distinct()
+            ->get()
+            ->groupBy('gateway_merchant_code');
+
+        $backupMerchantCodes = DokuMerchantKeyBackup::query()
+            ->where('environment', 'sandbox')
             ->pluck('merchant_code')
             ->all();
 
-        $configuredCodes = $existing->pluck('merchant_code')->all();
+        $data = $merchants->map(function (DokuMerchantCredential $cred) use ($mappings, $backupMerchantCodes) {
+            $isConfigured = ! empty($cred->client_id) && ! empty($cred->encrypted_private_key);
+            $merchantMappings = $mappings->get($cred->merchant_code, collect());
 
-        $merchants = [
-            [
-                'merchant_code' => 'udev-central',
-                'merchant_name' => 'UDEV Central Billing',
-                'environment' => 'sandbox',
-                'is_configured' => in_array('udev-central', $configuredCodes, true),
-                'is_active' => $existing->firstWhere('merchant_code', 'udev-central')?->is_active ?? true,
-            ],
-            [
-                'merchant_code' => 'larissama',
-                'merchant_name' => 'Larissama',
-                'environment' => 'sandbox',
-                'is_configured' => in_array('larissama', $configuredCodes, true),
-                'is_active' => $existing->firstWhere('merchant_code', 'larissama')?->is_active ?? false,
-            ],
-        ];
-
-        // Tambahkan merchant lain yang ada di database atau memiliki cadangan kunci
-        $allCodes = array_unique(array_merge($configuredCodes, $backupMerchants));
-        foreach ($allCodes as $code) {
-            if ($code !== 'udev-central' && $code !== 'larissama') {
-                $cred = $existing->firstWhere('merchant_code', $code);
-                $merchants[] = [
-                    'merchant_code' => $code,
-                    'merchant_name' => $cred?->merchant_name ?? $code,
-                    'environment' => 'sandbox',
-                    'is_configured' => $cred !== null,
-                    'is_active' => $cred?->is_active ?? false,
-                ];
-            }
-        }
+            return [
+                'id' => $cred->id,
+                'merchant_code' => $cred->merchant_code,
+                'merchant_name' => $cred->merchant_name,
+                'client_id' => $cred->client_id ? $cred->masked_client_id : '',
+                'masked_client_id' => $cred->masked_client_id,
+                'environment' => $cred->environment,
+                'is_configured' => $isConfigured,
+                'is_active' => (bool) $cred->is_active,
+                'public_key_fingerprint' => $cred->public_key_fingerprint,
+                'last_token_test_status' => $cred->last_token_test_status,
+                'last_token_tested_at' => $cred->last_token_tested_at?->format('Y-m-d H:i:s'),
+                'has_recovery_backup' => in_array($cred->merchant_code, $backupMerchantCodes, true),
+                'mapped_applications_count' => $merchantMappings->count(),
+                'mapped_applications' => $merchantMappings->map(fn ($m) => [
+                    'id' => $m->id,
+                    'application_id' => $m->application_id,
+                    'application_name' => $m->application?->name,
+                    'application_code' => $m->application?->code,
+                    'is_active' => (bool) $m->is_active,
+                ])->values()->all(),
+            ];
+        });
 
         return response()->json([
             'status' => 'success',
-            'data' => $merchants,
+            'data' => $data,
+        ]);
+    }
+
+    public function storeMerchant(Request $request): JsonResponse
+    {
+        $validated = $request->validate([
+            'merchant_code' => ['required', 'string', 'min:3', 'max:60', 'regex:/^[a-z0-9_-]+$/', 'unique:doku_merchant_credentials,merchant_code'],
+            'merchant_name' => ['required', 'string', 'min:2', 'max:100'],
+            'client_id' => ['nullable', 'string', 'max:100'],
+            'is_active' => ['nullable', 'boolean'],
+        ]);
+
+        $merchant = DokuMerchantCredential::query()->create([
+            'merchant_code' => $validated['merchant_code'],
+            'merchant_name' => $validated['merchant_name'],
+            'client_id' => $validated['client_id'] ?? null,
+            'environment' => 'sandbox',
+            'is_active' => $validated['is_active'] ?? true,
+        ]);
+
+        $this->auditService->record(
+            merchantCode: $merchant->merchant_code,
+            action: 'merchant.created',
+            status: 'success',
+            responseCode: '201',
+            metadata: [
+                'merchant_name' => $merchant->merchant_name,
+                'is_active' => (bool) $merchant->is_active,
+            ],
+            request: $request
+        );
+
+        return response()->json([
+            'status' => 'success',
+            'message' => "Merchant DOKU {$merchant->merchant_name} ({$merchant->merchant_code}) berhasil ditambahkan.",
+            'data' => [
+                'id' => $merchant->id,
+                'merchant_code' => $merchant->merchant_code,
+                'merchant_name' => $merchant->merchant_name,
+                'masked_client_id' => $merchant->masked_client_id,
+                'environment' => 'sandbox',
+                'is_configured' => false,
+                'is_active' => (bool) $merchant->is_active,
+                'mapped_applications_count' => 0,
+                'mapped_applications' => [],
+            ],
+        ], 201);
+    }
+
+    public function showMerchant(string $merchantCode): JsonResponse
+    {
+        $merchant = DokuMerchantCredential::query()
+            ->where('merchant_code', $merchantCode)
+            ->where('environment', 'sandbox')
+            ->firstOrFail();
+
+        $isConfigured = ! empty($merchant->client_id) && ! empty($merchant->encrypted_private_key);
+
+        $mappings = ApplicationPaymentGateway::query()
+            ->with('application:id,code,name')
+            ->where('provider', 'doku')
+            ->where('environment', 'sandbox')
+            ->where('gateway_merchant_code', $merchantCode)
+            ->get();
+
+        return response()->json([
+            'status' => 'success',
+            'data' => [
+                'id' => $merchant->id,
+                'merchant_code' => $merchant->merchant_code,
+                'merchant_name' => $merchant->merchant_name,
+                'masked_client_id' => $merchant->masked_client_id,
+                'environment' => 'sandbox',
+                'is_configured' => $isConfigured,
+                'is_active' => (bool) $merchant->is_active,
+                'public_key_fingerprint' => $merchant->public_key_fingerprint,
+                'last_token_test_status' => $merchant->last_token_test_status,
+                'last_token_tested_at' => $merchant->last_token_tested_at?->format('Y-m-d H:i:s'),
+                'mapped_applications_count' => $mappings->count(),
+                'mapped_applications' => $mappings->map(fn ($m) => [
+                    'id' => $m->id,
+                    'application_id' => $m->application_id,
+                    'application_name' => $m->application?->name,
+                    'application_code' => $m->application?->code,
+                    'is_active' => (bool) $m->is_active,
+                ])->values()->all(),
+            ],
+        ]);
+    }
+
+    public function updateMerchant(string $merchantCode, Request $request): JsonResponse
+    {
+        $merchant = DokuMerchantCredential::query()
+            ->where('merchant_code', $merchantCode)
+            ->where('environment', 'sandbox')
+            ->firstOrFail();
+
+        $validated = $request->validate([
+            'merchant_name' => ['required', 'string', 'min:2', 'max:100'],
+            'client_id' => ['nullable', 'string', 'max:100'],
+            'is_active' => ['nullable', 'boolean'],
+        ]);
+
+        $updateData = [
+            'merchant_name' => $validated['merchant_name'],
+        ];
+
+        if (array_key_exists('client_id', $validated)) {
+            $updateData['client_id'] = $validated['client_id'];
+        }
+
+        if (array_key_exists('is_active', $validated)) {
+            $updateData['is_active'] = (bool) $validated['is_active'];
+        }
+
+        $merchant->update($updateData);
+
+        $this->auditService->record(
+            merchantCode: $merchant->merchant_code,
+            action: 'merchant.updated',
+            status: 'success',
+            responseCode: '200',
+            metadata: [
+                'merchant_name' => $merchant->merchant_name,
+                'is_active' => (bool) $merchant->is_active,
+            ],
+            request: $request
+        );
+
+        return response()->json([
+            'status' => 'success',
+            'message' => "Data merchant DOKU {$merchant->merchant_name} berhasil diperbarui.",
+            'data' => [
+                'id' => $merchant->id,
+                'merchant_code' => $merchant->merchant_code,
+                'merchant_name' => $merchant->merchant_name,
+                'masked_client_id' => $merchant->masked_client_id,
+                'environment' => 'sandbox',
+                'is_configured' => ! empty($merchant->client_id) && ! empty($merchant->encrypted_private_key),
+                'is_active' => (bool) $merchant->is_active,
+            ],
+        ]);
+    }
+
+    public function toggleMerchantStatus(string $merchantCode, Request $request): JsonResponse
+    {
+        $merchant = DokuMerchantCredential::query()
+            ->where('merchant_code', $merchantCode)
+            ->where('environment', 'sandbox')
+            ->firstOrFail();
+
+        $validated = $request->validate([
+            'is_active' => ['required', 'boolean'],
+        ]);
+
+        $merchant->update(['is_active' => $validated['is_active']]);
+
+        $statusLabel = $merchant->is_active ? 'diaktifkan' : 'dinonaktifkan';
+
+        $this->auditService->record(
+            merchantCode: $merchant->merchant_code,
+            action: 'merchant.status_toggled',
+            status: 'success',
+            responseCode: '200',
+            metadata: [
+                'is_active' => (bool) $merchant->is_active,
+            ],
+            request: $request
+        );
+
+        return response()->json([
+            'status' => 'success',
+            'message' => "Merchant DOKU {$merchant->merchant_name} berhasil {$statusLabel}.",
+            'data' => [
+                'merchant_code' => $merchant->merchant_code,
+                'is_active' => (bool) $merchant->is_active,
+            ],
+        ]);
+    }
+
+    public function destroyMerchant(string $merchantCode, Request $request): JsonResponse
+    {
+        if ($merchantCode === 'udev-central') {
+            return response()->json([
+                'status' => 'failed',
+                'message' => 'Merchant default udev-central tidak dapat dihapus.',
+            ], 422);
+        }
+
+        $merchant = DokuMerchantCredential::query()
+            ->where('merchant_code', $merchantCode)
+            ->where('environment', 'sandbox')
+            ->firstOrFail();
+
+        $isMapped = ApplicationPaymentGateway::query()
+            ->where('provider', 'doku')
+            ->where('gateway_merchant_code', $merchantCode)
+            ->exists();
+
+        if ($isMapped) {
+            return response()->json([
+                'status' => 'failed',
+                'message' => "Merchant {$merchant->merchant_name} ({$merchantCode}) tidak dapat dihapus karena masih terhubung dengan mapping aplikasi. Hapus mapping aplikasi terlebih dahulu.",
+            ], 422);
+        }
+
+        $merchantName = $merchant->merchant_name;
+
+        \Illuminate\Support\Facades\Cache::forget("doku_snap_b2b_token:{$merchantCode}:sandbox");
+
+        DokuMerchantKeyBackup::query()
+            ->where('merchant_code', $merchantCode)
+            ->where('environment', 'sandbox')
+            ->delete();
+
+        $merchant->delete();
+
+        $this->auditService->record(
+            merchantCode: $merchantCode,
+            action: 'merchant.deleted',
+            status: 'success',
+            responseCode: '200',
+            metadata: [
+                'merchant_name' => $merchantName,
+            ],
+            request: $request
+        );
+
+        return response()->json([
+            'status' => 'success',
+            'message' => "Merchant DOKU {$merchantName} ({$merchantCode}) berhasil dihapus.",
         ]);
     }
 
@@ -115,6 +380,8 @@ class DokuGatewayAdminController extends Controller
             ]);
         }
 
+        $isConfigured = ! empty($cred->client_id) && ! empty($cred->encrypted_private_key);
+
         return response()->json([
             'status' => 'success',
             'data' => [
@@ -123,7 +390,7 @@ class DokuGatewayAdminController extends Controller
                 'client_id' => '', // Jangan kirim plaintext clientId lengkap jika ingin masking murni
                 'masked_client_id' => $cred->masked_client_id,
                 'environment' => 'sandbox',
-                'is_configured' => true,
+                'is_configured' => $isConfigured,
                 'is_active' => $cred->is_active,
                 'has_private_key' => ! empty($cred->encrypted_private_key),
                 'public_key' => $cred->public_key,
@@ -214,7 +481,9 @@ class DokuGatewayAdminController extends Controller
             ->where('environment', 'sandbox')
             ->exists();
 
-        if ($cred === null) {
+        $isConfigured = $cred !== null && (! empty($cred->client_id) || ! empty($cred->encrypted_private_key));
+
+        if (! $isConfigured) {
             return response()->json([
                 'status' => 'failed',
                 'message' => "Konfigurasi merchant {$merchantCode} tidak ditemukan atau sudah dalam status Belum Dikonfigurasi.",
@@ -231,7 +500,15 @@ class DokuGatewayAdminController extends Controller
         $maskedClientId = $cred->masked_client_id;
         $deletedFingerprint = $cred->public_key_fingerprint;
 
-        $cred->delete();
+        // Reset kredensial aktif tanpa menghapus merchant dari database
+        $cred->update([
+            'client_id' => null,
+            'encrypted_private_key' => null,
+            'key_nonce' => null,
+            'key_tag' => null,
+            'public_key' => null,
+            'public_key_fingerprint' => null,
+        ]);
 
         \Illuminate\Support\Facades\Cache::forget("doku_snap_b2b_token:{$merchantCode}:sandbox");
 

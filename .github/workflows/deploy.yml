@@ -211,6 +211,8 @@ jobs:
                 --no-interaction | grep -F 'billing-transactions'
               "$PHP_BIN" artisan route:list --path=doku-gateway \
                 --no-interaction | grep -F 'doku-gateway/merchants'
+              "$PHP_BIN" artisan route:list --path=doku-gateway \
+                --no-interaction | grep -F 'doku-gateway/configuration'
             )
           }
 

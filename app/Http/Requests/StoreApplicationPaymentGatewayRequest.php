@@ -17,7 +17,7 @@ class StoreApplicationPaymentGatewayRequest extends ApiFormRequest
      */
     public function rules(): array
     {
-        return [
+        $rules = [
             'application_id' => [
                 'required',
                 'integer',
@@ -26,10 +26,16 @@ class StoreApplicationPaymentGatewayRequest extends ApiFormRequest
                     ->where('provider', $this->input('provider'))
                     ->where('environment', $this->input('environment')),
             ],
-            'provider' => ['required', 'in:dana'],
+            'provider' => ['required', 'in:dana,doku'],
             'environment' => ['required', 'in:sandbox,production'],
             'gateway_merchant_code' => ['required', 'string', 'max:60'],
             'is_active' => ['required', 'boolean'],
         ];
+
+        if ($this->input('provider') === 'doku') {
+            $rules['environment'] = ['required', 'in:sandbox'];
+        }
+
+        return $rules;
     }
 }

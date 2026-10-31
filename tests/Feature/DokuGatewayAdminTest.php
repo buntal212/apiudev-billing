@@ -609,11 +609,11 @@ PEM;
                 ],
             ]);
 
-        // 6. Verifikasi kredensial aktif telah terhapus
-        $this->assertDatabaseMissing('doku_merchant_credentials', [
-            'merchant_code' => 'udev-central',
-            'environment' => 'sandbox',
-        ]);
+        // 6. Verifikasi kredensial aktif telah di-reset (null) tanpa menghapus baris merchant
+        $credAfterDelete = DokuMerchantCredential::where('merchant_code', 'udev-central')->first();
+        $this->assertNotNull($credAfterDelete);
+        $this->assertNull($credAfterDelete->client_id);
+        $this->assertNull($credAfterDelete->encrypted_private_key);
 
         // 7. Verifikasi cache token dibersihkan
         $this->assertFalse(Cache::has('doku_snap_b2b_token:udev-central:sandbox'));
@@ -683,9 +683,10 @@ PEM;
             'merchant_code' => 'udev-central',
         ])->assertStatus(200);
 
-        $this->assertDatabaseMissing('doku_merchant_credentials', [
-            'merchant_code' => 'udev-central',
-        ]);
+        $credAfterDel = DokuMerchantCredential::where('merchant_code', 'udev-central')->first();
+        $this->assertNotNull($credAfterDel);
+        $this->assertNull($credAfterDel->client_id);
+        $this->assertNull($credAfterDel->encrypted_private_key);
 
         // 3. Pulihkan kunci dari backup
         $recoverResponse = $this->postJson('/api/v1/admin/doku-gateway/recover-key', [
@@ -760,6 +761,10 @@ PEM;
                     ['merchant_code' => 'udev-central'],
                 ],
             ], 200),
+            'https://apiudev.udumbara.my.id/api/v1/admin/doku-gateway/configuration*' => Http::response([
+                'status' => 'failed',
+                'message' => 'Konfigurasi tidak ditemukan.',
+            ], 404),
         ]);
 
         $exitCode = \Illuminate\Support\Facades\Artisan::call('doku:verify-endpoint', [
@@ -807,5 +812,243 @@ PEM;
         ]);
 
         $this->assertSame(1, $exitCode);
+    }
+
+    public function test_admin_can_create_doku_merchant(): void
+    {
+        Sanctum::actingAs($this->admin, ['admin:access']);
+
+        $response = $this->postJson('/api/v1/admin/doku-gateway/merchants', [
+            'merchant_code' => 'toko-baru',
+            'merchant_name' => 'Toko Baru Indonesia',
+            'client_id' => 'MALL-TOKO-BARU-01',
+            'is_active' => true,
+        ]);
+
+        $response->assertStatus(201)
+            ->assertJson([
+                'status' => 'success',
+                'data' => [
+                    'merchant_code' => 'toko-baru',
+                    'merchant_name' => 'Toko Baru Indonesia',
+                    'environment' => 'sandbox',
+                    'is_configured' => false,
+                    'is_active' => true,
+                ],
+            ]);
+
+        $this->assertDatabaseHas('doku_merchant_credentials', [
+            'merchant_code' => 'toko-baru',
+            'environment' => 'sandbox',
+        ]);
+
+        $this->assertDatabaseHas('doku_gateway_audits', [
+            'merchant_code' => 'toko-baru',
+            'action' => 'merchant.created',
+            'status' => 'success',
+        ]);
+    }
+
+    public function test_admin_can_update_doku_merchant(): void
+    {
+        Sanctum::actingAs($this->admin, ['admin:access']);
+
+        DokuMerchantCredential::create([
+            'merchant_code' => 'toko-edit',
+            'merchant_name' => 'Toko Lama',
+            'environment' => 'sandbox',
+            'is_active' => true,
+        ]);
+
+        $response = $this->putJson('/api/v1/admin/doku-gateway/merchants/toko-edit', [
+            'merchant_name' => 'Toko Edit Berhasil',
+            'is_active' => false,
+        ]);
+
+        $response->assertStatus(200)
+            ->assertJson([
+                'status' => 'success',
+                'data' => [
+                    'merchant_code' => 'toko-edit',
+                    'merchant_name' => 'Toko Edit Berhasil',
+                    'is_active' => false,
+                ],
+            ]);
+
+        $this->assertDatabaseHas('doku_merchant_credentials', [
+            'merchant_code' => 'toko-edit',
+            'merchant_name' => 'Toko Edit Berhasil',
+            'is_active' => false,
+        ]);
+    }
+
+    public function test_admin_can_toggle_doku_merchant_status(): void
+    {
+        Sanctum::actingAs($this->admin, ['admin:access']);
+
+        DokuMerchantCredential::create([
+            'merchant_code' => 'toko-toggle',
+            'merchant_name' => 'Toko Toggle',
+            'environment' => 'sandbox',
+            'is_active' => true,
+        ]);
+
+        $response = $this->patchJson('/api/v1/admin/doku-gateway/merchants/toko-toggle/status', [
+            'is_active' => false,
+        ]);
+
+        $response->assertStatus(200)
+            ->assertJson([
+                'status' => 'success',
+                'data' => [
+                    'merchant_code' => 'toko-toggle',
+                    'is_active' => false,
+                ],
+            ]);
+
+        $this->assertDatabaseHas('doku_merchant_credentials', [
+            'merchant_code' => 'toko-toggle',
+            'is_active' => false,
+        ]);
+    }
+
+    public function test_admin_cannot_delete_default_udev_central_merchant(): void
+    {
+        Sanctum::actingAs($this->admin, ['admin:access']);
+
+        $response = $this->deleteJson('/api/v1/admin/doku-gateway/merchants/udev-central');
+
+        $response->assertStatus(422)
+            ->assertJson([
+                'status' => 'failed',
+                'message' => 'Merchant default udev-central tidak dapat dihapus.',
+            ]);
+    }
+
+    public function test_admin_cannot_delete_merchant_with_active_application_mapping(): void
+    {
+        Sanctum::actingAs($this->admin, ['admin:access']);
+
+        $app = \App\Models\Application::factory()->create();
+
+        DokuMerchantCredential::create([
+            'merchant_code' => 'toko-mapped',
+            'merchant_name' => 'Toko Mapped',
+            'environment' => 'sandbox',
+            'is_active' => true,
+        ]);
+
+        \App\Models\ApplicationPaymentGateway::create([
+            'application_id' => $app->id,
+            'provider' => 'doku',
+            'environment' => 'sandbox',
+            'gateway_merchant_code' => 'toko-mapped',
+            'is_active' => true,
+        ]);
+
+        $response = $this->deleteJson('/api/v1/admin/doku-gateway/merchants/toko-mapped');
+
+        $response->assertStatus(422)
+            ->assertJson([
+                'status' => 'failed',
+            ]);
+
+        $this->assertDatabaseHas('doku_merchant_credentials', [
+            'merchant_code' => 'toko-mapped',
+        ]);
+    }
+
+    public function test_admin_can_delete_unmapped_doku_merchant(): void
+    {
+        Sanctum::actingAs($this->admin, ['admin:access']);
+
+        DokuMerchantCredential::create([
+            'merchant_code' => 'toko-hapus',
+            'merchant_name' => 'Toko Hapus',
+            'environment' => 'sandbox',
+            'is_active' => true,
+        ]);
+
+        $response = $this->deleteJson('/api/v1/admin/doku-gateway/merchants/toko-hapus');
+
+        $response->assertStatus(200)
+            ->assertJson([
+                'status' => 'success',
+            ]);
+
+        $this->assertDatabaseMissing('doku_merchant_credentials', [
+            'merchant_code' => 'toko-hapus',
+        ]);
+    }
+
+    public function test_delete_configuration_resets_credentials_without_deleting_merchant(): void
+    {
+        Sanctum::actingAs($this->admin, ['admin:access']);
+
+        // Konfigurasi awal merchant
+        $this->putJson('/api/v1/admin/doku-gateway/configuration', [
+            'merchant_code' => 'udev-central',
+            'merchant_name' => 'UDEV Central Billing',
+            'client_id' => 'MALL-RESET-TEST',
+            'private_key' => self::TestPrivateKey,
+            'environment' => 'sandbox',
+            'is_active' => true,
+        ])->assertStatus(200);
+
+        // Hapus konfigurasi
+        $response = $this->deleteJson('/api/v1/admin/doku-gateway/configuration?merchant_code=udev-central');
+
+        $response->assertStatus(200)
+            ->assertJson([
+                'status' => 'success',
+                'data' => [
+                    'merchant_code' => 'udev-central',
+                    'merchant_name' => 'UDEV Central Billing',
+                    'is_configured' => false,
+                    'has_private_key' => false,
+                ],
+            ]);
+
+        // Verifikasi merchant row tetap ada di database
+        $merchant = DokuMerchantCredential::where('merchant_code', 'udev-central')->first();
+        $this->assertNotNull($merchant);
+        $this->assertNull($merchant->client_id);
+        $this->assertNull($merchant->encrypted_private_key);
+        $this->assertSame('UDEV Central Billing', $merchant->merchant_name);
+    }
+
+    public function test_application_payment_gateway_doku_mapping_and_destroy(): void
+    {
+        Sanctum::actingAs($this->admin, ['admin:access']);
+
+        $app = \App\Models\Application::factory()->create();
+
+        // Buat mapping DOKU
+        $createRes = $this->postJson('/api/v1/admin/payment-gateways', [
+            'application_id' => $app->id,
+            'provider' => 'doku',
+            'environment' => 'sandbox',
+            'gateway_merchant_code' => 'udev-central',
+            'is_active' => true,
+        ]);
+
+        $createRes->assertStatus(201)
+            ->assertJsonPath('data.provider', 'doku')
+            ->assertJsonPath('data.environment', 'sandbox')
+            ->assertJsonPath('data.gateway_merchant_code', 'udev-central');
+
+        $mappingId = $createRes->json('data.id');
+
+        // Hapus mapping DOKU
+        $deleteRes = $this->deleteJson("/api/v1/admin/payment-gateways/{$mappingId}");
+
+        $deleteRes->assertStatus(200)
+            ->assertJson([
+                'status' => 'success',
+            ]);
+
+        $this->assertDatabaseMissing('application_payment_gateways', [
+            'id' => $mappingId,
+        ]);
     }
 }
