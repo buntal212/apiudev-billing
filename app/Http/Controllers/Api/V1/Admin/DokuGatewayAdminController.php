@@ -29,6 +29,12 @@ class DokuGatewayAdminController extends Controller
             ->where('environment', 'sandbox')
             ->get();
 
+        $backupMerchants = DokuMerchantKeyBackup::query()
+            ->where('environment', 'sandbox')
+            ->distinct()
+            ->pluck('merchant_code')
+            ->all();
+
         $configuredCodes = $existing->pluck('merchant_code')->all();
 
         $merchants = [
@@ -48,15 +54,17 @@ class DokuGatewayAdminController extends Controller
             ],
         ];
 
-        // Tambahkan merchant lain yang ada di database
-        foreach ($existing as $cred) {
-            if ($cred->merchant_code !== 'udev-central' && $cred->merchant_code !== 'larissama') {
+        // Tambahkan merchant lain yang ada di database atau memiliki cadangan kunci
+        $allCodes = array_unique(array_merge($configuredCodes, $backupMerchants));
+        foreach ($allCodes as $code) {
+            if ($code !== 'udev-central' && $code !== 'larissama') {
+                $cred = $existing->firstWhere('merchant_code', $code);
                 $merchants[] = [
-                    'merchant_code' => $cred->merchant_code,
-                    'merchant_name' => $cred->merchant_name,
+                    'merchant_code' => $code,
+                    'merchant_name' => $cred?->merchant_name ?? $code,
                     'environment' => 'sandbox',
-                    'is_configured' => true,
-                    'is_active' => $cred->is_active,
+                    'is_configured' => $cred !== null,
+                    'is_active' => $cred?->is_active ?? false,
                 ];
             }
         }
@@ -188,6 +196,69 @@ class DokuGatewayAdminController extends Controller
                 'has_private_key' => true,
                 'public_key' => $cred->public_key,
                 'public_key_fingerprint' => $cred->public_key_fingerprint,
+            ],
+        ]);
+    }
+
+    public function deleteConfiguration(Request $request): JsonResponse
+    {
+        $merchantCode = (string) ($request->input('merchant_code') ?: $request->query('merchant_code', 'udev-central'));
+
+        $cred = DokuMerchantCredential::query()
+            ->where('merchant_code', $merchantCode)
+            ->where('environment', 'sandbox')
+            ->first();
+
+        $hasRecoveryBackup = DokuMerchantKeyBackup::query()
+            ->where('merchant_code', $merchantCode)
+            ->where('environment', 'sandbox')
+            ->exists();
+
+        if ($cred === null) {
+            return response()->json([
+                'status' => 'failed',
+                'message' => "Konfigurasi merchant {$merchantCode} tidak ditemukan atau sudah dalam status Belum Dikonfigurasi.",
+                'data' => [
+                    'merchant_code' => $merchantCode,
+                    'is_configured' => false,
+                    'has_private_key' => false,
+                    'has_recovery_backup' => $hasRecoveryBackup,
+                ],
+            ], 404);
+        }
+
+        $merchantName = $cred->merchant_name;
+        $maskedClientId = $cred->masked_client_id;
+        $deletedFingerprint = $cred->public_key_fingerprint;
+
+        $cred->delete();
+
+        \Illuminate\Support\Facades\Cache::forget("doku_snap_b2b_token:{$merchantCode}:sandbox");
+
+        $this->auditService->record(
+            merchantCode: $merchantCode,
+            action: 'configuration.deleted',
+            status: 'success',
+            responseCode: '200',
+            metadata: [
+                'merchant_name' => $merchantName,
+                'client_id_masked' => $maskedClientId,
+                'deleted_fingerprint' => $deletedFingerprint,
+                'has_recovery_backup' => $hasRecoveryBackup,
+            ],
+            request: $request
+        );
+
+        return response()->json([
+            'status' => 'success',
+            'message' => "Konfigurasi kredensial aktif DOKU Sandbox untuk merchant {$merchantCode} berhasil dihapus.",
+            'data' => [
+                'merchant_code' => $merchantCode,
+                'merchant_name' => $merchantName,
+                'environment' => 'sandbox',
+                'is_configured' => false,
+                'has_private_key' => false,
+                'has_recovery_backup' => $hasRecoveryBackup,
             ],
         ]);
     }
@@ -330,25 +401,35 @@ class DokuGatewayAdminController extends Controller
         $cred = DokuMerchantCredential::query()
             ->where('merchant_code', $merchantCode)
             ->where('environment', 'sandbox')
-            ->firstOrFail();
+            ->first();
 
-        // Cadangkan kunci saat ini sebagai arsip pra-pemulihan agar riwayat tidak hilang
-        DokuMerchantKeyBackup::create([
-            'merchant_code' => $cred->merchant_code,
-            'environment' => 'sandbox',
-            'encrypted_private_key' => $cred->encrypted_private_key,
-            'key_nonce' => $cred->key_nonce,
-            'key_tag' => $cred->key_tag,
-            'key_version' => $cred->key_version,
-            'public_key' => (string) $cred->public_key,
-            'public_key_fingerprint' => (string) $cred->public_key_fingerprint,
-            'rotated_at' => now(),
-            'admin_user_id' => $request->user()?->id,
-            'reason' => 'pre_recovery_archive',
-        ]);
+        if ($cred === null) {
+            $cred = new DokuMerchantCredential([
+                'merchant_code' => $merchantCode,
+                'merchant_name' => $merchantCode === 'udev-central' ? 'UDEV Central Billing' : $merchantCode,
+                'client_id' => '',
+                'environment' => 'sandbox',
+                'is_active' => true,
+            ]);
+        } elseif (! empty($cred->encrypted_private_key)) {
+            // Cadangkan kunci saat ini sebagai arsip pra-pemulihan agar riwayat tidak hilang
+            DokuMerchantKeyBackup::create([
+                'merchant_code' => $cred->merchant_code,
+                'environment' => 'sandbox',
+                'encrypted_private_key' => $cred->encrypted_private_key,
+                'key_nonce' => $cred->key_nonce,
+                'key_tag' => $cred->key_tag,
+                'key_version' => $cred->key_version,
+                'public_key' => (string) $cred->public_key,
+                'public_key_fingerprint' => (string) $cred->public_key_fingerprint,
+                'rotated_at' => now(),
+                'admin_user_id' => $request->user()?->id,
+                'reason' => 'pre_recovery_archive',
+            ]);
+        }
 
         // Pulihkan kunci dari backup
-        $cred->update([
+        $cred->fill([
             'encrypted_private_key' => $backup->encrypted_private_key,
             'key_nonce' => $backup->key_nonce,
             'key_tag' => $backup->key_tag,
@@ -356,6 +437,7 @@ class DokuGatewayAdminController extends Controller
             'public_key' => $backup->public_key,
             'public_key_fingerprint' => $backup->public_key_fingerprint,
         ]);
+        $cred->save();
 
         // Hapus cadangan yang baru saja dipulihkan agar tumpukan rollback rapi
         $backup->delete();

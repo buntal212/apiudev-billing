@@ -68,6 +68,7 @@ PEM;
         $this->getJson('/api/v1/admin/doku-gateway/merchants')->assertStatus(401);
         $this->getJson('/api/v1/admin/doku-gateway/configuration')->assertStatus(401);
         $this->putJson('/api/v1/admin/doku-gateway/configuration', [])->assertStatus(401);
+        $this->deleteJson('/api/v1/admin/doku-gateway/configuration', [])->assertStatus(401);
         $this->postJson('/api/v1/admin/doku-gateway/test-token', [])->assertStatus(401);
         $this->getJson('/api/v1/admin/doku-gateway/audits')->assertStatus(401);
     }
@@ -78,6 +79,7 @@ PEM;
 
         $this->getJson('/api/v1/admin/doku-gateway/merchants')->assertStatus(403);
         $this->getJson('/api/v1/admin/doku-gateway/configuration')->assertStatus(403);
+        $this->deleteJson('/api/v1/admin/doku-gateway/configuration', [])->assertStatus(403);
     }
 
     public function test_admin_can_get_doku_gateway_merchants_successfully(): void
@@ -553,6 +555,177 @@ PEM;
         $cred = DokuMerchantCredential::where('merchant_code', 'udev-central')->firstOrFail();
         $this->assertEquals('failed', $cred->last_token_test_status);
         $this->assertEquals('4017300', $cred->last_token_test_response_code);
+    }
+
+    public function test_admin_can_delete_configuration_and_maintains_recovery_backup_and_audits(): void
+    {
+        Sanctum::actingAs($this->admin, ['admin:access']);
+
+        // 1. Setup konfigurasi aktif
+        $this->putJson('/api/v1/admin/doku-gateway/configuration', [
+            'merchant_code' => 'udev-central',
+            'merchant_name' => 'UDEV Central Billing',
+            'client_id' => 'DEV-UDEV-DELETE-TEST',
+            'private_key' => self::TestPrivateKey,
+            'environment' => 'sandbox',
+            'is_active' => true,
+        ])->assertStatus(200);
+
+        // 2. Setup token cache
+        Cache::put('doku_snap_b2b_token:udev-central:sandbox', 'cached-token-12345', 300);
+        $this->assertTrue(Cache::has('doku_snap_b2b_token:udev-central:sandbox'));
+
+        // 3. Setup backup RSA
+        $backup = DokuMerchantKeyBackup::create([
+            'merchant_code' => 'udev-central',
+            'environment' => 'sandbox',
+            'encrypted_private_key' => 'dummy-encrypted-data',
+            'key_nonce' => 'nonce123',
+            'key_tag' => 'tag123',
+            'key_version' => 'v1',
+            'public_key' => '-----BEGIN PUBLIC KEY-----...',
+            'public_key_fingerprint' => 'backup-fingerprint-abc',
+            'rotated_at' => now(),
+            'admin_user_id' => $this->admin->id,
+            'reason' => 'test_backup',
+        ]);
+
+        // 4. Pastikan ada invoice untuk memverifikasi invoice tidak ikut terhapus
+        $invoice = \App\Models\Invoice::factory()->create();
+
+        // 5. Eksekusi Hapus Konfigurasi
+        $response = $this->deleteJson('/api/v1/admin/doku-gateway/configuration', [
+            'merchant_code' => 'udev-central',
+        ]);
+
+        $response->assertStatus(200)
+            ->assertJson([
+                'status' => 'success',
+                'data' => [
+                    'merchant_code' => 'udev-central',
+                    'is_configured' => false,
+                    'has_private_key' => false,
+                    'has_recovery_backup' => true,
+                ],
+            ]);
+
+        // 6. Verifikasi kredensial aktif telah terhapus
+        $this->assertDatabaseMissing('doku_merchant_credentials', [
+            'merchant_code' => 'udev-central',
+            'environment' => 'sandbox',
+        ]);
+
+        // 7. Verifikasi cache token dibersihkan
+        $this->assertFalse(Cache::has('doku_snap_b2b_token:udev-central:sandbox'));
+
+        // 8. Verifikasi backup RSA TIDAK terhapus
+        $this->assertDatabaseHas('doku_merchant_key_backups', [
+            'id' => $backup->id,
+            'merchant_code' => 'udev-central',
+        ]);
+
+        // 9. Verifikasi invoice TIDAK terhapus
+        $this->assertDatabaseHas('invoices', [
+            'id' => $invoice->id,
+        ]);
+
+        // 10. Verifikasi audit log tercatat tanpa secret
+        $audit = DokuGatewayAudit::where('merchant_code', 'udev-central')
+            ->where('action', 'configuration.deleted')
+            ->latest()
+            ->first();
+
+        $this->assertNotNull($audit);
+        $this->assertSame('success', $audit->status);
+        $this->assertSame('200', $audit->response_code);
+        $this->assertArrayNotHasKey('private_key', $audit->metadata);
+        $this->assertArrayNotHasKey('client_id', $audit->metadata);
+        $this->assertArrayHasKey('client_id_masked', $audit->metadata);
+
+        // 11. Verifikasi showConfiguration mengembalikan is_configured: false dan has_recovery_backup: true
+        $showResponse = $this->getJson('/api/v1/admin/doku-gateway/configuration?merchant_code=udev-central');
+        $showResponse->assertStatus(200)
+            ->assertJson([
+                'status' => 'success',
+                'data' => [
+                    'merchant_code' => 'udev-central',
+                    'is_configured' => false,
+                    'has_private_key' => false,
+                    'has_recovery_backup' => true,
+                ],
+            ]);
+    }
+
+    public function test_admin_can_recover_key_after_configuration_is_deleted(): void
+    {
+        Sanctum::actingAs($this->admin, ['admin:access']);
+
+        // 1. Simpan konfigurasi awal dan buat backup
+        $this->putJson('/api/v1/admin/doku-gateway/configuration', [
+            'merchant_code' => 'udev-central',
+            'merchant_name' => 'UDEV Central Billing',
+            'client_id' => 'DEV-RECOVER-AFTER-DEL',
+            'private_key' => self::TestPrivateKey,
+            'environment' => 'sandbox',
+            'is_active' => true,
+        ])->assertStatus(200);
+
+        // Rotasi untuk membuat backup
+        $this->postJson('/api/v1/admin/doku-gateway/generate-key', [
+            'merchant_code' => 'udev-central',
+            'confirm_rotation' => true,
+        ])->assertStatus(200);
+
+        $this->assertTrue(DokuMerchantKeyBackup::where('merchant_code', 'udev-central')->exists());
+
+        // 2. Hapus konfigurasi aktif
+        $this->deleteJson('/api/v1/admin/doku-gateway/configuration', [
+            'merchant_code' => 'udev-central',
+        ])->assertStatus(200);
+
+        $this->assertDatabaseMissing('doku_merchant_credentials', [
+            'merchant_code' => 'udev-central',
+        ]);
+
+        // 3. Pulihkan kunci dari backup
+        $recoverResponse = $this->postJson('/api/v1/admin/doku-gateway/recover-key', [
+            'merchant_code' => 'udev-central',
+        ]);
+
+        $recoverResponse->assertStatus(200)
+            ->assertJson([
+                'status' => 'success',
+                'data' => [
+                    'merchant_code' => 'udev-central',
+                    'is_configured' => true,
+                    'has_private_key' => true,
+                ],
+            ]);
+
+        // 4. Kredensial aktif sekarang sudah pulih di database
+        $this->assertDatabaseHas('doku_merchant_credentials', [
+            'merchant_code' => 'udev-central',
+            'environment' => 'sandbox',
+        ]);
+    }
+
+    public function test_delete_configuration_returns_404_when_merchant_not_configured(): void
+    {
+        Sanctum::actingAs($this->admin, ['admin:access']);
+
+        $response = $this->deleteJson('/api/v1/admin/doku-gateway/configuration', [
+            'merchant_code' => 'non-existent-merchant',
+        ]);
+
+        $response->assertStatus(404)
+            ->assertJson([
+                'status' => 'failed',
+                'data' => [
+                    'merchant_code' => 'non-existent-merchant',
+                    'is_configured' => false,
+                    'has_private_key' => false,
+                ],
+            ]);
     }
 
     public function test_repeated_migrations_are_non_destructive(): void
