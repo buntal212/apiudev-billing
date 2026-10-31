@@ -338,9 +338,10 @@ jobs:
           echo '=== DIAGNOSTICS HOMELAB RUNNER ==='
           id
           sudo -n -l 2>&1 || echo "sudo -n -l failed with code: $?"
+          sudo -n -u kentang -l 2>&1 || echo "sudo -n -u kentang -l failed with code: $?"
           ls -ld /www/wwwroot/doku.udumbara.my.id 2>&1 || true
-          ls -l /www/wwwroot/doku.udumbara.my.id/app/Http/Controllers/Api/V1/Internal/DokuInternalGatewayController.php 2>&1 || true
-          ls -la /usr/local/sbin 2>&1 || true
+          cat /usr/local/sbin/deploy-dana-payment 2>&1 || true
+          getfacl /www/wwwroot/apiudev.udumbara.my.id 2>&1 || true
           echo '=== END DIAGNOSTICS ==='
 
           echo '=== Sinkronisasi doku-payment ==='
