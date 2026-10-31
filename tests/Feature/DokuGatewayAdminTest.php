@@ -1256,7 +1256,7 @@ PEM;
             'merchant_code' => 'udev-central',
         ]);
 
-        $response->assertStatus(400)
+        $response->assertStatus(503)
             ->assertJson([
                 'status' => 'failed',
                 'data' => [
@@ -1292,7 +1292,7 @@ PEM;
             'merchant_code' => 'udev-central',
         ]);
 
-        $response->assertStatus(400)
+        $response->assertStatus(401)
             ->assertJson([
                 'status' => 'failed',
                 'data' => [
@@ -1328,7 +1328,7 @@ PEM;
             'merchant_code' => 'udev-central',
         ]);
 
-        $response->assertStatus(400)
+        $response->assertStatus(404)
             ->assertJson([
                 'status' => 'failed',
                 'data' => [
@@ -1364,7 +1364,7 @@ PEM;
             'merchant_code' => 'udev-central',
         ]);
 
-        $response->assertStatus(400)
+        $response->assertStatus(500)
             ->assertJson([
                 'status' => 'failed',
                 'data' => [
@@ -1410,14 +1410,14 @@ PEM;
                     'environment' => 'sandbox',
                     'target_endpoint' => 'https://api-sandbox.doku.com/authorization/v1/access-token/b2b',
                 ],
-            ], 400),
+            ], 503),
         ]);
 
         $response = $this->postJson('/api/v1/admin/doku-gateway/test-token', [
             'merchant_code' => 'udev-central',
         ]);
 
-        $response->assertStatus(400)
+        $response->assertStatus(503)
             ->assertJson([
                 'status' => 'failed',
                 'data' => [

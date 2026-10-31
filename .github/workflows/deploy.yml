@@ -336,21 +336,53 @@ jobs:
           fi
 
           echo '=== Sinkronisasi doku-payment ==='
+          RUNNER_USER="$(id -un 2>/dev/null || echo 'github-runner-apiudev')"
           for doku_dir in /www/wwwroot/*; do
             if [[ -f "$doku_dir/artisan" && -f "$doku_dir/app/Services/DokuSnapTokenClient.php" ]]; then
-              echo "Ditemukan doku-payment service di: $doku_dir"
+              echo "Ditemukan doku-payment service di: $doku_dir (Runner user: $RUNNER_USER)"
               (
                 cd "$doku_dir"
-                sudo -n chown -R kentang:www "$doku_dir" 2>/dev/null || true
+                sudo -n chown -R "$RUNNER_USER:www" "$doku_dir" 2>/dev/null || true
+                sudo -n chmod -R 775 "$doku_dir" 2>/dev/null || true
+                sudo -n chmod -R 777 "$doku_dir/storage" "$doku_dir/bootstrap/cache" 2>/dev/null || true
+
+                git_synced=0
                 if [[ -d .git ]]; then
                   git config --global --add safe.directory "$doku_dir" || true
-                  git fetch origin main || true
-                  git reset --hard origin/main || true
+                  if git fetch origin main 2>/dev/null && git reset --hard origin/main 2>/dev/null; then
+                    git_synced=1
+                  fi
                 fi
+
+                if [[ "$git_synced" -ne 1 ]]; then
+                  echo "Sync git in-place membutuhkan fallback clone..."
+                  rm -rf /tmp/doku-sync-temp
+                  if git clone --depth 1 https://github.com/buntal212/doku-payment.git /tmp/doku-sync-temp 2>/dev/null; then
+                    rsync -av --exclude='.env' --exclude='/storage' --exclude='/.git' /tmp/doku-sync-temp/ "$doku_dir/" 2>/dev/null || \
+                      sudo -n rsync -av --exclude='.env' --exclude='/storage' --exclude='/.git' /tmp/doku-sync-temp/ "$doku_dir/" 2>/dev/null || true
+                    sudo -n cp -rf /tmp/doku-sync-temp/app "$doku_dir/" 2>/dev/null || true
+                    sudo -n cp -rf /tmp/doku-sync-temp/routes "$doku_dir/" 2>/dev/null || true
+                    sudo -n cp -rf /tmp/doku-sync-temp/config "$doku_dir/" 2>/dev/null || true
+                    rm -rf /tmp/doku-sync-temp
+                  fi
+                fi
+
+                chmod -R 777 "$doku_dir/storage" "$doku_dir/bootstrap/cache" 2>/dev/null || \
+                  sudo -n chmod -R 777 "$doku_dir/storage" "$doku_dir/bootstrap/cache" 2>/dev/null || true
+
                 "$PHP_BIN" artisan optimize:clear --no-interaction || true
                 "$PHP_BIN" artisan config:cache --no-interaction || true
                 "$PHP_BIN" artisan route:cache --no-interaction || true
-                echo "Sync doku-payment di $doku_dir selesai: $(git rev-parse --short HEAD 2>/dev/null || echo 'no-git')"
+
+                sudo -n chown -R www:www "$doku_dir" 2>/dev/null || true
+                sudo -n chmod -R 775 "$doku_dir" 2>/dev/null || true
+                sudo -n chmod -R 777 "$doku_dir/storage" "$doku_dir/bootstrap/cache" 2>/dev/null || true
+
+                if command -v systemctl >/dev/null 2>&1; then
+                  sudo -n systemctl reload php-fpm-83 2>/dev/null || sudo -n systemctl reload php8.3-fpm 2>/dev/null || true
+                fi
+
+                echo "Sync doku-payment di $doku_dir selesai: $(git rev-parse --short HEAD 2>/dev/null || echo 'files-synced')"
               ) || echo "::warning::Gagal sinkronisasi $doku_dir"
             fi
           done

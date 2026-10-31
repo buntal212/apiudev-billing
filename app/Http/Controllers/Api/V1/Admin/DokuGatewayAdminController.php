@@ -911,10 +911,12 @@ class DokuGatewayAdminController extends Controller
             request: $request
         );
 
+        $httpStatus = (int) ($result['http_status'] ?? ($result['status'] === 'success' ? 200 : 500));
+
         return response()->json([
             'status' => $result['status'],
             'data' => $result,
-        ], $result['status'] === 'success' ? 200 : 400);
+        ], $httpStatus);
     }
 
     public function indexAudits(Request $request): JsonResponse
