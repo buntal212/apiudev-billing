@@ -177,30 +177,6 @@ class VerifyDokuProductionEndpointCommand extends Command
             $this->warn("Koneksi jaringan ke doku-payment dari host ({$e->getMessage()}). Melewati probe antarservice.");
         }
 
-        // 4. Verifikasi dan sinkronisasi doku-payment di host production
-        $dokuRoot = '/www/wwwroot/doku.udumbara.my.id';
-        if (is_dir($dokuRoot)) {
-            $this->info("Direktori doku-payment terdeteksi pada host: {$dokuRoot}");
-
-            if (is_dir("{$dokuRoot}/.git")) {
-                @shell_exec("git config --global --add safe.directory {$dokuRoot} 2>&1");
-                $gitRemote = trim((string) @shell_exec("cd {$dokuRoot} && git remote -v 2>&1"));
-                $this->info("doku-payment git remote: {$gitRemote}");
-
-                $gitPull = trim((string) @shell_exec("cd {$dokuRoot} && git fetch origin main 2>&1 && git reset --hard origin/main 2>&1"));
-                $this->info("doku-payment git reset result: {$gitPull}");
-            }
-
-            $phpBin = is_executable('/www/server/php/83/bin/php') ? '/www/server/php/83/bin/php' : 'php';
-            @shell_exec("{$phpBin} {$dokuRoot}/artisan optimize:clear 2>&1");
-            @shell_exec("{$phpBin} {$dokuRoot}/artisan config:cache 2>&1");
-            @shell_exec("{$phpBin} {$dokuRoot}/artisan route:cache 2>&1");
-            if (function_exists('opcache_reset')) {
-                @opcache_reset();
-            }
-            $this->info('doku-payment cache rebuild selesai.');
-        }
-
         return self::SUCCESS;
     }
 }
