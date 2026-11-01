@@ -30,7 +30,25 @@ class InvoiceController extends Controller
 
         $filters = $request->validated();
         $invoices = Invoice::query()
-            ->with(['customer.referral.partner', 'plan', 'subscription'])
+            ->with([
+                'customer.application.paymentGateways' => function ($query): void {
+                    $query->where('environment', 'sandbox')->where('is_active', true);
+                },
+                'customer.referral.partner',
+                'plan',
+                'subscription',
+                'paymentAttempts' => function ($query): void {
+                    $query->orderBy('attempt_number', 'desc');
+                },
+            ])
+            ->when($filters['search'] ?? null, function (Builder $query, string $search): void {
+                $search = trim($search);
+                $query->where(function (Builder $q) use ($search): void {
+                    $q->where('invoice_number', 'like', "%{$search}%")
+                        ->orWhereHas('customer', fn (Builder $cq) => $cq->where('name', 'like', "%{$search}%"))
+                        ->orWhereHas('plan', fn (Builder $pq) => $pq->where('name', 'like', "%{$search}%"));
+                });
+            })
             ->when($filters['application_id'] ?? null, function (Builder $query, int $applicationId): void {
                 $query->whereHas('customer', function (Builder $query) use ($applicationId): void {
                     $query->where('application_id', $applicationId);

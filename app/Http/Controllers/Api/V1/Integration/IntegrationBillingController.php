@@ -57,6 +57,18 @@ class IntegrationBillingController extends Controller
             ],
         );
 
+        $availableGateways = \App\Models\ApplicationPaymentGateway::query()
+            ->where('application_id', $application->getKey())
+            ->where('environment', 'sandbox')
+            ->where('is_active', true)
+            ->get(['provider', 'gateway_merchant_code'])
+            ->map(fn ($g): array => [
+                'provider' => $g->provider,
+                'merchant_code' => $g->gateway_merchant_code,
+            ])
+            ->values()
+            ->all();
+
         return $this->response($request, [
             'customer_external_id' => $customer->external_customer_id,
             'plan' => [
@@ -75,6 +87,7 @@ class IntegrationBillingController extends Controller
                 'final_price' => $finalPrice,
                 'currency' => $plan->currency,
             ],
+            'available_gateways' => $availableGateways,
         ]);
     }
 
@@ -128,6 +141,14 @@ class IntegrationBillingController extends Controller
             ->first();
         abort_if($invoice === null, Response::HTTP_NOT_FOUND, 'Invoice tidak ditemukan pada aplikasi ini.');
 
+        if ($request->boolean('reconcile') && $invoice->status === 'pending') {
+            $latestAttempt = $invoice->paymentAttempts()->latest('attempt_number')->first();
+            if ($latestAttempt && in_array($latestAttempt->status, [\App\Models\PaymentAttempt::StatusInitiated, \App\Models\PaymentAttempt::StatusPending])) {
+                app(\App\Services\PaymentReconciliationService::class)->reconcile($latestAttempt);
+                $invoice = $invoice->fresh();
+            }
+        }
+
         $invoice = $this->loadInvoice($invoice);
         $audits->record(
             request: $request,
@@ -157,8 +178,20 @@ class IntegrationBillingController extends Controller
             ->first();
         abort_if($invoice === null, Response::HTTP_NOT_FOUND, 'Invoice tidak ditemukan pada aplikasi ini.');
 
-        $paymentMethod = (string) ($request->validated('payment_method') ?? 'dana_wallet');
-        $attempt = $checkout->startCheckout($invoice, $request->validated('idempotency_key'), $paymentMethod);
+        $provider = $request->validated('provider');
+        $bank = $request->validated('bank');
+        $paymentMethod = $request->validated('payment_method');
+        if (empty($paymentMethod)) {
+            $paymentMethod = ($provider === 'midtrans') ? 'qris' : 'dana_wallet';
+        }
+
+        $attempt = $checkout->startCheckout(
+            $invoice,
+            $request->validated('idempotency_key'),
+            $paymentMethod,
+            $provider,
+            $bank,
+        );
         $invoice = $this->loadInvoice($invoice);
         $audits->record(
             request: $request,
@@ -171,12 +204,15 @@ class IntegrationBillingController extends Controller
                 'invoice_number' => $invoice->invoice_number,
                 'payment_attempt' => $attempt->attempt_number,
                 'payment_method' => $paymentMethod,
+                'provider' => $attempt->provider,
+                'bank' => $bank,
             ],
         );
 
         $isReady = $attempt->checkout_url !== null
             || ! empty($attempt->metadata['qr_content'] ?? null)
-            || ! empty($attempt->metadata['payment_code'] ?? null);
+            || ! empty($attempt->metadata['payment_code'] ?? null)
+            || ! empty($attempt->metadata['payment_instruction'] ?? null);
 
         return (new IntegrationInvoiceResource($invoice))
             ->additional(['request_id' => $request->attributes->get('integration_request_id')])

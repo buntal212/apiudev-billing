@@ -47,8 +47,9 @@ class IntegrationInvoiceResource extends JsonResource
             'payment' => $attempt ? [
                 'status' => $attempt->status,
                 'provider' => $attempt->provider,
-                'payment_method' => $attempt->metadata['payment_method'] ?? 'dana_wallet',
-                'checkout_status' => ($attempt->checkout_url !== null || ! empty($attempt->metadata['qr_content'] ?? null) || ! empty($attempt->metadata['payment_code'] ?? null))
+                'payment_method' => $attempt->metadata['payment_method'] ?? ($attempt->provider === 'midtrans' ? 'qris' : 'dana_wallet'),
+                'bank' => $attempt->metadata['bank'] ?? null,
+                'checkout_status' => ($attempt->checkout_url !== null || ! empty($attempt->metadata['qr_content'] ?? null) || ! empty($attempt->metadata['payment_code'] ?? null) || ! empty($attempt->metadata['payment_instruction'] ?? null))
                     ? 'ready'
                     : ($attempt->checkoutOutbox?->status === 'failed' ? 'failed' : 'processing'),
                 'checkout_url' => $attempt->checkout_url,
@@ -60,6 +61,23 @@ class IntegrationInvoiceResource extends JsonResource
                 'completed_at' => $attempt->completed_at?->toISOString(),
                 'failure_code' => $attempt->failure_code,
             ] : null,
+            'payment_history' => $this->relationLoaded('paymentAttempts')
+                ? $this->paymentAttempts
+                    ->sortByDesc('attempt_number')
+                    ->values()
+                    ->map(fn ($att): array => [
+                        'attempt_number' => $att->attempt_number,
+                        'provider' => $att->provider,
+                        'status' => $att->status,
+                        'payment_method' => $att->metadata['payment_method'] ?? ($att->provider === 'midtrans' ? 'qris' : 'dana_wallet'),
+                        'bank' => $att->metadata['bank'] ?? null,
+                        'amount' => $att->amount,
+                        'currency' => $att->currency,
+                        'requested_at' => $att->requested_at?->toISOString(),
+                        'completed_at' => $att->completed_at?->toISOString(),
+                    ])
+                    ->all()
+                : [],
             'subscription' => $subscription ? [
                 'status' => $subscription->status,
                 'plan_code' => $subscription->plan?->code,

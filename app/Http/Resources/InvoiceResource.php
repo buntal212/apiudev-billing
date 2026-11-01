@@ -54,14 +54,26 @@ class InvoiceResource extends JsonResource
                 'code' => $this->plan->code,
                 'name' => $this->plan->name,
             ]),
-            'application_payment_gateways' => ($appId = $this->customer?->application_id ?? $this->plan?->application_id)
-                ? \App\Models\ApplicationPaymentGateway::query()
-                    ->where('application_id', $appId)
+            'application_payment_gateways' => $this->customer?->relationLoaded('application') && $this->customer?->application?->relationLoaded('paymentGateways')
+                ? $this->customer->application->paymentGateways
                     ->where('environment', 'sandbox')
                     ->where('is_active', true)
-                    ->get(['id', 'provider', 'gateway_merchant_code', 'is_active'])
+                    ->map(fn ($g): array => [
+                        'id' => $g->id,
+                        'provider' => $g->provider,
+                        'gateway_merchant_code' => $g->gateway_merchant_code,
+                        'is_active' => $g->is_active,
+                    ])
+                    ->values()
                     ->all()
-                : [],
+                : (($appId = $this->customer?->application_id ?? $this->plan?->application_id)
+                    ? \App\Models\ApplicationPaymentGateway::query()
+                        ->where('application_id', $appId)
+                        ->where('environment', 'sandbox')
+                        ->where('is_active', true)
+                        ->get(['id', 'provider', 'gateway_merchant_code', 'is_active'])
+                        ->all()
+                    : []),
             'subscription' => $this->whenLoaded('subscription', fn (): ?array => $this->subscription ? [
                 'id' => $this->subscription->id,
                 'status' => $this->subscription->status,

@@ -22,6 +22,7 @@ class ListInvoicesRequest extends ApiFormRequest
     public function rules(): array
     {
         return [
+            'search' => ['nullable', 'string', 'max:100'],
             'application_id' => ['nullable', 'integer', 'exists:applications,id'],
             'application_customer_id' => ['nullable', 'integer', 'exists:application_customers,id'],
             'subscription_plan_id' => ['nullable', 'integer', 'exists:subscription_plans,id'],
