@@ -68,6 +68,7 @@ class DokuAuditService
 
             if (in_array($lowerKey, self::RedactedKeys, true)) {
                 $sanitized[$key] = '[REDACTED]';
+
                 continue;
             }
 

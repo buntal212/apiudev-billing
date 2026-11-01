@@ -58,6 +58,7 @@ class DokuSnapB2BClient
                 $cached['is_cached'] = true;
                 $cached['latency_ms'] = 0;
                 $cached['tested_at'] = (new DateTimeImmutable('now', new DateTimeZone('Asia/Jakarta')))->format('Y-m-d\TH:i:sP');
+
                 return $cached;
             }
         }
@@ -86,7 +87,7 @@ class DokuSnapB2BClient
             '/'
         );
 
-        $endpoint = $baseUrl . '/authorization/v1/access-token/b2b';
+        $endpoint = $baseUrl.'/authorization/v1/access-token/b2b';
         $startTime = microtime(true);
 
         try {
@@ -104,11 +105,12 @@ class DokuSnapB2BClient
                 ]);
         } catch (ConnectionException $e) {
             $latencyMs = (int) round((microtime(true) - $startTime) * 1000);
+
             return [
                 'status' => 'failed',
                 'http_status' => 503,
                 'response_code' => '5037300',
-                'response_message' => 'Layanan DOKU Sandbox tidak dapat dihubungi: ' . $e->getMessage(),
+                'response_message' => 'Layanan DOKU Sandbox tidak dapat dihubungi: '.$e->getMessage(),
                 'token_type' => '',
                 'expires_in' => 0,
                 'buffer_seconds' => self::DEFAULT_BUFFER_SECONDS,
@@ -193,6 +195,6 @@ class DokuSnapB2BClient
             return str_repeat('*', $length);
         }
 
-        return substr($token, 0, 8) . '...' . str_repeat('*', 8) . '...' . substr($token, -6);
+        return substr($token, 0, 8).'...'.str_repeat('*', 8).'...'.substr($token, -6);
     }
 }

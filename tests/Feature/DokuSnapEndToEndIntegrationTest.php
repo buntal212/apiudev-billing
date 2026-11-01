@@ -4,10 +4,12 @@ namespace Tests\Feature;
 
 use App\Models\DokuMerchantCredential;
 use App\Models\User;
+use App\Services\DokuGatewayProvisioningClient;
 use App\Services\DokuSecretStore;
 use App\Services\DokuSnapB2BClient;
 use App\Services\DokuSnapSignatureService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Http\Client\Request;
 use Illuminate\Support\Facades\Http;
 use Laravel\Sanctum\Sanctum;
 use Tests\TestCase;
@@ -75,7 +77,7 @@ PEM;
         ]);
 
         // Simulasikan endpoint SNAP B2B yang memverifikasi signature asli
-        Http::fake(function (\Illuminate\Http\Client\Request $request) use ($publicKey, $signatureService) {
+        Http::fake(function (Request $request) use ($publicKey, $signatureService) {
             $clientKey = $request->header('X-CLIENT-KEY')[0] ?? '';
             $timestamp = $request->header('X-TIMESTAMP')[0] ?? '';
             $signature = $request->header('X-SIGNATURE')[0] ?? '';
@@ -93,7 +95,7 @@ PEM;
             return Http::response([
                 'responseCode' => '2007300',
                 'responseMessage' => 'Successful',
-                'accessToken' => 'doku_test_token_live_rsa_verified_' . bin2hex(random_bytes(16)),
+                'accessToken' => 'doku_test_token_live_rsa_verified_'.bin2hex(random_bytes(16)),
                 'tokenType' => 'Bearer',
                 'expiresIn' => 900,
             ], 200);
@@ -112,7 +114,7 @@ PEM;
 
     public function test_provisioning_client_communicates_with_gateway_using_service_bearer_auth(): void
     {
-        $provisioningClient = app(\App\Services\DokuGatewayProvisioningClient::class);
+        $provisioningClient = app(DokuGatewayProvisioningClient::class);
 
         Http::fake([
             '*/api/v1/internal/doku/test-b2b-token' => Http::response([
@@ -143,7 +145,7 @@ PEM;
         $this->assertEquals('2007300', $result['response_code']);
         $this->assertEquals('https://api-sandbox.doku.com/authorization/v1/access-token/b2b', $result['target_endpoint']);
 
-        Http::assertSent(function (\Illuminate\Http\Client\Request $request) {
+        Http::assertSent(function (Request $request) {
             return $request->hasHeader('Authorization', 'Bearer doku_service_secret_token_sandbox_64chars_key')
                 && $request['environment'] === 'sandbox'
                 && $request['merchant_code'] === 'udev-central';
@@ -152,7 +154,7 @@ PEM;
 
     public function test_provisioning_client_blocks_production(): void
     {
-        $provisioningClient = app(\App\Services\DokuGatewayProvisioningClient::class);
+        $provisioningClient = app(DokuGatewayProvisioningClient::class);
 
         $this->expectException(\RuntimeException::class);
         $this->expectExceptionMessage('Operasi DOKU SNAP B2B hanya diizinkan untuk lingkungan Sandbox. Lingkungan Production diblokir.');

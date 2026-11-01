@@ -44,6 +44,6 @@ class DokuMerchantCredential extends Model
             return str_repeat('*', $length);
         }
 
-        return substr($clientId, 0, 4) . '****' . substr($clientId, -4);
+        return substr($clientId, 0, 4).'****'.substr($clientId, -4);
     }
 }

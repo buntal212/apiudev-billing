@@ -7,7 +7,9 @@ use RuntimeException;
 class DokuSecretStore
 {
     private const int NonceLength = 12; // 96 bits
+
     private const int TagLength = 16;   // 128 bits
+
     private const string Cipher = 'aes-256-gcm';
 
     /**

@@ -26,13 +26,13 @@ class StoreApplicationPaymentGatewayRequest extends ApiFormRequest
                     ->where('provider', $this->input('provider'))
                     ->where('environment', $this->input('environment')),
             ],
-            'provider' => ['required', 'in:dana,doku'],
+            'provider' => ['required', 'in:dana,doku,midtrans'],
             'environment' => ['required', 'in:sandbox,production'],
             'gateway_merchant_code' => ['required', 'string', 'max:60'],
             'is_active' => ['required', 'boolean'],
         ];
 
-        if ($this->input('provider') === 'doku') {
+        if (in_array($this->input('provider'), ['doku', 'midtrans'], true)) {
             $rules['environment'] = ['required', 'in:sandbox'];
         }
 

@@ -8,7 +8,7 @@ class DokuSnapSignatureService
 {
     public function formatStringToSign(string $clientKey, string $timestamp): string
     {
-        return $clientKey . '|' . $timestamp;
+        return $clientKey.'|'.$timestamp;
     }
 
     public function signB2b(string $clientKey, string $timestamp, string $privateKey): string
@@ -63,7 +63,7 @@ class DokuSnapSignatureService
             return $key;
         }
 
-        return "-----BEGIN RSA PRIVATE KEY-----\n" . wordwrap($key, 64, "\n", true) . "\n-----END RSA PRIVATE KEY-----";
+        return "-----BEGIN RSA PRIVATE KEY-----\n".wordwrap($key, 64, "\n", true)."\n-----END RSA PRIVATE KEY-----";
     }
 
     /**
@@ -89,13 +89,13 @@ class DokuSnapSignatureService
         }
 
         if ($res === false) {
-            throw new RuntimeException('Gagal membuat pasangan RSA key pair menggunakan OpenSSL: ' . openssl_error_string());
+            throw new RuntimeException('Gagal membuat pasangan RSA key pair menggunakan OpenSSL: '.openssl_error_string());
         }
 
         $privateKey = '';
         $exportConfig = $cnf !== null ? ['config' => $cnf] : [];
         if (! @openssl_pkey_export($res, $privateKey, null, $exportConfig)) {
-            throw new RuntimeException('Gagal mengekspor RSA private key: ' . openssl_error_string());
+            throw new RuntimeException('Gagal mengekspor RSA private key: '.openssl_error_string());
         }
 
         $details = openssl_pkey_get_details($res);
@@ -127,7 +127,7 @@ class DokuSnapSignatureService
      */
     public function validateKeyPair(string $privateKey, string $publicKey): bool
     {
-        $challenge = 'doku-key-validation-' . bin2hex(random_bytes(16));
+        $challenge = 'doku-key-validation-'.bin2hex(random_bytes(16));
         $signature = '';
 
         $privKeyResource = @openssl_pkey_get_private($this->normalizePrivateKey($privateKey));
@@ -170,7 +170,7 @@ class DokuSnapSignatureService
                 'C:/OpenSSL-Win32/bin/openssl.cnf',
             ];
             if ($cafile = ini_get('openssl.cafile')) {
-                $candidates[] = dirname($cafile) . '/openssl.cnf';
+                $candidates[] = dirname($cafile).'/openssl.cnf';
             }
         } else {
             $candidates = [

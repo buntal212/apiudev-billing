@@ -32,7 +32,7 @@ class VerifyDokuProductionEndpointCommand extends Command
             }
 
             $targetUrl = (string) ($this->option('url')
-                ?: rtrim((string) config('app.url'), '/') . '/api/v1/admin/doku-gateway/merchants');
+                ?: rtrim((string) config('app.url'), '/').'/api/v1/admin/doku-gateway/merchants');
 
             $this->info("Memverifikasi HTTP endpoint DOKU via TLS aman: {$targetUrl}");
 
@@ -74,7 +74,7 @@ class VerifyDokuProductionEndpointCommand extends Command
                         ->connectTimeout(4)
                         ->withToken($token->plainTextToken)
                         ->acceptJson()
-                        ->delete($configUrl . '?merchant_code=__probe_route_check__');
+                        ->delete($configUrl.'?merchant_code=__probe_route_check__');
 
                     if ($probeResponse->status() === 405) {
                         $this->error("Verifikasi GAGAL (HTTP 405 Method Not Allowed): Rute DELETE {$configUrl} belum terdaftar pada server web.");
@@ -107,7 +107,7 @@ class VerifyDokuProductionEndpointCommand extends Command
         // 1. Verifikasi GET doku-gateway/merchants
         $getRequest = Request::create('/api/v1/admin/doku-gateway/merchants', 'GET');
         $getRequest->headers->set('Accept', 'application/json');
-        $getRequest->headers->set('Authorization', 'Bearer ' . $plainToken);
+        $getRequest->headers->set('Authorization', 'Bearer '.$plainToken);
 
         $getResponse = app()->handle($getRequest);
         $getStatus = $getResponse->getStatusCode();
@@ -130,7 +130,7 @@ class VerifyDokuProductionEndpointCommand extends Command
         // 2. Verifikasi DELETE doku-gateway/configuration (bukan 405)
         $delRequest = Request::create('/api/v1/admin/doku-gateway/configuration?merchant_code=__probe_route_check__', 'DELETE');
         $delRequest->headers->set('Accept', 'application/json');
-        $delRequest->headers->set('Authorization', 'Bearer ' . $plainToken);
+        $delRequest->headers->set('Authorization', 'Bearer '.$plainToken);
 
         $delResponse = app()->handle($delRequest);
         $delStatus = $delResponse->getStatusCode();
@@ -160,7 +160,7 @@ class VerifyDokuProductionEndpointCommand extends Command
                 ->connectTimeout(4)
                 ->withToken($serviceToken)
                 ->acceptJson()
-                ->get($gatewayUrl . '/api/v1/internal/merchants');
+                ->get($gatewayUrl.'/api/v1/internal/merchants');
 
             if ($gwResponse->status() === 401 || $gwResponse->status() === 403) {
                 $this->error("Autentikasi antarservice ke doku-payment ditolak (HTTP {$gwResponse->status()}). Periksa service_token.");

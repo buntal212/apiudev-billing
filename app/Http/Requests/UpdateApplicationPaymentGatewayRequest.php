@@ -31,12 +31,12 @@ class UpdateApplicationPaymentGatewayRequest extends ApiFormRequest
                 ->ignore($gateway),
         ];
 
-        if ($gateway->provider === 'doku') {
+        if ($gateway->provider === 'doku' || $gateway->provider === 'midtrans') {
             $envRules = [
                 'sometimes',
                 'in:sandbox',
                 Rule::unique('application_payment_gateways', 'application_id')
-                    ->where('provider', 'doku')
+                    ->where('provider', $gateway->provider)
                     ->where('environment', 'sandbox')
                     ->ignore($gateway),
             ];

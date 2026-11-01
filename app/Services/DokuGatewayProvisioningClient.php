@@ -3,6 +3,7 @@
 namespace App\Services;
 
 use Illuminate\Http\Client\ConnectionException;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Http;
 use RuntimeException;
 
@@ -53,10 +54,10 @@ class DokuGatewayProvisioningClient
         }
 
         if ($forceRefresh) {
-            \Illuminate\Support\Facades\Cache::forget("doku_snap_b2b_token:{$merchantCode}:{$environment}");
+            Cache::forget("doku_snap_b2b_token:{$merchantCode}:{$environment}");
         }
 
-        $endpoint = $gatewayUrl . '/api/v1/internal/doku/test-b2b-token';
+        $endpoint = $gatewayUrl.'/api/v1/internal/doku/test-b2b-token';
         $startTime = microtime(true);
 
         try {
@@ -106,7 +107,7 @@ class DokuGatewayProvisioningClient
             $cacheKey = "doku_snap_b2b_token:{$merchantCode}:{$environment}";
             $ttl = (int) ($data['cache_ttl_seconds'] ?? 840);
             if ($ttl > 0) {
-                \Illuminate\Support\Facades\Cache::put($cacheKey, [
+                Cache::put($cacheKey, [
                     'cached_at' => now(),
                     'expires_at' => now()->addSeconds($ttl),
                 ], $ttl);
@@ -133,17 +134,17 @@ class DokuGatewayProvisioningClient
 
         $status = $response->status();
         $rawMessage = is_array($body) ? (string) ($body['message'] ?? '') : '';
-        $responseCode = $status . '7300';
+        $responseCode = $status.'7300';
 
         $responseMessage = match ($status) {
-            401 => 'Autentikasi antarservice ke doku-payment ditolak (token layanan internal tidak valid).' . ($rawMessage ? " Pesan: {$rawMessage}" : ''),
-            403 => 'Otorisasi antarservice ke doku-payment ditolak (izin layanan tidak mencukupi).' . ($rawMessage ? " Pesan: {$rawMessage}" : ''),
+            401 => 'Autentikasi antarservice ke doku-payment ditolak (token layanan internal tidak valid).'.($rawMessage ? " Pesan: {$rawMessage}" : ''),
+            403 => 'Otorisasi antarservice ke doku-payment ditolak (izin layanan tidak mencukupi).'.($rawMessage ? " Pesan: {$rawMessage}" : ''),
             404 => "Endpoint internal doku-payment tidak ditemukan ({$endpoint}). Periksa rute gateway.",
-            422 => 'Validasi parameter pada layanan doku-payment gagal.' . ($rawMessage ? " {$rawMessage}" : ''),
-            500 => 'Terjadi kesalahan internal pada layanan doku-payment (HTTP 500).' . ($rawMessage ? " {$rawMessage}" : ''),
+            422 => 'Validasi parameter pada layanan doku-payment gagal.'.($rawMessage ? " {$rawMessage}" : ''),
+            500 => 'Terjadi kesalahan internal pada layanan doku-payment (HTTP 500).'.($rawMessage ? " {$rawMessage}" : ''),
             502 => 'Layanan doku-payment mengembalikan respons buruk dari upstream/reverse proxy (HTTP 502 Bad Gateway).',
             504 => 'Permintaan ke layanan doku-payment waktu habis melalui proxy/upstream (HTTP 504 Gateway Timeout).',
-            default => 'Layanan doku-payment mengembalikan respons HTTP ' . $status . '.' . ($rawMessage ? " {$rawMessage}" : ''),
+            default => 'Layanan doku-payment mengembalikan respons HTTP '.$status.'.'.($rawMessage ? " {$rawMessage}" : ''),
         };
 
         return [
@@ -171,7 +172,7 @@ class DokuGatewayProvisioningClient
     public function checkCacheStatus(string $merchantCode, string $environment = 'sandbox'): array
     {
         $cacheKey = "doku_snap_b2b_token:{$merchantCode}:{$environment}";
-        $cacheData = \Illuminate\Support\Facades\Cache::get($cacheKey);
+        $cacheData = Cache::get($cacheKey);
 
         if (! is_array($cacheData) || empty($cacheData['expires_at'])) {
             return [

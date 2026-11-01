@@ -13,6 +13,7 @@ use App\Http\Controllers\Api\V1\Admin\DanaGatewayMerchantProvisioningController;
 use App\Http\Controllers\Api\V1\Admin\DokuGatewayAdminController;
 use App\Http\Controllers\Api\V1\Admin\InvoiceCheckoutController;
 use App\Http\Controllers\Api\V1\Admin\InvoiceController;
+use App\Http\Controllers\Api\V1\Admin\MidtransGatewayAdminController;
 use App\Http\Controllers\Api\V1\Admin\PartnerController;
 use App\Http\Controllers\Api\V1\Admin\PaymentAttemptController;
 use App\Http\Controllers\Api\V1\Admin\ReferralCodeController;
@@ -172,6 +173,23 @@ Route::prefix('v1/admin')
             Route::post('recover-key', [DokuGatewayAdminController::class, 'recoverPreviousKey'])->name('recover-key');
             Route::post('test-token', [DokuGatewayAdminController::class, 'testB2BToken'])->name('test-token');
             Route::get('audits', [DokuGatewayAdminController::class, 'indexAudits'])->name('audits');
+        });
+        Route::prefix('midtrans-gateway')->name('midtrans-gateway.')->group(function (): void {
+            Route::get('merchants', [MidtransGatewayAdminController::class, 'indexMerchants'])->name('merchants');
+            Route::post('merchants', [MidtransGatewayAdminController::class, 'storeMerchant'])->name('merchants.store');
+            Route::get('merchants/{merchantCode}', [MidtransGatewayAdminController::class, 'showMerchant'])->name('merchants.show');
+            Route::put('merchants/{merchantCode}', [MidtransGatewayAdminController::class, 'updateMerchant'])->name('merchants.update');
+            Route::patch('merchants/{merchantCode}/status', [MidtransGatewayAdminController::class, 'toggleMerchantStatus'])->name('merchants.status');
+            Route::delete('merchants/{merchantCode}', [MidtransGatewayAdminController::class, 'destroyMerchant'])->name('merchants.destroy');
+            Route::get('configuration', [MidtransGatewayAdminController::class, 'showConfiguration'])->name('configuration');
+            Route::put('configuration', [MidtransGatewayAdminController::class, 'updateConfiguration'])->name('configuration.update');
+            Route::delete('configuration', [MidtransGatewayAdminController::class, 'deleteConfiguration'])->name('configuration.delete');
+            Route::post('test-connection', [MidtransGatewayAdminController::class, 'testConnection'])->name('test-connection');
+            Route::post('sandbox-payment', [MidtransGatewayAdminController::class, 'createSandboxPayment'])->name('sandbox-payment');
+            Route::get('sandbox-payment/{orderId}/status', [MidtransGatewayAdminController::class, 'querySandboxPayment'])->name('sandbox-payment.status');
+            Route::get('sandbox-transactions', [MidtransGatewayAdminController::class, 'sandboxTestTransactions'])->name('sandbox-transactions');
+            Route::get('audits', [MidtransGatewayAdminController::class, 'indexAudits'])->name('audits');
+            Route::get('dashboard-summary', [MidtransGatewayAdminController::class, 'dashboardSummary'])->name('dashboard-summary');
         });
         Route::apiResource('application-customers', ApplicationCustomerController::class)
             ->only(['index', 'store', 'show', 'update']);

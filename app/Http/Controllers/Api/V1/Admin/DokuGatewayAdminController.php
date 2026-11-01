@@ -14,6 +14,7 @@ use App\Services\DokuSecretStore;
 use App\Services\DokuSnapSignatureService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Cache;
 
 class DokuGatewayAdminController extends Controller
 {
@@ -337,7 +338,7 @@ class DokuGatewayAdminController extends Controller
 
         $merchantName = $merchant->merchant_name;
 
-        \Illuminate\Support\Facades\Cache::forget("doku_snap_b2b_token:{$merchantCode}:sandbox");
+        Cache::forget("doku_snap_b2b_token:{$merchantCode}:sandbox");
 
         DokuMerchantKeyBackup::query()
             ->where('merchant_code', $merchantCode)
@@ -563,7 +564,7 @@ class DokuGatewayAdminController extends Controller
             'public_key_fingerprint' => null,
         ]);
 
-        \Illuminate\Support\Facades\Cache::forget("doku_snap_b2b_token:{$merchantCode}:sandbox");
+        Cache::forget("doku_snap_b2b_token:{$merchantCode}:sandbox");
 
         $this->auditService->record(
             merchantCode: $merchantCode,
@@ -685,7 +686,7 @@ class DokuGatewayAdminController extends Controller
             request: $request
         );
 
-        \Illuminate\Support\Facades\Cache::forget("doku_snap_b2b_token:{$merchantCode}:sandbox");
+        Cache::forget("doku_snap_b2b_token:{$merchantCode}:sandbox");
 
         $hasClientId = ! empty($cred->client_id);
         $hasPrivateKey = ! empty($cred->encrypted_private_key);
@@ -794,7 +795,7 @@ class DokuGatewayAdminController extends Controller
             request: $request
         );
 
-        \Illuminate\Support\Facades\Cache::forget("doku_snap_b2b_token:{$merchantCode}:sandbox");
+        Cache::forget("doku_snap_b2b_token:{$merchantCode}:sandbox");
 
         $hasClientId = ! empty($cred->client_id);
         $hasPrivateKey = ! empty($cred->encrypted_private_key);
@@ -873,7 +874,7 @@ class DokuGatewayAdminController extends Controller
         } catch (\Throwable $e) {
             return response()->json([
                 'status' => 'failed',
-                'message' => 'Gagal mendekripsi RSA private key merchant: ' . $e->getMessage(),
+                'message' => 'Gagal mendekripsi RSA private key merchant: '.$e->getMessage(),
             ], 422);
         }
 
@@ -934,7 +935,7 @@ class DokuGatewayAdminController extends Controller
         }
 
         if ($request->filled('search')) {
-            $search = '%' . $request->query('search') . '%';
+            $search = '%'.$request->query('search').'%';
             $query->where(function ($q) use ($search) {
                 $q->where('action', 'like', $search)
                     ->orWhere('response_code', 'like', $search)

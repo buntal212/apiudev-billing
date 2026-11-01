@@ -13,6 +13,7 @@ use Illuminate\Validation\ValidationException;
 class SubscriptionBillingMerchantResolver
 {
     public const RecipientMetadataKey = 'billing_recipient';
+
     public const CentralRecipient = 'udev_central';
 
     public function __construct(private readonly DanaGatewayMerchantCatalog $merchantCatalog) {}

@@ -8,6 +8,7 @@ use App\Http\Resources\BillingGatewayTransactionResource;
 use App\Models\PaymentAttempt;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Http\Resources\Json\AnonymousResourceCollection;
+use Illuminate\Support\Facades\DB;
 
 class BillingGatewayTransactionController extends Controller
 {
@@ -30,7 +31,7 @@ class BillingGatewayTransactionController extends Controller
         $this->authorize('view', $paymentAttempt);
 
         abort_unless(
-            strtolower($paymentAttempt->provider) === 'dana'
+            in_array(strtolower($paymentAttempt->provider), ['dana', 'midtrans'], true)
             && $paymentAttempt->gateway_environment === 'sandbox',
             404,
         );
@@ -44,10 +45,12 @@ class BillingGatewayTransactionController extends Controller
      */
     private function query(array $filters): Builder
     {
+        $provider = strtolower((string) ($filters['provider'] ?? ''));
+
         return PaymentAttempt::query()
             ->with($this->relations())
-            ->whereRaw('LOWER(provider) = ?', ['dana'])
             ->where('gateway_environment', 'sandbox')
+            ->when($provider !== '', fn (Builder $q) => $q->whereRaw('LOWER(provider) = ?', [$provider]), fn (Builder $q) => $q->whereIn(DB::raw('LOWER(provider)'), ['dana', 'midtrans']))
             ->when($filters['application_id'] ?? null, function (Builder $query, int $applicationId): void {
                 $query->whereHas('invoice.customer', function (Builder $query) use ($applicationId): void {
                     $query->where('application_id', $applicationId);

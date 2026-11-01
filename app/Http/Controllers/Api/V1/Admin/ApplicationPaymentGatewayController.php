@@ -10,6 +10,7 @@ use App\Http\Requests\UpdateApplicationPaymentGatewayRequest;
 use App\Http\Resources\ApplicationPaymentGatewayResource;
 use App\Models\ApplicationPaymentGateway;
 use App\Models\DokuMerchantCredential;
+use App\Models\MidtransMerchantCredential;
 use App\Services\DanaGatewayMerchantCatalog;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Resources\Json\AnonymousResourceCollection;
@@ -42,6 +43,33 @@ class ApplicationPaymentGatewayController extends Controller
         $this->authorize('viewAny', ApplicationPaymentGateway::class);
 
         $provider = (string) $request->input('provider', 'dana');
+        if ($provider === 'midtrans') {
+            $existing = MidtransMerchantCredential::query()
+                ->where('environment', 'sandbox')
+                ->get();
+
+            $codes = array_unique(array_merge(['udev-central', 'larissama'], $existing->pluck('merchant_code')->all()));
+            $result = [];
+            foreach ($codes as $code) {
+                $m = $existing->firstWhere('merchant_code', $code);
+                $isConfigured = $m !== null && ! empty($m->encrypted_server_key);
+                $result[] = [
+                    'code' => $code,
+                    'name' => $m?->merchant_name ?? ($code === 'udev-central' ? 'UDEV Central Billing' : $code),
+                    'is_active' => $m?->is_active ?? true,
+                    'readiness' => [
+                        'merchant_configured' => $isConfigured,
+                        'merchant_active' => $m?->is_active ?? true,
+                        'credential_configured' => $isConfigured,
+                        'base_url_configured' => true,
+                        'ready' => ($m?->is_active ?? true) && $isConfigured,
+                    ],
+                ];
+            }
+
+            return response()->json(['data' => $result]);
+        }
+
         if ($provider === 'doku') {
             $existing = DokuMerchantCredential::query()
                 ->where('environment', 'sandbox')
@@ -81,6 +109,23 @@ class ApplicationPaymentGatewayController extends Controller
         $attributes = $request->validated();
         if ($attributes['provider'] === 'dana') {
             $merchantCatalog->ensureUsable($attributes['gateway_merchant_code'], $attributes['environment']);
+        } elseif ($attributes['provider'] === 'midtrans') {
+            if ($attributes['environment'] !== 'sandbox') {
+                throw ValidationException::withMessages([
+                    'environment' => ['Midtrans Gateway hanya mendukung environment sandbox.'],
+                ]);
+            }
+
+            $exists = MidtransMerchantCredential::query()
+                ->where('merchant_code', $attributes['gateway_merchant_code'])
+                ->where('environment', 'sandbox')
+                ->exists();
+
+            if (! $exists && ! in_array($attributes['gateway_merchant_code'], ['udev-central', 'larissama'], true)) {
+                throw ValidationException::withMessages([
+                    'gateway_merchant_code' => ['Merchant Midtrans tidak ditemukan pada sandbox.'],
+                ]);
+            }
         } else {
             if ($attributes['environment'] !== 'sandbox') {
                 throw ValidationException::withMessages([
@@ -121,6 +166,25 @@ class ApplicationPaymentGatewayController extends Controller
         if ($paymentGateway->provider === 'dana') {
             if ($willBeActive || array_key_exists('gateway_merchant_code', $attributes) || array_key_exists('environment', $attributes)) {
                 $merchantCatalog->ensureUsable($merchantCode, $environment);
+            }
+        } elseif ($paymentGateway->provider === 'midtrans') {
+            if ($environment !== 'sandbox') {
+                throw ValidationException::withMessages([
+                    'environment' => ['Midtrans Gateway hanya mendukung environment sandbox.'],
+                ]);
+            }
+
+            if (array_key_exists('gateway_merchant_code', $attributes)) {
+                $exists = MidtransMerchantCredential::query()
+                    ->where('merchant_code', $merchantCode)
+                    ->where('environment', 'sandbox')
+                    ->exists();
+
+                if (! $exists && ! in_array($merchantCode, ['udev-central', 'larissama'], true)) {
+                    throw ValidationException::withMessages([
+                        'gateway_merchant_code' => ['Merchant Midtrans tidak ditemukan pada sandbox.'],
+                    ]);
+                }
             }
         } else {
             if ($environment !== 'sandbox') {

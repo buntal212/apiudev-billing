@@ -4,6 +4,7 @@ namespace Tests\Feature;
 
 use App\Models\Application;
 use App\Models\ApplicationPaymentGateway;
+use App\Models\DokuMerchantCredential;
 use App\Models\PaymentAttempt;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -153,7 +154,7 @@ class ApplicationPaymentGatewayApiTest extends TestCase
         $appDana = Application::factory()->create(['name' => 'App DANA']);
         $appDoku = Application::factory()->create(['name' => 'App DOKU']);
 
-        \App\Models\DokuMerchantCredential::create([
+        DokuMerchantCredential::create([
             'merchant_code' => 'doku-store',
             'merchant_name' => 'DOKU Store',
             'client_id' => 'MALL-DOKU-01',
@@ -201,7 +202,7 @@ class ApplicationPaymentGatewayApiTest extends TestCase
     {
         $app = Application::factory()->create();
 
-        \App\Models\DokuMerchantCredential::create([
+        DokuMerchantCredential::create([
             'merchant_code' => 'doku-crud',
             'merchant_name' => 'DOKU CRUD Store',
             'environment' => 'sandbox',
@@ -270,7 +271,7 @@ class ApplicationPaymentGatewayApiTest extends TestCase
 
     public function test_payment_gateways_merchant_options_supports_provider_doku(): void
     {
-        \App\Models\DokuMerchantCredential::create([
+        DokuMerchantCredential::create([
             'merchant_code' => 'doku-opt-test',
             'merchant_name' => 'DOKU Option Test',
             'client_id' => 'MALL-OPT-01',

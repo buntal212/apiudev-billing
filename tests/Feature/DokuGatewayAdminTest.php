@@ -2,13 +2,19 @@
 
 namespace Tests\Feature;
 
+use App\Models\Application;
+use App\Models\ApplicationPaymentGateway;
 use App\Models\DokuGatewayAudit;
 use App\Models\DokuMerchantCredential;
 use App\Models\DokuMerchantKeyBackup;
+use App\Models\Invoice;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Http\Client\ConnectionException;
+use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Route;
 use Laravel\Sanctum\Sanctum;
 use Tests\TestCase;
 
@@ -48,6 +54,7 @@ bjULk3DAiQoIToQvGEBqworpcg==
 PEM;
 
     private User $admin;
+
     private User $regularUser;
 
     protected function setUp(): void
@@ -121,14 +128,14 @@ PEM;
             ->assertJson(['status' => 'success']);
 
         // 2. Verifikasi rute terdaftar dengan URI dan action yang tepat
-        $route = \Illuminate\Support\Facades\Route::getRoutes()->getByAction('App\Http\Controllers\Api\V1\Admin\DokuGatewayAdminController@indexMerchants');
+        $route = Route::getRoutes()->getByAction('App\Http\Controllers\Api\V1\Admin\DokuGatewayAdminController@indexMerchants');
         $this->assertNotNull($route);
         $this->assertEquals('api/v1/admin/doku-gateway/merchants', $route->uri());
 
         // 3. Verifikasi bahwa kompilasi route:cache sukses tanpa kegagalan serialisasi
-        $exitCode = \Illuminate\Support\Facades\Artisan::call('route:cache');
+        $exitCode = Artisan::call('route:cache');
         $this->assertSame(0, $exitCode);
-        \Illuminate\Support\Facades\Artisan::call('route:clear');
+        Artisan::call('route:clear');
     }
 
     public function test_admin_can_generate_rsa_key_pair(): void
@@ -591,7 +598,7 @@ PEM;
         ]);
 
         // 4. Pastikan ada invoice untuk memverifikasi invoice tidak ikut terhapus
-        $invoice = \App\Models\Invoice::factory()->create();
+        $invoice = Invoice::factory()->create();
 
         // 5. Eksekusi Hapus Konfigurasi
         $response = $this->deleteJson('/api/v1/admin/doku-gateway/configuration', [
@@ -743,7 +750,7 @@ PEM;
         ])->assertStatus(200);
 
         // Menjalankan artisan migrate --force lagi tidak boleh error atau menghapus data
-        $exitCode = \Illuminate\Support\Facades\Artisan::call('migrate', ['--force' => true]);
+        $exitCode = Artisan::call('migrate', ['--force' => true]);
         $this->assertSame(0, $exitCode);
 
         // Verifikasi data tetap utuh
@@ -767,7 +774,7 @@ PEM;
             ], 404),
         ]);
 
-        $exitCode = \Illuminate\Support\Facades\Artisan::call('doku:verify-endpoint', [
+        $exitCode = Artisan::call('doku:verify-endpoint', [
             '--url' => 'https://apiudev.udumbara.my.id/api/v1/admin/doku-gateway/merchants',
         ]);
 
@@ -781,7 +788,7 @@ PEM;
 
     public function test_verify_doku_production_endpoint_command_internal_success(): void
     {
-        $exitCode = \Illuminate\Support\Facades\Artisan::call('doku:verify-endpoint', [
+        $exitCode = Artisan::call('doku:verify-endpoint', [
             '--internal' => true,
         ]);
 
@@ -801,7 +808,7 @@ PEM;
             ], 404),
         ]);
 
-        $exitCode = \Illuminate\Support\Facades\Artisan::call('doku:verify-endpoint', [
+        $exitCode = Artisan::call('doku:verify-endpoint', [
             '--url' => 'https://apiudev.udumbara.my.id/api/v1/admin/doku-gateway/merchants',
         ]);
 
@@ -821,7 +828,7 @@ PEM;
             ], 401),
         ]);
 
-        $exitCode = \Illuminate\Support\Facades\Artisan::call('doku:verify-endpoint', [
+        $exitCode = Artisan::call('doku:verify-endpoint', [
             '--url' => 'https://apiudev.udumbara.my.id/api/v1/admin/doku-gateway/merchants',
         ]);
 
@@ -943,7 +950,7 @@ PEM;
     {
         Sanctum::actingAs($this->admin, ['admin:access']);
 
-        $app = \App\Models\Application::factory()->create();
+        $app = Application::factory()->create();
 
         DokuMerchantCredential::create([
             'merchant_code' => 'toko-mapped',
@@ -952,7 +959,7 @@ PEM;
             'is_active' => true,
         ]);
 
-        \App\Models\ApplicationPaymentGateway::create([
+        ApplicationPaymentGateway::create([
             'application_id' => $app->id,
             'provider' => 'doku',
             'environment' => 'sandbox',
@@ -1040,7 +1047,7 @@ PEM;
             ['merchant_name' => 'UDEV Central Billing', 'is_active' => true]
         );
 
-        $app = \App\Models\Application::factory()->create();
+        $app = Application::factory()->create();
 
         // Buat mapping DOKU
         $createRes = $this->postJson('/api/v1/admin/payment-gateways', [
@@ -1248,7 +1255,7 @@ PEM;
 
         Http::fake([
             '*/api/v1/internal/doku/test-b2b-token' => function () {
-                throw new \Illuminate\Http\Client\ConnectionException('Failed to connect to doku-payment port 443: Connection refused');
+                throw new ConnectionException('Failed to connect to doku-payment port 443: Connection refused');
             },
         ]);
 

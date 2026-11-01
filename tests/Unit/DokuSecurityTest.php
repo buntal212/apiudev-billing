@@ -42,7 +42,7 @@ PEM;
 
     public function test_secret_store_encrypts_and_decrypts_private_key_correctly(): void
     {
-        $store = new DokuSecretStore();
+        $store = new DokuSecretStore;
         $merchantCode = 'udev-central';
 
         $encrypted = $store->encryptPrivateKey(self::TestPrivateKey, $merchantCode, 'v1');
@@ -65,7 +65,7 @@ PEM;
 
     public function test_secret_store_detects_ciphertext_tampering(): void
     {
-        $store = new DokuSecretStore();
+        $store = new DokuSecretStore;
         $merchantCode = 'udev-central';
 
         $encrypted = $store->encryptPrivateKey(self::TestPrivateKey, $merchantCode, 'v1');
@@ -87,7 +87,7 @@ PEM;
 
     public function test_secret_store_fails_with_different_merchant_aad(): void
     {
-        $store = new DokuSecretStore();
+        $store = new DokuSecretStore;
 
         $encrypted = $store->encryptPrivateKey(self::TestPrivateKey, 'merchant-a', 'v1');
 
@@ -106,7 +106,7 @@ PEM;
 
     public function test_snap_signature_service_signs_and_verifies(): void
     {
-        $sigService = new DokuSnapSignatureService();
+        $sigService = new DokuSnapSignatureService;
         $clientKey = 'MALL-12345';
         $timestamp = '2026-10-30T18:13:21+07:00';
 

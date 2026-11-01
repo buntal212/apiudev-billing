@@ -83,4 +83,14 @@ return [
         'secret_store_key' => env('DOKU_SECRET_STORE_KEY'),
     ],
 
+    'midtrans_gateway' => [
+        'environment' => env('MIDTRANS_GATEWAY_ENVIRONMENT', 'sandbox'),
+        'gateway_service_url' => env('MIDTRANS_GATEWAY_SERVICE_URL', 'http://127.0.0.1:8003'),
+        'service_token' => env('MIDTRANS_GATEWAY_SERVICE_TOKEN', 'midtrans_service_secret_token_sandbox_64chars_key'),
+        'timeout' => (int) env('MIDTRANS_GATEWAY_TIMEOUT', 10),
+        'connect_timeout' => (int) env('MIDTRANS_GATEWAY_CONNECT_TIMEOUT', 5),
+        'secret_store_key' => env('MIDTRANS_SECRET_STORE_KEY'),
+        'sandbox_base_url' => env('MIDTRANS_SANDBOX_BASE_URL', 'https://api.sandbox.midtrans.com/v2'),
+    ],
+
 ];
