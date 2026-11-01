@@ -489,8 +489,8 @@ class MidtransGatewayAdminController extends Controller
             'merchant_code' => ['required', 'string'],
             'order_id' => ['nullable', 'string', 'max:100'],
             'amount' => ['required', 'numeric', 'min:1000'],
-            'payment_type' => ['nullable', 'string', 'in:qris,bank_transfer,gopay'],
-            'bank' => ['nullable', 'string', 'in:bca,bni,bri,permata'],
+            'payment_type' => ['nullable', 'string', 'in:qris,bank_transfer,echannel,gopay'],
+            'bank' => ['nullable', 'string', 'in:bca,bni,bri,permata,mandiri'],
         ]);
 
         $merchantCode = $validated['merchant_code'];
@@ -531,7 +531,13 @@ class MidtransGatewayAdminController extends Controller
             metadata: [
                 'order_id' => $result['data']['order_id'] ?? null,
                 'gross_amount' => $validated['amount'],
-                'payment_type' => $validated['payment_type'] ?? 'qris',
+                'payment_type' => $result['data']['payment_type'] ?? ($validated['payment_type'] ?? 'qris'),
+                'bank' => $validated['bank'] ?? null,
+                'transaction_id' => $result['data']['transaction_id'] ?? null,
+                'va_numbers' => $result['data']['va_numbers'] ?? null,
+                'permata_va_number' => $result['data']['permata_va_number'] ?? null,
+                'bill_key' => $result['data']['bill_key'] ?? null,
+                'biller_code' => $result['data']['biller_code'] ?? null,
             ]
         );
 

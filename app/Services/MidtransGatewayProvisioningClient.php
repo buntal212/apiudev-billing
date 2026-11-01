@@ -122,6 +122,7 @@ class MidtransGatewayProvisioningClient
         $orderId = $chargeDetails['order_id'] ?? ('MIDTRANS-TEST-'.now()->format('YmdHis').'-'.Str::random(4));
         $amount = (int) ($chargeDetails['amount'] ?? 10000);
         $paymentType = $chargeDetails['payment_type'] ?? 'qris';
+        $bank = strtolower((string) ($chargeDetails['bank'] ?? 'bca'));
 
         $payload = [
             'payment_type' => $paymentType,
@@ -139,7 +140,27 @@ class MidtransGatewayProvisioningClient
         if ($paymentType === 'qris') {
             $payload['qris'] = ['acquirer' => 'gopay'];
         } elseif ($paymentType === 'bank_transfer') {
-            $payload['bank_transfer'] = ['bank' => $chargeDetails['bank'] ?? 'bca'];
+            if ($bank === 'mandiri') {
+                $payload['payment_type'] = 'echannel';
+                $payload['echannel'] = [
+                    'bill_info1' => 'Payment For:',
+                    'bill_info2' => 'UDEV Sandbox',
+                ];
+            } elseif ($bank === 'permata') {
+                $payload['bank_transfer'] = ['bank' => 'permata'];
+            } else {
+                $payload['bank_transfer'] = ['bank' => $bank];
+            }
+        } elseif ($paymentType === 'echannel') {
+            $payload['echannel'] = [
+                'bill_info1' => 'Payment For:',
+                'bill_info2' => 'UDEV Sandbox',
+            ];
+        } elseif ($paymentType === 'gopay') {
+            $payload['gopay'] = [
+                'enable_callback' => true,
+                'callback_url' => 'https://udev.udumbara.my.id/payment-result',
+            ];
         }
 
         $response = Http::withBasicAuth(trim($serverKey), '')
@@ -155,9 +176,22 @@ class MidtransGatewayProvisioningClient
         $checkoutUrl = null;
         if (! empty($body['actions'])) {
             foreach ($body['actions'] as $action) {
-                if (($action['name'] ?? '') === 'generate-qr-code') {
-                    $checkoutUrl = $action['url'] ?? null;
+                if (($action['name'] ?? '') === 'generate-qr-code' || ($action['name'] ?? '') === 'deeplink-redirect') {
+                    $checkoutUrl = $action['url'] ?? $checkoutUrl;
                 }
+            }
+        }
+
+        $vaNumbers = $body['va_numbers'] ?? null;
+        $permataVaNumber = $body['permata_va_number'] ?? null;
+        $billKey = $body['bill_key'] ?? null;
+        $billerCode = $body['biller_code'] ?? null;
+
+        if (empty($vaNumbers)) {
+            if (! empty($permataVaNumber)) {
+                $vaNumbers = [['bank' => 'permata', 'va_number' => $permataVaNumber]];
+            } elseif (! empty($billKey)) {
+                $vaNumbers = [['bank' => 'mandiri', 'va_number' => $billKey, 'biller_code' => $billerCode]];
             }
         }
 
@@ -168,11 +202,15 @@ class MidtransGatewayProvisioningClient
                 'order_id' => $orderId,
                 'transaction_id' => $body['transaction_id'] ?? null,
                 'gross_amount' => $amount,
-                'payment_type' => $paymentType,
+                'payment_type' => $body['payment_type'] ?? $paymentType,
+                'bank' => $bank,
                 'transaction_status' => $body['transaction_status'] ?? 'pending',
                 'qr_string' => $qrString,
                 'checkout_url' => $checkoutUrl,
-                'va_numbers' => $body['va_numbers'] ?? null,
+                'va_numbers' => $vaNumbers,
+                'permata_va_number' => $permataVaNumber,
+                'bill_key' => $billKey,
+                'biller_code' => $billerCode,
                 'raw_response' => $body,
                 'created_at' => now()->format('Y-m-d H:i:s'),
             ],

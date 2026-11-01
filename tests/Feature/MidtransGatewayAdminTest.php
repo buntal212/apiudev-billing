@@ -205,6 +205,292 @@ class MidtransGatewayAdminTest extends TestCase
             ->assertJsonPath('data.transaction_status', 'settlement');
     }
 
+    public function test_admin_can_simulate_bca_virtual_account_with_exact_payload(): void
+    {
+        Sanctum::actingAs($this->admin, ['admin:access']);
+
+        $this->putJson('/api/v1/admin/midtrans-gateway/configuration', [
+            'merchant_code' => 'udev-central',
+            'server_key' => 'SB-Mid-server-testbca',
+            'is_active' => true,
+        ]);
+
+        Http::fake([
+            'https://api.sandbox.midtrans.com/v2/charge' => Http::response([
+                'status_code' => '201',
+                'status_message' => 'Success, BCA transaction created',
+                'transaction_id' => 'midtrans-trans-bca',
+                'order_id' => 'ORDER-BCA-001',
+                'gross_amount' => '20000.00',
+                'payment_type' => 'bank_transfer',
+                'transaction_status' => 'pending',
+                'va_numbers' => [
+                    ['bank' => 'bca', 'va_number' => '9880123456789012'],
+                ],
+            ], 201),
+        ]);
+
+        $chargeRes = $this->postJson('/api/v1/admin/midtrans-gateway/sandbox-payment', [
+            'merchant_code' => 'udev-central',
+            'order_id' => 'ORDER-BCA-001',
+            'amount' => 20000,
+            'payment_type' => 'bank_transfer',
+            'bank' => 'bca',
+        ]);
+
+        $chargeRes->assertOk()
+            ->assertJsonPath('status', 'success')
+            ->assertJsonPath('data.payment_type', 'bank_transfer')
+            ->assertJsonPath('data.bank', 'bca')
+            ->assertJsonPath('data.va_numbers.0.bank', 'bca')
+            ->assertJsonPath('data.va_numbers.0.va_number', '9880123456789012');
+
+        Http::assertSent(function ($request) {
+            return $request['payment_type'] === 'bank_transfer'
+                && ($request['bank_transfer']['bank'] ?? '') === 'bca';
+        });
+    }
+
+    public function test_admin_can_simulate_bni_virtual_account_with_exact_payload(): void
+    {
+        Sanctum::actingAs($this->admin, ['admin:access']);
+
+        $this->putJson('/api/v1/admin/midtrans-gateway/configuration', [
+            'merchant_code' => 'udev-central',
+            'server_key' => 'SB-Mid-server-testbni',
+            'is_active' => true,
+        ]);
+
+        Http::fake([
+            'https://api.sandbox.midtrans.com/v2/charge' => Http::response([
+                'status_code' => '201',
+                'status_message' => 'Success, BNI transaction created',
+                'transaction_id' => 'midtrans-trans-bni',
+                'order_id' => 'ORDER-BNI-001',
+                'gross_amount' => '25000.00',
+                'payment_type' => 'bank_transfer',
+                'transaction_status' => 'pending',
+                'va_numbers' => [
+                    ['bank' => 'bni', 'va_number' => '9880987654321098'],
+                ],
+            ], 201),
+        ]);
+
+        $chargeRes = $this->postJson('/api/v1/admin/midtrans-gateway/sandbox-payment', [
+            'merchant_code' => 'udev-central',
+            'order_id' => 'ORDER-BNI-001',
+            'amount' => 25000,
+            'payment_type' => 'bank_transfer',
+            'bank' => 'bni',
+        ]);
+
+        $chargeRes->assertOk()
+            ->assertJsonPath('status', 'success')
+            ->assertJsonPath('data.bank', 'bni')
+            ->assertJsonPath('data.va_numbers.0.bank', 'bni')
+            ->assertJsonPath('data.va_numbers.0.va_number', '9880987654321098');
+
+        Http::assertSent(function ($request) {
+            return $request['payment_type'] === 'bank_transfer'
+                && ($request['bank_transfer']['bank'] ?? '') === 'bni';
+        });
+    }
+
+    public function test_admin_can_simulate_bri_virtual_account_with_exact_payload(): void
+    {
+        Sanctum::actingAs($this->admin, ['admin:access']);
+
+        $this->putJson('/api/v1/admin/midtrans-gateway/configuration', [
+            'merchant_code' => 'udev-central',
+            'server_key' => 'SB-Mid-server-testbri',
+            'is_active' => true,
+        ]);
+
+        Http::fake([
+            'https://api.sandbox.midtrans.com/v2/charge' => Http::response([
+                'status_code' => '201',
+                'status_message' => 'Success, BRI transaction created',
+                'transaction_id' => 'midtrans-trans-bri',
+                'order_id' => 'ORDER-BRI-001',
+                'gross_amount' => '30000.00',
+                'payment_type' => 'bank_transfer',
+                'transaction_status' => 'pending',
+                'va_numbers' => [
+                    ['bank' => 'bri', 'va_number' => '9880112233445566'],
+                ],
+            ], 201),
+        ]);
+
+        $chargeRes = $this->postJson('/api/v1/admin/midtrans-gateway/sandbox-payment', [
+            'merchant_code' => 'udev-central',
+            'order_id' => 'ORDER-BRI-001',
+            'amount' => 30000,
+            'payment_type' => 'bank_transfer',
+            'bank' => 'bri',
+        ]);
+
+        $chargeRes->assertOk()
+            ->assertJsonPath('status', 'success')
+            ->assertJsonPath('data.bank', 'bri')
+            ->assertJsonPath('data.va_numbers.0.bank', 'bri')
+            ->assertJsonPath('data.va_numbers.0.va_number', '9880112233445566');
+
+        Http::assertSent(function ($request) {
+            return $request['payment_type'] === 'bank_transfer'
+                && ($request['bank_transfer']['bank'] ?? '') === 'bri';
+        });
+    }
+
+    public function test_admin_can_simulate_permata_virtual_account_with_exact_payload(): void
+    {
+        Sanctum::actingAs($this->admin, ['admin:access']);
+
+        $this->putJson('/api/v1/admin/midtrans-gateway/configuration', [
+            'merchant_code' => 'udev-central',
+            'server_key' => 'SB-Mid-server-testpermata',
+            'is_active' => true,
+        ]);
+
+        Http::fake([
+            'https://api.sandbox.midtrans.com/v2/charge' => Http::response([
+                'status_code' => '201',
+                'status_message' => 'Success, Permata transaction created',
+                'transaction_id' => 'midtrans-trans-permata',
+                'order_id' => 'ORDER-PERMATA-001',
+                'gross_amount' => '35000.00',
+                'payment_type' => 'bank_transfer',
+                'transaction_status' => 'pending',
+                'permata_va_number' => '8562000087654321',
+            ], 201),
+        ]);
+
+        $chargeRes = $this->postJson('/api/v1/admin/midtrans-gateway/sandbox-payment', [
+            'merchant_code' => 'udev-central',
+            'order_id' => 'ORDER-PERMATA-001',
+            'amount' => 35000,
+            'payment_type' => 'bank_transfer',
+            'bank' => 'permata',
+        ]);
+
+        $chargeRes->assertOk()
+            ->assertJsonPath('status', 'success')
+            ->assertJsonPath('data.bank', 'permata')
+            ->assertJsonPath('data.permata_va_number', '8562000087654321')
+            ->assertJsonPath('data.va_numbers.0.bank', 'permata')
+            ->assertJsonPath('data.va_numbers.0.va_number', '8562000087654321');
+
+        Http::assertSent(function ($request) {
+            return $request['payment_type'] === 'bank_transfer'
+                && ($request['bank_transfer']['bank'] ?? '') === 'permata';
+        });
+    }
+
+    public function test_admin_can_simulate_mandiri_bill_payment_with_exact_payload(): void
+    {
+        Sanctum::actingAs($this->admin, ['admin:access']);
+
+        $this->putJson('/api/v1/admin/midtrans-gateway/configuration', [
+            'merchant_code' => 'udev-central',
+            'server_key' => 'SB-Mid-server-testmandiri',
+            'is_active' => true,
+        ]);
+
+        Http::fake([
+            'https://api.sandbox.midtrans.com/v2/charge' => Http::response([
+                'status_code' => '201',
+                'status_message' => 'Success, Mandiri Bill transaction created',
+                'transaction_id' => 'midtrans-trans-mandiri',
+                'order_id' => 'ORDER-MANDIRI-001',
+                'gross_amount' => '40000.00',
+                'payment_type' => 'echannel',
+                'transaction_status' => 'pending',
+                'biller_code' => '70012',
+                'bill_key' => '990000000123',
+            ], 201),
+        ]);
+
+        $chargeRes = $this->postJson('/api/v1/admin/midtrans-gateway/sandbox-payment', [
+            'merchant_code' => 'udev-central',
+            'order_id' => 'ORDER-MANDIRI-001',
+            'amount' => 40000,
+            'payment_type' => 'bank_transfer',
+            'bank' => 'mandiri',
+        ]);
+
+        $chargeRes->assertOk()
+            ->assertJsonPath('status', 'success')
+            ->assertJsonPath('data.payment_type', 'echannel')
+            ->assertJsonPath('data.bank', 'mandiri')
+            ->assertJsonPath('data.biller_code', '70012')
+            ->assertJsonPath('data.bill_key', '990000000123')
+            ->assertJsonPath('data.va_numbers.0.bank', 'mandiri')
+            ->assertJsonPath('data.va_numbers.0.va_number', '990000000123');
+
+        Http::assertSent(function ($request) {
+            return $request['payment_type'] === 'echannel'
+                && isset($request['echannel']['bill_info1']);
+        });
+    }
+
+    public function test_admin_can_simulate_gopay_with_exact_payload(): void
+    {
+        Sanctum::actingAs($this->admin, ['admin:access']);
+
+        $this->putJson('/api/v1/admin/midtrans-gateway/configuration', [
+            'merchant_code' => 'udev-central',
+            'server_key' => 'SB-Mid-server-testgopay',
+            'is_active' => true,
+        ]);
+
+        Http::fake([
+            'https://api.sandbox.midtrans.com/v2/charge' => Http::response([
+                'status_code' => '201',
+                'status_message' => 'Success, GoPay transaction created',
+                'transaction_id' => 'midtrans-trans-gopay',
+                'order_id' => 'ORDER-GOPAY-001',
+                'gross_amount' => '12000.00',
+                'payment_type' => 'gopay',
+                'transaction_status' => 'pending',
+                'actions' => [
+                    ['name' => 'deeplink-redirect', 'url' => 'https://simulator.sandbox.midtrans.com/gopay/partner/app/payment-pin?id=123'],
+                ],
+            ], 201),
+        ]);
+
+        $chargeRes = $this->postJson('/api/v1/admin/midtrans-gateway/sandbox-payment', [
+            'merchant_code' => 'udev-central',
+            'order_id' => 'ORDER-GOPAY-001',
+            'amount' => 12000,
+            'payment_type' => 'gopay',
+        ]);
+
+        $chargeRes->assertOk()
+            ->assertJsonPath('status', 'success')
+            ->assertJsonPath('data.payment_type', 'gopay')
+            ->assertJsonPath('data.checkout_url', 'https://simulator.sandbox.midtrans.com/gopay/partner/app/payment-pin?id=123');
+
+        Http::assertSent(function ($request) {
+            return $request['payment_type'] === 'gopay'
+                && ($request['gopay']['enable_callback'] ?? false) === true;
+        });
+    }
+
+    public function test_sandbox_payment_rejects_unsupported_bank(): void
+    {
+        Sanctum::actingAs($this->admin, ['admin:access']);
+
+        $chargeRes = $this->postJson('/api/v1/admin/midtrans-gateway/sandbox-payment', [
+            'merchant_code' => 'udev-central',
+            'order_id' => 'ORDER-INVALID-001',
+            'amount' => 10000,
+            'payment_type' => 'bank_transfer',
+            'bank' => 'cimb_unsupported',
+        ]);
+
+        $chargeRes->assertStatus(422)
+            ->assertJsonValidationErrors(['bank']);
+    }
+
     public function test_admin_can_view_audits_and_dashboard_summary(): void
     {
         Sanctum::actingAs($this->admin, ['admin:access']);
