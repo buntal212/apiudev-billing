@@ -15,15 +15,28 @@ use RuntimeException;
 
 class CheckoutService
 {
+    private MidtransGatewayProvisioningClient $midtransClient;
+    private MidtransSecretStore $midtransSecretStore;
+
     public function __construct(
         private DanaGatewayClient $gatewayClient,
         private DanaGatewayMerchantResolver $merchantResolver,
         private SubscriptionBillingMerchantResolver $subscriptionMerchantResolver,
-    ) {}
+        ?MidtransGatewayProvisioningClient $midtransClient = null,
+        ?MidtransSecretStore $midtransSecretStore = null,
+    ) {
+        $this->midtransClient = $midtransClient ?? app(MidtransGatewayProvisioningClient::class);
+        $this->midtransSecretStore = $midtransSecretStore ?? app(MidtransSecretStore::class);
+    }
 
-    public function startCheckout(Invoice $invoice, string $requestIdempotencyKey, string $paymentMethod = 'dana_wallet'): PaymentAttempt
-    {
-        $outbox = $this->prepareCheckout($invoice, $requestIdempotencyKey, $paymentMethod);
+    public function startCheckout(
+        Invoice $invoice,
+        string $requestIdempotencyKey,
+        string $paymentMethod = 'dana_wallet',
+        ?string $provider = null,
+        ?string $bank = null,
+    ): PaymentAttempt {
+        $outbox = $this->prepareCheckout($invoice, $requestIdempotencyKey, $paymentMethod, $provider, $bank);
         $this->dispatch($outbox->getKey());
 
         return PaymentAttempt::query()->findOrFail($outbox->payment_attempt_id);
@@ -71,15 +84,22 @@ class CheckoutService
         return $outboxIds->count();
     }
 
-    private function prepareCheckout(Invoice $invoice, string $requestIdempotencyKey, string $paymentMethod = 'dana_wallet'): CheckoutOutboxMessage
-    {
+    private function prepareCheckout(
+        Invoice $invoice,
+        string $requestIdempotencyKey,
+        string $paymentMethod = 'dana_wallet',
+        ?string $provider = null,
+        ?string $bank = null,
+    ): CheckoutOutboxMessage {
         try {
-            return DB::transaction(function () use ($invoice, $requestIdempotencyKey, $paymentMethod): CheckoutOutboxMessage {
+            return DB::transaction(function () use ($invoice, $requestIdempotencyKey, $paymentMethod, $provider, $bank): CheckoutOutboxMessage {
                 $lockedInvoice = Invoice::query()
                     ->with('plan')
                     ->lockForUpdate()
                     ->findOrFail($invoice->getKey());
                 $this->assertInvoiceCanStartCheckout($lockedInvoice);
+
+                $resolvedProvider = $this->resolveProvider($lockedInvoice, $paymentMethod, $provider);
 
                 $activeAttempt = PaymentAttempt::query()
                     ->where('invoice_id', $lockedInvoice->getKey())
@@ -95,7 +115,8 @@ class CheckoutService
                             'completed_at' => now(),
                         ]);
                         $activeAttempt = null;
-                    } elseif (($activeAttempt->metadata['payment_method'] ?? 'dana_wallet') !== $paymentMethod) {
+                    } elseif (($activeAttempt->metadata['payment_method'] ?? 'dana_wallet') !== $paymentMethod
+                        || strtolower((string) $activeAttempt->provider) !== $resolvedProvider) {
                         $activeAttempt->update([
                             'status' => PaymentAttempt::StatusCancelled,
                             'completed_at' => now(),
@@ -111,15 +132,73 @@ class CheckoutService
                         ->firstOrFail();
                 }
 
-                $environment = (string) config('services.dana_gateway.environment', 'sandbox');
-                $recipientMerchantCode = $this->subscriptionMerchantResolver
-                    ->resolveNewCheckoutMerchant($environment);
-
                 $attemptNumber = (int) PaymentAttempt::query()
                     ->where('invoice_id', $lockedInvoice->getKey())
                     ->lockForUpdate()
                     ->max('attempt_number') + 1;
                 $merchantReference = $lockedInvoice->invoice_number.'-A'.$attemptNumber;
+
+                if ($resolvedProvider === 'midtrans') {
+                    $appId = $lockedInvoice->plan?->application_id ?? $lockedInvoice->customer?->application_id;
+                    $mapping = ApplicationPaymentGateway::query()
+                        ->where('application_id', $appId)
+                        ->where('provider', 'midtrans')
+                        ->where('environment', 'sandbox')
+                        ->where('is_active', true)
+                        ->first();
+
+                    if ($mapping === null) {
+                        throw ValidationException::withMessages([
+                            'invoice' => ['Aplikasi invoice belum memiliki mapping merchant Midtrans Sandbox yang aktif.'],
+                        ]);
+                    }
+
+                    $recipientMerchantCode = $mapping->gateway_merchant_code;
+                    $credential = \App\Models\MidtransMerchantCredential::query()
+                        ->where('merchant_code', $recipientMerchantCode)
+                        ->where('environment', 'sandbox')
+                        ->where('is_active', true)
+                        ->first();
+
+                    if ($credential === null || empty($credential->encrypted_server_key)) {
+                        throw ValidationException::withMessages([
+                            'invoice' => ['Merchant Midtrans penerima belum dikonfigurasi atau tidak aktif.'],
+                        ]);
+                    }
+
+                    $attempt = PaymentAttempt::query()->create([
+                        'invoice_id' => $lockedInvoice->getKey(),
+                        'attempt_number' => $attemptNumber,
+                        'provider' => 'midtrans',
+                        'merchant_reference' => $merchantReference,
+                        'gateway_merchant_code' => $recipientMerchantCode,
+                        'gateway_environment' => 'sandbox',
+                        'amount' => $lockedInvoice->amount,
+                        'currency' => $lockedInvoice->currency,
+                        'status' => PaymentAttempt::StatusInitiated,
+                        'idempotency_key' => 'checkout:'.$lockedInvoice->getKey().':'.$requestIdempotencyKey,
+                        'requested_at' => now(),
+                        'metadata' => [
+                            'invoice_number' => $lockedInvoice->invoice_number,
+                            'application_customer_id' => $lockedInvoice->application_customer_id,
+                            'subscription_id' => $lockedInvoice->subscription_id,
+                            'application_id' => $appId,
+                            'payment_method' => $paymentMethod,
+                            'bank' => $bank,
+                            'gateway_provider' => 'midtrans',
+                        ],
+                    ]);
+
+                    return CheckoutOutboxMessage::query()->create([
+                        'payment_attempt_id' => $attempt->getKey(),
+                        'idempotency_key' => 'midtrans-checkout-attempt-'.$attempt->getKey(),
+                        'status' => CheckoutOutboxMessage::StatusPending,
+                    ]);
+                }
+
+                $environment = (string) config('services.dana_gateway.environment', 'sandbox');
+                $recipientMerchantCode = $this->subscriptionMerchantResolver
+                    ->resolveNewCheckoutMerchant($environment);
 
                 $attempt = PaymentAttempt::query()->create([
                     'invoice_id' => $lockedInvoice->getKey(),
@@ -187,8 +266,14 @@ class CheckoutService
             return;
         }
 
+        $attempt = $claimed->paymentAttempt;
+        if (strtolower((string) $attempt->provider) === 'midtrans') {
+            $this->dispatchMidtrans($claimed);
+
+            return;
+        }
+
         try {
-            $attempt = $claimed->paymentAttempt;
             $merchant = $this->merchantResolver->resolve(
                 $attempt->gateway_merchant_code,
                 $attempt->gateway_environment,
@@ -361,6 +446,233 @@ class CheckoutService
         $this->amountMinor($invoice->getRawOriginal('amount'));
     }
 
+    private function resolveProvider(Invoice $invoice, string $paymentMethod, ?string $provider): string
+    {
+        if ($provider !== null && in_array(strtolower($provider), ['dana', 'midtrans'], true)) {
+            return strtolower($provider);
+        }
+
+        if (in_array($paymentMethod, ['gopay', 'bank_transfer', 'va_bca', 'va_bni', 'va_permata', 'va_mandiri', 'echannel'], true)) {
+            return 'midtrans';
+        }
+
+        if (in_array($paymentMethod, ['dana_wallet', 'va_pani', 'va_cimb', 'va_btpn'], true)) {
+            return 'dana';
+        }
+
+        $appId = $invoice->plan?->application_id ?? $invoice->customer?->application_id;
+        if ($appId !== null) {
+            $midtransMapping = ApplicationPaymentGateway::query()
+                ->where('application_id', $appId)
+                ->where('provider', 'midtrans')
+                ->where('environment', 'sandbox')
+                ->where('is_active', true)
+                ->first();
+
+            $danaMapping = ApplicationPaymentGateway::query()
+                ->where('application_id', $appId)
+                ->where('provider', 'dana')
+                ->where('environment', 'sandbox')
+                ->where('is_active', true)
+                ->first();
+
+            if ($midtransMapping !== null && $danaMapping === null) {
+                return 'midtrans';
+            }
+        }
+
+        return 'dana';
+    }
+
+    private function dispatchMidtrans(CheckoutOutboxMessage $claimed): void
+    {
+        try {
+            $attempt = $claimed->paymentAttempt;
+            $credential = \App\Models\MidtransMerchantCredential::query()
+                ->where('merchant_code', $attempt->gateway_merchant_code)
+                ->where('environment', 'sandbox')
+                ->first();
+
+            if ($credential === null || empty($credential->encrypted_server_key)) {
+                $this->markDispatchFailure($claimed, false, 'merchant_not_configured');
+
+                return;
+            }
+
+            $serverKey = $credential->getServerKey($this->midtransSecretStore);
+            if (empty($serverKey)) {
+                $this->markDispatchFailure($claimed, false, 'merchant_not_configured');
+
+                return;
+            }
+            $method = $attempt->metadata['payment_method'] ?? 'qris';
+            $bank = $attempt->metadata['bank'] ?? null;
+
+            $paymentType = 'qris';
+            if ($method === 'gopay') {
+                $paymentType = 'gopay';
+            } elseif ($method === 'bank_transfer') {
+                $paymentType = ($bank === 'mandiri' || $bank === 'echannel') ? 'echannel' : 'bank_transfer';
+            } elseif (str_starts_with($method, 'va_')) {
+                $bankName = substr($method, 3);
+                if ($bankName === 'mandiri') {
+                    $paymentType = 'echannel';
+                    $bank = 'mandiri';
+                } else {
+                    $paymentType = 'bank_transfer';
+                    $bank = $bankName;
+                }
+            } elseif ($method === 'echannel') {
+                $paymentType = 'echannel';
+                $bank = 'mandiri';
+            }
+
+            $amountMinor = $this->amountMinor((string) $attempt->getRawOriginal('amount'));
+            $chargeResult = $this->midtransClient->createSandboxCharge(
+                merchantCode: $attempt->gateway_merchant_code,
+                serverKey: $serverKey,
+                chargeDetails: [
+                    'order_id' => $attempt->merchant_reference,
+                    'amount' => $amountMinor,
+                    'payment_type' => $paymentType,
+                    'bank' => $bank ?: 'bca',
+                    'customer_name' => $attempt->invoice->customer?->name ?? 'Pelanggan UDEV',
+                    'customer_email' => $attempt->invoice->customer?->email ?? 'sandbox@udumbara.my.id',
+                ],
+                environment: 'sandbox',
+            );
+
+            if (($chargeResult['status'] ?? '') !== 'success') {
+                $this->markDispatchFailure($claimed, false, 'gateway_response_invalid');
+
+                return;
+            }
+
+            $this->storeMidtransCheckout($claimed, $chargeResult['data'] ?? [], $amountMinor, $paymentType, $bank);
+        } catch (ConnectionException) {
+            $this->markDispatchFailure($claimed, true, 'network_timeout');
+        } catch (\Throwable) {
+            $this->markDispatchFailure($claimed, false, 'checkout_processing_failed');
+        }
+    }
+
+    /** @param array<string, mixed> $gatewayData */
+    private function storeMidtransCheckout(
+        CheckoutOutboxMessage $claimed,
+        array $gatewayData,
+        int $amountMinor,
+        string $paymentType,
+        ?string $bank,
+    ): void {
+        $transactionId = (string) ($gatewayData['transaction_id'] ?? $gatewayData['order_id'] ?? '');
+        $orderId = (string) ($gatewayData['order_id'] ?? '');
+        $qrString = $gatewayData['qr_string'] ?? null;
+        $checkoutUrl = $gatewayData['checkout_url'] ?? null;
+        $vaNumbers = $gatewayData['va_numbers'] ?? [];
+        $permataVaNumber = $gatewayData['permata_va_number'] ?? null;
+        $billKey = $gatewayData['bill_key'] ?? null;
+        $billerCode = $gatewayData['biller_code'] ?? null;
+
+        $paymentCode = null;
+        if (! empty($vaNumbers) && is_array($vaNumbers)) {
+            $paymentCode = $vaNumbers[0]['va_number'] ?? null;
+            if (! empty($vaNumbers[0]['bank'])) {
+                $bank = $vaNumbers[0]['bank'];
+            }
+        }
+        if ($paymentCode === null && ! empty($permataVaNumber)) {
+            $paymentCode = $permataVaNumber;
+            $bank = 'permata';
+        }
+        if ($paymentCode === null && ! empty($billKey)) {
+            $paymentCode = $billKey;
+            $bank = 'mandiri';
+        }
+        if ($paymentCode === null && ! empty($qrString)) {
+            $paymentCode = $qrString;
+        }
+
+        $instruction = null;
+        if ($paymentType === 'qris') {
+            $instruction = [
+                'type' => 'qris_mpm',
+                'qr_content' => $qrString,
+                'message' => 'Pindai kode QRIS Midtrans Sandbox menggunakan aplikasi e-wallet atau mobile banking.',
+            ];
+        } elseif (in_array($paymentType, ['bank_transfer', 'echannel'], true)) {
+            $instruction = [
+                'type' => 'virtual_account',
+                'bank' => strtoupper($bank ?: 'BCA'),
+                'payment_code' => $paymentCode,
+                'bill_key' => $billKey,
+                'biller_code' => $billerCode,
+                'message' => 'Bayar melalui Virtual Account '.strtoupper($bank ?: 'BCA').' sebelum batas waktu.',
+            ];
+        } elseif ($paymentType === 'gopay') {
+            $instruction = [
+                'type' => 'gopay',
+                'checkout_url' => $checkoutUrl,
+                'message' => 'Lanjutkan pembayaran di aplikasi GoPay.',
+            ];
+        }
+
+        $checkoutExpiresAt = now()->toImmutable()->addHours(24);
+
+        DB::transaction(function () use (
+            $claimed,
+            $transactionId,
+            $orderId,
+            $checkoutUrl,
+            $paymentCode,
+            $instruction,
+            $qrString,
+            $billKey,
+            $billerCode,
+            $bank,
+            $paymentType,
+        ): void {
+            $outbox = CheckoutOutboxMessage::query()->lockForUpdate()->findOrFail($claimed->getKey());
+            $attempt = PaymentAttempt::query()->lockForUpdate()->findOrFail($outbox->payment_attempt_id);
+            $invoice = Invoice::query()->lockForUpdate()->findOrFail($attempt->invoice_id);
+
+            $this->assertInvoiceCanStartCheckout($invoice);
+
+            $currentMetadata = is_array($attempt->metadata) ? $attempt->metadata : [];
+            $currentMetadata['order_id'] = $orderId;
+            $currentMetadata['transaction_id'] = $transactionId;
+            $currentMetadata['payment_code'] = $paymentCode;
+            $currentMetadata['payment_instruction'] = $instruction;
+            if ($qrString !== null) {
+                $currentMetadata['qr_content'] = $qrString;
+            }
+            if ($billKey !== null) {
+                $currentMetadata['bill_key'] = $billKey;
+                $currentMetadata['biller_code'] = $billerCode;
+            }
+            if ($bank !== null) {
+                $currentMetadata['bank'] = $bank;
+            }
+            $currentMetadata['payment_type'] = $paymentType;
+
+            $hasValidCheckoutUrl = is_string($checkoutUrl) && filter_var($checkoutUrl, FILTER_VALIDATE_URL);
+
+            $attempt->update([
+                'gateway_payment_id' => $transactionId ?: $orderId,
+                'checkout_url' => $hasValidCheckoutUrl ? $checkoutUrl : null,
+                'checkout_expires_at' => now()->toImmutable()->addHours(24),
+                'status' => PaymentAttempt::StatusPending,
+                'metadata' => $currentMetadata,
+            ]);
+
+            $outbox->update([
+                'status' => CheckoutOutboxMessage::StatusCompleted,
+                'locked_at' => null,
+                'available_at' => null,
+                'error_code' => null,
+            ]);
+        });
+    }
+
     private function assertRetryAllowed(
         PaymentAttempt $attempt,
         Invoice $invoice,
@@ -372,7 +684,8 @@ class CheckoutService
             ]);
         }
 
-        if (strtolower((string) $attempt->provider) !== 'dana'
+        $provider = strtolower((string) $attempt->provider);
+        if (! in_array($provider, ['dana', 'midtrans'], true)
             || strtolower((string) $attempt->gateway_environment) !== 'sandbox'
             || ! is_string($attempt->gateway_merchant_code)
             || $attempt->gateway_merchant_code === ''
@@ -395,7 +708,29 @@ class CheckoutService
         }
 
         $metadata = is_array($attempt->metadata) ? $attempt->metadata : [];
-        if ($this->subscriptionMerchantResolver->isCentralAttempt($metadata)) {
+        if ($provider === 'midtrans') {
+            if ($invoice->plan === null) {
+                throw ValidationException::withMessages([
+                    'payment_attempt' => ['Paket invoice tidak ditemukan untuk memvalidasi merchant.'],
+                ]);
+            }
+
+            $mapping = ApplicationPaymentGateway::query()
+                ->where('application_id', $invoice->plan->application_id)
+                ->where('provider', 'midtrans')
+                ->where('environment', 'sandbox')
+                ->where('gateway_merchant_code', $attempt->gateway_merchant_code)
+                ->where('is_active', true)
+                ->first();
+
+            if ($mapping === null || $mapping->environment !== $attempt->gateway_environment) {
+                throw ValidationException::withMessages([
+                    'payment_attempt' => ['Mapping merchant checkout historis tidak lagi tersedia atau tidak cocok.'],
+                ]);
+            }
+
+            $expectedOutboxKey = 'midtrans-checkout-attempt-'.$attempt->getKey();
+        } elseif ($this->subscriptionMerchantResolver->isCentralAttempt($metadata)) {
             $configuredMerchant = $this->subscriptionMerchantResolver
                 ->resolveNewCheckoutMerchant('sandbox');
 
@@ -404,6 +739,7 @@ class CheckoutService
                     'payment_attempt' => ['Merchant penerima UDEV untuk checkout ini tidak lagi cocok dengan konfigurasi Sandbox.'],
                 ]);
             }
+            $expectedOutboxKey = 'dana-checkout-attempt-'.$attempt->getKey();
         } elseif ($invoice->plan === null) {
             throw ValidationException::withMessages([
                 'payment_attempt' => ['Paket invoice tidak ditemukan untuk memvalidasi merchant.'],
@@ -424,9 +760,10 @@ class CheckoutService
                     'payment_attempt' => ['Mapping merchant checkout historis tidak lagi tersedia atau tidak cocok.'],
                 ]);
             }
+            $expectedOutboxKey = 'dana-checkout-attempt-'.$attempt->getKey();
         }
 
-        if ($outbox === null || $outbox->idempotency_key !== 'dana-checkout-attempt-'.$attempt->getKey()) {
+        if ($outbox === null || $outbox->idempotency_key !== $expectedOutboxKey) {
             throw ValidationException::withMessages([
                 'payment_attempt' => ['Outbox checkout tidak ditemukan atau tidak valid.'],
             ]);

@@ -18,7 +18,9 @@ class InvoiceCheckoutController extends Controller
         $this->authorize('update', $invoice);
 
         $paymentMethod = (string) ($request->validated('payment_method') ?? 'dana_wallet');
-        $attempt = $checkoutService->startCheckout($invoice, $request->validated('idempotency_key'), $paymentMethod);
+        $provider = $request->validated('provider');
+        $bank = $request->validated('bank');
+        $attempt = $checkoutService->startCheckout($invoice, $request->validated('idempotency_key'), $paymentMethod, $provider, $bank);
         $outbox = CheckoutOutboxMessage::query()
             ->where('payment_attempt_id', $attempt->getKey())
             ->first();

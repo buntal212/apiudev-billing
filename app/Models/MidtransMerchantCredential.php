@@ -48,4 +48,25 @@ class MidtransMerchantCredential extends Model
 
         return substr($key, 0, 8).'****'.substr($key, -4);
     }
+
+    /**
+     * Decrypt and return server key using secret store.
+     */
+    public function getServerKey(?\App\Services\MidtransSecretStore $store = null): ?string
+    {
+        if (empty($this->encrypted_server_key) || empty($this->server_key_nonce) || empty($this->server_key_tag)) {
+            return null;
+        }
+
+        $store = $store ?? app(\App\Services\MidtransSecretStore::class);
+
+        return $store->decryptSecret(
+            $this->encrypted_server_key,
+            $this->server_key_nonce,
+            $this->server_key_tag,
+            $this->merchant_code,
+            'server_key',
+            $this->key_version ?? 'v1',
+        );
+    }
 }

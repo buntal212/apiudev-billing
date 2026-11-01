@@ -15,12 +15,20 @@ use Throwable;
 
 class PaymentReconciliationService
 {
+    private readonly MidtransGatewayProvisioningClient $midtransClient;
+    private readonly MidtransSecretStore $midtransSecretStore;
+
     public function __construct(
         private readonly DanaGatewayClient $gatewayClient,
         private readonly DanaGatewayMerchantResolver $merchantResolver,
         private readonly PaymentAttemptService $paymentAttemptService,
         private readonly InvoiceSettlementService $invoiceSettlementService,
-    ) {}
+        ?MidtransGatewayProvisioningClient $midtransClient = null,
+        ?MidtransSecretStore $midtransSecretStore = null,
+    ) {
+        $this->midtransClient = $midtransClient ?? app(MidtransGatewayProvisioningClient::class);
+        $this->midtransSecretStore = $midtransSecretStore ?? app(MidtransSecretStore::class);
+    }
 
     public function reconcile(PaymentAttempt $paymentAttempt): ReconciliationResult
     {
@@ -35,6 +43,10 @@ class PaymentReconciliationService
         }
 
         try {
+            if (strtolower((string) $attempt->provider) === 'midtrans') {
+                return $this->reconcileMidtrans($attempt, $run);
+            }
+
             $merchant = $this->merchantResolver->resolve(
                 (string) $attempt->gateway_merchant_code,
                 (string) $attempt->gateway_environment,
@@ -61,7 +73,7 @@ class PaymentReconciliationService
         $limit = max(1, min(100, $limit ?? (int) config('services.dana_reconciliation.batch_limit', 25)));
         $now = now()->toImmutable();
         $baseQuery = fn (): Builder => PaymentAttempt::query()
-            ->whereRaw('LOWER(provider) = ?', ['dana'])
+            ->whereIn(DB::raw('LOWER(provider)'), ['dana', 'midtrans'])
             ->where('gateway_environment', 'sandbox')
             ->whereNotNull('gateway_payment_id')
             ->whereIn('status', [PaymentAttempt::StatusInitiated, PaymentAttempt::StatusPending]);
@@ -391,9 +403,106 @@ class PaymentReconciliationService
         }
     }
 
+    private function reconcileMidtrans(PaymentAttempt $attempt, PaymentReconciliationRun $run): ReconciliationResult
+    {
+        $credential = \App\Models\MidtransMerchantCredential::query()
+            ->where('merchant_code', $attempt->gateway_merchant_code)
+            ->where('environment', 'sandbox')
+            ->first();
+
+        if ($credential === null || empty($credential->encrypted_server_key)) {
+            return $this->finishFailed($run, $attempt, 'midtrans_merchant_not_configured');
+        }
+
+        $serverKey = $credential->getServerKey($this->midtransSecretStore);
+        if (empty($serverKey)) {
+            return $this->finishFailed($run, $attempt, 'midtrans_merchant_not_configured');
+        }
+        $statusResult = $this->midtransClient->querySandboxStatus(
+            (string) $attempt->gateway_merchant_code,
+            $serverKey,
+            (string) $attempt->merchant_reference,
+            'sandbox',
+        );
+
+        if (($statusResult['status'] ?? '') !== 'success') {
+            return $this->finishRetryable($run, $attempt, 'midtrans_query_failed');
+        }
+
+        $data = $statusResult['data'] ?? [];
+        $raw = $data['raw_response'] ?? [];
+        $transactionStatus = (string) ($data['transaction_status'] ?? 'unknown');
+        $fraudStatus = (string) ($raw['fraud_status'] ?? '');
+        $run->gateway_status = $transactionStatus;
+
+        if (in_array($transactionStatus, ['settlement', 'capture'], true) && in_array($fraudStatus, ['', 'accept'], true)) {
+            $paidAt = ! empty($raw['settlement_time'])
+                ? CarbonImmutable::parse($raw['settlement_time'])
+                : (! empty($raw['transaction_time']) ? CarbonImmutable::parse($raw['transaction_time']) : now()->toImmutable());
+
+            if ($paidAt->isFuture()) {
+                $paidAt = now()->toImmutable();
+            }
+
+            $pendingAttempt = $attempt->status === PaymentAttempt::StatusInitiated
+                ? $this->paymentAttemptService->transitionStatus($attempt, PaymentAttempt::StatusPending)
+                : $attempt;
+
+            $updatedAttempt = $this->paymentAttemptService->transitionStatus(
+                $pendingAttempt,
+                PaymentAttempt::StatusSucceeded,
+                $raw['transaction_id'] ?? $attempt->gateway_payment_id,
+                null,
+                null,
+                $paidAt,
+            );
+
+            $metadata = is_array($updatedAttempt->metadata) ? $updatedAttempt->metadata : [];
+            $metadata['gateway_verification'] = [
+                'provider' => 'midtrans',
+                'gateway_payment_id' => $raw['transaction_id'] ?? $updatedAttempt->gateway_payment_id,
+                'verified_at' => now()->toISOString(),
+                'gateway_paid_at' => $paidAt->toISOString(),
+            ];
+            $updatedAttempt->update(['metadata' => $metadata]);
+
+            $grossAmount = (int) round((float) ($raw['gross_amount'] ?? $attempt->amount));
+            $this->invoiceSettlementService->settle(
+                $updatedAttempt,
+                VerifiedGatewayPayment::paid(
+                    provider: 'midtrans',
+                    gatewayPaymentId: (string) ($raw['transaction_id'] ?? $updatedAttempt->gateway_payment_id),
+                    merchantOrderId: (string) $attempt->merchant_reference,
+                    amountMinor: $grossAmount,
+                    currency: (string) $attempt->currency,
+                    merchantCode: (string) $updatedAttempt->gateway_merchant_code,
+                    environment: (string) $updatedAttempt->gateway_environment,
+                    paidAt: $paidAt,
+                ),
+            );
+
+            return $this->finishRun(
+                $run,
+                $updatedAttempt,
+                PaymentReconciliationRun::StatusPaid,
+                verifiedAt: $paidAt,
+            );
+        }
+
+        if (in_array($transactionStatus, ['expire', 'cancel', 'deny'], true)) {
+            return $this->finishTerminal($run, $attempt, $transactionStatus);
+        }
+
+        if ($transactionStatus === 'pending') {
+            return $this->finishPending($run, $attempt);
+        }
+
+        return $this->finishRetryable($run, $attempt, 'gateway_status_unknown');
+    }
+
     private function isSupported(PaymentAttempt $attempt): bool
     {
-        return strtolower((string) $attempt->provider) === 'dana'
+        return in_array(strtolower((string) $attempt->provider), ['dana', 'midtrans'], true)
             && $attempt->gateway_environment === 'sandbox'
             && is_string($attempt->gateway_payment_id)
             && $attempt->gateway_payment_id !== ''

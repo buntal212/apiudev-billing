@@ -54,6 +54,14 @@ class InvoiceResource extends JsonResource
                 'code' => $this->plan->code,
                 'name' => $this->plan->name,
             ]),
+            'application_payment_gateways' => ($appId = $this->customer?->application_id ?? $this->plan?->application_id)
+                ? \App\Models\ApplicationPaymentGateway::query()
+                    ->where('application_id', $appId)
+                    ->where('environment', 'sandbox')
+                    ->where('is_active', true)
+                    ->get(['id', 'provider', 'gateway_merchant_code', 'is_active'])
+                    ->all()
+                : [],
             'subscription' => $this->whenLoaded('subscription', fn (): ?array => $this->subscription ? [
                 'id' => $this->subscription->id,
                 'status' => $this->subscription->status,

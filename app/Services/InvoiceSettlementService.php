@@ -212,7 +212,7 @@ class InvoiceSettlementService
                 || $lockedInvoice->paid_at === null
                 || $attempt->invoice_id !== $lockedInvoice->getKey()
                 || $attempt->status !== PaymentAttempt::StatusSucceeded
-                || strtolower((string) $attempt->provider) !== 'dana'
+                || ! in_array(strtolower((string) $attempt->provider), ['dana', 'midtrans'], true)
                 || strtolower((string) $attempt->gateway_environment) !== 'sandbox'
                 || $attempt->gateway_payment_id === null
                 || $attempt->merchant_reference === null
@@ -277,8 +277,8 @@ class InvoiceSettlementService
     ): void {
         $this->assertVerificationMatchesAttempt($attempt, $invoice, $verification);
 
-        if ($verification->provider === 'dana' && $verification->environment !== 'sandbox') {
-            $this->reject('gateway_environment_not_allowed', 'Settlement DANA hanya diizinkan pada Sandbox.');
+        if (in_array($verification->provider, ['dana', 'midtrans'], true) && $verification->environment !== 'sandbox') {
+            $this->reject('gateway_environment_not_allowed', 'Settlement '.strtoupper($verification->provider).' hanya diizinkan pada Sandbox.');
         }
 
         $customer = $invoice->customer;

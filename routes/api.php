@@ -24,12 +24,18 @@ use App\Http\Controllers\Api\V1\Integration\IntegrationBillingController;
 use App\Http\Controllers\Api\V1\Integration\IntegrationCustomerController;
 use App\Http\Controllers\Api\V1\Integration\IntegrationReferralController;
 use App\Http\Controllers\Api\V1\Integration\IntegrationSubscriptionPlanController;
+use App\Http\Controllers\Api\V1\MidtransWebhookController;
 use App\Http\Controllers\Api\V1\PaymentResultController;
 use Illuminate\Support\Facades\Route;
 
 Route::get('v1/payment-results/{reference}', [PaymentResultController::class, 'show'])
     ->whereUlid('reference')
     ->middleware('throttle:payment-result');
+
+Route::post('v1/payment-gateways/midtrans/webhook', MidtransWebhookController::class)
+    ->name('payment-gateways.midtrans.webhook');
+Route::post('v1/webhooks/midtrans', MidtransWebhookController::class)
+    ->name('webhooks.midtrans');
 
 Route::prefix('v1/auth')->group(function (): void {
     Route::post('login', [AuthController::class, 'login'])->middleware('throttle:admin-login');
