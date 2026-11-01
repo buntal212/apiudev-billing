@@ -46,31 +46,33 @@ Route::prefix('v1/auth')->group(function (): void {
     });
 });
 
-Route::prefix('v1/integrations')
-    ->middleware(['integration.auth', 'integration.global', 'throttle:integration-api'])
-    ->group(function (): void {
-        Route::get('subscription-plans', [IntegrationSubscriptionPlanController::class, 'index']);
-        Route::post('customers/{externalId}/invoice-preview', [IntegrationBillingController::class, 'preview'])
-            ->where('externalId', '[A-Za-z0-9._:-]{1,100}');
-        Route::post('customers/{externalId}/invoices', [IntegrationBillingController::class, 'store'])
-            ->where('externalId', '[A-Za-z0-9._:-]{1,100}');
-        Route::get('customers/{externalId}/transactions', [IntegrationBillingController::class, 'transactions'])
-            ->where('externalId', '[A-Za-z0-9._:-]{1,100}');
-        Route::get('invoices/{invoiceNumber}', [IntegrationBillingController::class, 'show'])
-            ->where('invoiceNumber', '[A-Za-z0-9-]{1,100}');
-        Route::post('invoices/{invoiceNumber}/checkout', [IntegrationBillingController::class, 'checkout'])
-            ->where('invoiceNumber', '[A-Za-z0-9-]{1,100}');
-        Route::post('customers', [IntegrationCustomerController::class, 'store']);
-        Route::get('customers/{externalId}', [IntegrationCustomerController::class, 'show'])
-            ->where('externalId', '[A-Za-z0-9._:-]{1,100}');
-        Route::patch('customers/{externalId}', [IntegrationCustomerController::class, 'update'])
-            ->where('externalId', '[A-Za-z0-9._:-]{1,100}');
-        Route::post('referrals/validate', [IntegrationReferralController::class, 'validate']);
-        Route::post('customers/{externalId}/referral', [IntegrationReferralController::class, 'attach'])
-            ->where('externalId', '[A-Za-z0-9._:-]{1,100}');
-        Route::get('customers/{externalId}/subscription', [IntegrationReferralController::class, 'subscription'])
-            ->where('externalId', '[A-Za-z0-9._:-]{1,100}');
-    });
+foreach (['v1/integrations', 'v1/integration'] as $integrationPrefix) {
+    Route::prefix($integrationPrefix)
+        ->middleware(['integration.auth', 'integration.global', 'throttle:integration-api'])
+        ->group(function (): void {
+            Route::get('subscription-plans', [IntegrationSubscriptionPlanController::class, 'index']);
+            Route::post('customers/{externalId}/invoice-preview', [IntegrationBillingController::class, 'preview'])
+                ->where('externalId', '[A-Za-z0-9._:-]{1,100}');
+            Route::post('customers/{externalId}/invoices', [IntegrationBillingController::class, 'store'])
+                ->where('externalId', '[A-Za-z0-9._:-]{1,100}');
+            Route::get('customers/{externalId}/transactions', [IntegrationBillingController::class, 'transactions'])
+                ->where('externalId', '[A-Za-z0-9._:-]{1,100}');
+            Route::get('invoices/{invoiceNumber}', [IntegrationBillingController::class, 'show'])
+                ->where('invoiceNumber', '[A-Za-z0-9-]{1,100}');
+            Route::post('invoices/{invoiceNumber}/checkout', [IntegrationBillingController::class, 'checkout'])
+                ->where('invoiceNumber', '[A-Za-z0-9-]{1,100}');
+            Route::post('customers', [IntegrationCustomerController::class, 'store']);
+            Route::get('customers/{externalId}', [IntegrationCustomerController::class, 'show'])
+                ->where('externalId', '[A-Za-z0-9._:-]{1,100}');
+            Route::patch('customers/{externalId}', [IntegrationCustomerController::class, 'update'])
+                ->where('externalId', '[A-Za-z0-9._:-]{1,100}');
+            Route::post('referrals/validate', [IntegrationReferralController::class, 'validate']);
+            Route::post('customers/{externalId}/referral', [IntegrationReferralController::class, 'attach'])
+                ->where('externalId', '[A-Za-z0-9._:-]{1,100}');
+            Route::get('customers/{externalId}/subscription', [IntegrationReferralController::class, 'subscription'])
+                ->where('externalId', '[A-Za-z0-9._:-]{1,100}');
+        });
+}
 
 Route::prefix('v1/admin')
     ->middleware(['auth:sanctum', 'abilities:admin:access', 'admin'])

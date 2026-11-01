@@ -401,6 +401,62 @@ class ExternalApplicationMidtransIntegrationE2ETest extends TestCase
             ->assertJsonPath('message', 'Signature Midtrans tidak valid.');
     }
 
+    public function test_integration_api_routes_support_both_singular_and_plural_prefixes(): void
+    {
+        [$app, $token] = $this->createApplicationWithToken('LarissamaTest');
+        $customer = ApplicationCustomer::factory()->create([
+            'application_id' => $app->id,
+            'external_customer_id' => 'CUST-COMPAT-01',
+            'name' => 'Compat User',
+        ]);
+
+        $plan = SubscriptionPlan::factory()->create([
+            'application_id' => $app->id,
+            'code' => 'COMPAT-PLAN',
+            'price' => '100000.00',
+            'duration_days' => 30,
+            'is_active' => true,
+        ]);
+
+        // Plural /api/v1/integrations/
+        $this->withToken($token)
+            ->postJson("/api/v1/integrations/customers/{$customer->external_customer_id}/invoice-preview", [
+                'subscription_plan_code' => $plan->code,
+            ])
+            ->assertOk();
+
+        // Singular /api/v1/integration/
+        $this->withToken($token)
+            ->postJson("/api/v1/integration/customers/{$customer->external_customer_id}/invoice-preview", [
+                'subscription_plan_code' => $plan->code,
+            ])
+            ->assertOk();
+
+        // Create invoice via singular
+        $resp = $this->withToken($token)
+            ->postJson("/api/v1/integration/customers/{$customer->external_customer_id}/invoices", [
+                'subscription_plan_code' => $plan->code,
+                'period_count' => 1,
+                'idempotency_key' => 'compat-inv-key-1',
+                'due_at' => now()->addDays(2)->toISOString(),
+            ])
+            ->assertCreated();
+
+        $invoiceNumber = $resp->json('data.invoice_number');
+
+        // Show invoice via singular
+        $this->withToken($token)
+            ->getJson("/api/v1/integration/invoices/{$invoiceNumber}")
+            ->assertOk()
+            ->assertJsonPath('data.invoice_number', $invoiceNumber);
+
+        // Show invoice via plural
+        $this->withToken($token)
+            ->getJson("/api/v1/integrations/invoices/{$invoiceNumber}")
+            ->assertOk()
+            ->assertJsonPath('data.invoice_number', $invoiceNumber);
+    }
+
     /**
      * @return array{0: Application, 1: string}
      */
