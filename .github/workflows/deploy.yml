@@ -213,6 +213,10 @@ jobs:
                 --no-interaction | grep -F 'doku-gateway/merchants'
               "$PHP_BIN" artisan route:list --path=doku-gateway \
                 --no-interaction | grep -F 'doku-gateway/configuration'
+              "$PHP_BIN" artisan route:list --path=midtrans-gateway \
+                --no-interaction | grep -F 'midtrans-gateway/merchants'
+              "$PHP_BIN" artisan route:list --path=midtrans-gateway \
+                --no-interaction | grep -F 'midtrans-gateway/configuration'
             )
           }
 
@@ -339,6 +343,14 @@ jobs:
           (
             cd "$APP_DIR"
             "$PHP_BIN" artisan doku:verify-endpoint \
+              --internal \
+              --no-interaction
+          )
+
+          echo '=== Verifikasi endpoint Midtrans production ==='
+          (
+            cd "$APP_DIR"
+            "$PHP_BIN" artisan midtrans:verify-endpoint \
               --internal \
               --no-interaction
           )
