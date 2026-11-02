@@ -634,18 +634,36 @@ class CheckoutService
                         default => PaymentAttempt::StatusFailed,
                     };
 
-                    DB::transaction(function () use ($attempt, $claimed, $txId, $existingTxStatus, $terminalStatus, $existingStatus): void {
+                    $rawExpiry = $existingStatus['data']['expiry_time'] ?? $existingStatus['data']['expires_at'] ?? ($existingStatus['data']['raw_response']['expiry_time'] ?? null);
+                    $parsedExpiry = $this->parseMidtransTimestampToUtcImmutable($rawExpiry);
+
+                    DB::transaction(function () use ($attempt, $claimed, $txId, $existingTxStatus, $terminalStatus, $existingStatus, $parsedExpiry): void {
                         $lockedAttempt = PaymentAttempt::query()->lockForUpdate()->findOrFail($attempt->getKey());
                         $lockedOutbox = CheckoutOutboxMessage::query()->lockForUpdate()->findOrFail($claimed->getKey());
 
-                        $lockedAttempt->update([
+                        $currentMetadata = is_array($lockedAttempt->metadata) ? $lockedAttempt->metadata : [];
+                        if ($parsedExpiry !== null) {
+                            $currentMetadata['expiry_time'] = $parsedExpiry->toIso8601String();
+                            $currentMetadata['expires_at'] = $parsedExpiry->toIso8601String();
+                        }
+
+                        $updatePayload = [
                             'gateway_payment_id' => $txId,
                             'provider_reference' => $txId,
                             'status' => $terminalStatus,
                             'failure_code' => 'midtrans_'.$existingTxStatus,
                             'failure_message' => $existingStatus['data']['status_message'] ?? 'Transaksi Midtrans telah kedaluwarsa atau dibatalkan.',
                             'completed_at' => now(),
-                        ]);
+                            'metadata' => $currentMetadata,
+                        ];
+
+                        if ($parsedExpiry !== null) {
+                            $updatePayload['checkout_expires_at'] = $parsedExpiry;
+                        } elseif ($terminalStatus === PaymentAttempt::StatusExpired && ($lockedAttempt->checkout_expires_at === null || $lockedAttempt->checkout_expires_at->isFuture())) {
+                            $updatePayload['checkout_expires_at'] = now();
+                        }
+
+                        $lockedAttempt->update($updatePayload);
 
                         $lockedOutbox->update([
                             'status' => CheckoutOutboxMessage::StatusFailed,
@@ -827,14 +845,10 @@ class CheckoutService
         }
 
         $rawExpiry = $gatewayData['expiry_time'] ?? $gatewayData['expires_at'] ?? ($rawResponse['expiry_time'] ?? null);
-        if (! empty($rawExpiry)) {
-            try {
-                $checkoutExpiresAt = \Illuminate\Support\Carbon::parse($rawExpiry)->toImmutable();
-            } catch (\Throwable) {
-                $checkoutExpiresAt = $paymentType === 'qris'
-                    ? now()->toImmutable()->addMinutes(15)
-                    : now()->toImmutable()->addHours(24);
-            }
+        $parsedExpiry = $this->parseMidtransTimestampToUtcImmutable($rawExpiry);
+
+        if ($parsedExpiry !== null) {
+            $checkoutExpiresAt = $parsedExpiry;
         } else {
             $checkoutExpiresAt = $paymentType === 'qris'
                 ? now()->toImmutable()->addMinutes(15)
@@ -1153,16 +1167,35 @@ class CheckoutService
                     default => PaymentAttempt::StatusFailed,
                 };
 
-                DB::transaction(function () use ($attempt, $txId, $terminalStatus, $transactionStatus, $data): void {
+                $rawExpiry = $data['expiry_time'] ?? $data['expires_at'] ?? ($data['raw_response']['expiry_time'] ?? null);
+                $parsedExpiry = $this->parseMidtransTimestampToUtcImmutable($rawExpiry);
+
+                DB::transaction(function () use ($attempt, $txId, $terminalStatus, $transactionStatus, $data, $parsedExpiry): void {
                     $lockedAttempt = PaymentAttempt::query()->lockForUpdate()->findOrFail($attempt->getKey());
-                    $lockedAttempt->update([
+
+                    $currentMetadata = is_array($lockedAttempt->metadata) ? $lockedAttempt->metadata : [];
+                    if ($parsedExpiry !== null) {
+                        $currentMetadata['expiry_time'] = $parsedExpiry->toIso8601String();
+                        $currentMetadata['expires_at'] = $parsedExpiry->toIso8601String();
+                    }
+
+                    $updatePayload = [
                         'gateway_payment_id' => $txId,
                         'provider_reference' => $txId,
                         'status' => $terminalStatus,
                         'failure_code' => 'midtrans_'.$transactionStatus,
                         'failure_message' => $data['status_message'] ?? 'Transaksi Midtrans telah kedaluwarsa atau dibatalkan.',
                         'completed_at' => now(),
-                    ]);
+                        'metadata' => $currentMetadata,
+                    ];
+
+                    if ($parsedExpiry !== null) {
+                        $updatePayload['checkout_expires_at'] = $parsedExpiry;
+                    } elseif ($terminalStatus === PaymentAttempt::StatusExpired && ($lockedAttempt->checkout_expires_at === null || $lockedAttempt->checkout_expires_at->isFuture())) {
+                        $updatePayload['checkout_expires_at'] = now();
+                    }
+
+                    $lockedAttempt->update($updatePayload);
 
                     $outbox = CheckoutOutboxMessage::query()
                         ->where('payment_attempt_id', $lockedAttempt->getKey())
@@ -1184,11 +1217,17 @@ class CheckoutService
             $qrUrl = $data['qr_url'] ?? "https://api.sandbox.midtrans.com/v2/qris/{$txId}/qr-code";
             $qrString = $data['qr_string'] ?? null;
             $checkoutUrl = $data['checkout_url'] ?? $qrUrl;
+            $rawExpiry = $data['expiry_time'] ?? $data['expires_at'] ?? ($data['raw_response']['expiry_time'] ?? null);
+            $parsedExpiry = $this->parseMidtransTimestampToUtcImmutable($rawExpiry);
 
             $metadata['transaction_id'] = $txId;
             $metadata['qr_url'] = $qrUrl;
             if ($qrString !== null) {
                 $metadata['qr_content'] = $qrString;
+            }
+            if ($parsedExpiry !== null) {
+                $metadata['expiry_time'] = $parsedExpiry->toIso8601String();
+                $metadata['expires_at'] = $parsedExpiry->toIso8601String();
             }
             if (empty($metadata['payment_instruction'])) {
                 $metadata['payment_instruction'] = [
@@ -1196,16 +1235,22 @@ class CheckoutService
                     'qr_content' => $qrString,
                     'qr_url' => $qrUrl,
                     'checkout_url' => $checkoutUrl,
+                    'expiry_time' => $parsedExpiry?->toIso8601String() ?? $attempt->checkout_expires_at?->toIso8601String(),
+                    'expires_at' => $parsedExpiry?->toIso8601String() ?? $attempt->checkout_expires_at?->toIso8601String(),
                     'message' => 'Pindai kode QRIS Midtrans Sandbox menggunakan aplikasi e-wallet atau mobile banking.',
                 ];
             }
 
-            $attempt->update([
+            $updatePayload = [
                 'provider_reference' => $txId,
                 'gateway_payment_id' => $txId,
                 'checkout_url' => $checkoutUrl,
                 'metadata' => $metadata,
-            ]);
+            ];
+            if ($parsedExpiry !== null) {
+                $updatePayload['checkout_expires_at'] = $parsedExpiry;
+            }
+            $attempt->update($updatePayload);
         } elseif (($statusResult['is_not_found'] ?? false) || ($statusResult['http_status'] ?? 0) === 404) {
             $attempt->update([
                 'status' => PaymentAttempt::StatusFailed,
@@ -1257,16 +1302,35 @@ class CheckoutService
                     default => PaymentAttempt::StatusFailed,
                 };
 
-                DB::transaction(function () use ($attempt, $txId, $terminalStatus, $transactionStatus, $data): void {
+                $rawExpiry = $data['expiry_time'] ?? $data['expires_at'] ?? ($data['raw_response']['expiry_time'] ?? null);
+                $parsedExpiry = $this->parseMidtransTimestampToUtcImmutable($rawExpiry);
+
+                DB::transaction(function () use ($attempt, $txId, $terminalStatus, $transactionStatus, $data, $parsedExpiry): void {
                     $lockedAttempt = PaymentAttempt::query()->lockForUpdate()->findOrFail($attempt->getKey());
-                    $lockedAttempt->update([
+
+                    $currentMetadata = is_array($lockedAttempt->metadata) ? $lockedAttempt->metadata : [];
+                    if ($parsedExpiry !== null) {
+                        $currentMetadata['expiry_time'] = $parsedExpiry->toIso8601String();
+                        $currentMetadata['expires_at'] = $parsedExpiry->toIso8601String();
+                    }
+
+                    $updatePayload = [
                         'gateway_payment_id' => $txId,
                         'provider_reference' => $txId,
                         'status' => $terminalStatus,
                         'failure_code' => 'midtrans_'.$transactionStatus,
                         'failure_message' => $data['status_message'] ?? 'Transaksi Midtrans telah kedaluwarsa atau dibatalkan.',
                         'completed_at' => now(),
-                    ]);
+                        'metadata' => $currentMetadata,
+                    ];
+
+                    if ($parsedExpiry !== null) {
+                        $updatePayload['checkout_expires_at'] = $parsedExpiry;
+                    } elseif ($terminalStatus === PaymentAttempt::StatusExpired && ($lockedAttempt->checkout_expires_at === null || $lockedAttempt->checkout_expires_at->isFuture())) {
+                        $updatePayload['checkout_expires_at'] = now();
+                    }
+
+                    $lockedAttempt->update($updatePayload);
 
                     $outbox = CheckoutOutboxMessage::query()
                         ->where('payment_attempt_id', $lockedAttempt->getKey())
@@ -1418,5 +1482,29 @@ class CheckoutService
             'merchant_code' => $attempt->gateway_merchant_code,
             ...$extraContext,
         ]);
+    }
+
+    private function parseMidtransTimestampToUtcImmutable(?string $timestamp): ?CarbonImmutable
+    {
+        if (empty($timestamp)) {
+            return null;
+        }
+
+        $timestamp = trim($timestamp);
+
+        if (preg_match('/^\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2}$/', $timestamp)) {
+            return CarbonImmutable::createFromFormat('Y-m-d H:i:s', $timestamp, 'Asia/Jakarta')
+                ->setTimezone('UTC');
+        }
+
+        if (str_contains($timestamp, 'T') || str_contains($timestamp, '+') || str_ends_with($timestamp, 'Z')) {
+            return CarbonImmutable::parse($timestamp)->setTimezone('UTC');
+        }
+
+        try {
+            return CarbonImmutable::parse($timestamp, 'Asia/Jakarta')->setTimezone('UTC');
+        } catch (\Throwable) {
+            return null;
+        }
     }
 }

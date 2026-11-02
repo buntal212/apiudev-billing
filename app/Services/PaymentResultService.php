@@ -146,6 +146,8 @@ class PaymentResultService
             };
 
             $txId = (string) ($data['transaction_id'] ?? $raw['transaction_id'] ?? $paymentAttempt->gateway_payment_id);
+            $rawExpiry = $raw['expiry_time'] ?? $data['expiry_time'] ?? ($data['expires_at'] ?? null);
+            $parsedExpiry = MidtransGatewayProvisioningClient::parseMidtransExpiryToUtc($rawExpiry);
 
             $updatedAttempt = $this->paymentAttemptService->transitionStatus(
                 $paymentAttempt,
@@ -155,8 +157,18 @@ class PaymentResultService
                 failureMessage: $data['status_message'] ?? 'Transaksi Midtrans telah kedaluwarsa atau dibatalkan.',
             );
 
+            $updateData = [];
             if ($txId !== '' && $updatedAttempt->gateway_payment_id !== $txId) {
-                $updatedAttempt->update(['gateway_payment_id' => $txId]);
+                $updateData['gateway_payment_id'] = $txId;
+            }
+            if ($parsedExpiry !== null) {
+                $updateData['checkout_expires_at'] = $parsedExpiry;
+            } elseif ($status === PaymentAttempt::StatusExpired && ($updatedAttempt->checkout_expires_at === null || $updatedAttempt->checkout_expires_at->isFuture())) {
+                $updateData['checkout_expires_at'] = now();
+            }
+
+            if (! empty($updateData)) {
+                $updatedAttempt->update($updateData);
             }
 
             if ($updatedAttempt->checkoutOutbox !== null && $updatedAttempt->checkoutOutbox->status !== \App\Models\CheckoutOutboxMessage::StatusCompleted) {

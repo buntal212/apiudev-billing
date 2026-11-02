@@ -168,7 +168,14 @@ class InvoiceController extends Controller
         }
 
         $attempt = $invoice->paymentAttempts()->latest('attempt_number')->first();
-        if ($attempt === null || in_array($attempt->status, [PaymentAttempt::StatusFailed, PaymentAttempt::StatusExpired, PaymentAttempt::StatusCancelled], true)) {
+        if ($attempt !== null && (
+            in_array($attempt->status, [PaymentAttempt::StatusFailed, PaymentAttempt::StatusExpired, PaymentAttempt::StatusCancelled], true)
+            || ($attempt->checkout_expires_at !== null && $attempt->checkout_expires_at->isPast())
+        )) {
+            abort(Response::HTTP_UNPROCESSABLE_ENTITY, 'Percobaan pembayaran telah kedaluwarsa atau berstatus terminal dan tidak dapat disimulasikan. Transaksi baru tidak dibuat otomatis.');
+        }
+
+        if ($attempt === null) {
             $attempt = $checkoutService->startCheckout($invoice, 'sim-'.Str::uuid());
         }
 

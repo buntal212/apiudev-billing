@@ -2,6 +2,7 @@
 
 namespace App\Services;
 
+use Carbon\CarbonImmutable;
 use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Str;
@@ -232,7 +233,7 @@ class MidtransGatewayProvisioningClient
                 'qr_url' => $qrUrl,
                 'checkout_url' => $checkoutUrl,
                 'expiry_time' => $body['expiry_time'] ?? null,
-                'expires_at' => $body['expiry_time'] ?? null,
+                'expires_at' => self::parseMidtransExpiryToUtc($body['expiry_time'] ?? null)?->toIso8601String(),
                 'va_numbers' => $vaNumbers,
                 'permata_va_number' => $permataVaNumber,
                 'bill_key' => $billKey,
@@ -263,6 +264,13 @@ class MidtransGatewayProvisioningClient
                 if ($response->successful()) {
                     $json = $response->json() ?? [];
                     if (($json['status'] ?? '') === 'success' || ! empty($json['data']['transaction_id'])) {
+                        if (! empty($json['data']['expiry_time']) && empty($json['data']['expires_at'])) {
+                            $parsedUtc = self::parseMidtransExpiryToUtc($json['data']['expiry_time']);
+                            if ($parsedUtc !== null) {
+                                $json['data']['expires_at'] = $parsedUtc->toIso8601String();
+                            }
+                        }
+
                         return $json;
                     }
                 }
@@ -317,7 +325,7 @@ class MidtransGatewayProvisioningClient
                     'qr_url' => $qrUrl,
                     'checkout_url' => $checkoutUrl,
                     'expiry_time' => $body['expiry_time'] ?? null,
-                    'expires_at' => $body['expiry_time'] ?? null,
+                    'expires_at' => self::parseMidtransExpiryToUtc($body['expiry_time'] ?? null)?->toIso8601String(),
                     'va_numbers' => $body['va_numbers'] ?? null,
                     'raw_response' => $body,
                 ],
@@ -333,6 +341,30 @@ class MidtransGatewayProvisioningClient
                     'transaction_status' => 'unknown',
                 ],
             ];
+        }
+    }
+
+    public static function parseMidtransExpiryToUtc(?string $rawExpiry): ?CarbonImmutable
+    {
+        if (empty($rawExpiry)) {
+            return null;
+        }
+
+        $rawExpiry = trim($rawExpiry);
+
+        if (preg_match('/^\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2}$/', $rawExpiry)) {
+            return CarbonImmutable::createFromFormat('Y-m-d H:i:s', $rawExpiry, 'Asia/Jakarta')
+                ->setTimezone('UTC');
+        }
+
+        if (str_contains($rawExpiry, 'T') || str_contains($rawExpiry, '+') || str_ends_with($rawExpiry, 'Z')) {
+            return CarbonImmutable::parse($rawExpiry)->setTimezone('UTC');
+        }
+
+        try {
+            return CarbonImmutable::parse($rawExpiry, 'Asia/Jakarta')->setTimezone('UTC');
+        } catch (\Throwable) {
+            return null;
         }
     }
 }

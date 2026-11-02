@@ -1783,4 +1783,148 @@ class MidtransInvoiceCheckoutAndSettlementTest extends TestCase
 
         $this->assertStringContainsString('qr-image', $response->json('data.qr_image_url'));
     }
+
+    public function test_midtrans_qris_checkout_converts_wib_expiry_time_to_utc_in_database(): void
+    {
+        [$invoice, $credential] = $this->setupInvoiceWithMidtrans();
+
+        // Midtrans returns expiry in WIB (Asia/Jakarta): 2026-11-02 22:02:43 WIB = 2026-11-02 15:02:43 UTC
+        Http::fake([
+            'https://api.sandbox.midtrans.com/v2/charge' => Http::response([
+                'status_code' => '201',
+                'status_message' => 'QRIS transaction is created',
+                'transaction_id' => 'midtrans-tx-a5-tz',
+                'order_id' => $invoice->invoice_number.'-A1',
+                'gross_amount' => '50000.00',
+                'payment_type' => 'qris',
+                'transaction_status' => 'pending',
+                'expiry_time' => '2026-11-02 22:02:43',
+                'qr_string' => '00020101021226590014ID.LINKAJA.WWW0118...',
+                'actions' => [
+                    [
+                        'name' => 'generate-qr-code',
+                        'method' => 'GET',
+                        'url' => 'https://api.sandbox.midtrans.com/v2/qris/midtrans-tx-a5-tz/qr-code',
+                    ],
+                ],
+            ], 201),
+        ]);
+
+        $admin = User::factory()->create(['is_admin' => true]);
+        Sanctum::actingAs($admin, ['admin:access']);
+
+        $response = $this->postJson("/api/v1/admin/invoices/{$invoice->id}/checkout", [
+            'payment_method' => 'qris',
+        ], ['Idempotency-Key' => 'idemp-midtrans-tz-001']);
+
+        $response->assertOk();
+
+        $attempt = PaymentAttempt::query()->where('invoice_id', $invoice->id)->firstOrFail();
+        // Assert exact UTC conversion (22:02:43 WIB -> 15:02:43 UTC)
+        $this->assertSame('2026-11-02 15:02:43', $attempt->checkout_expires_at->format('Y-m-d H:i:s'));
+        $this->assertSame('2026-11-02T15:02:43+00:00', $attempt->checkout_expires_at->toIso8601String());
+    }
+
+    public function test_midtrans_expire_status_syncs_idempotently_updates_expiry_and_prevents_settlement(): void
+    {
+        [$invoice, $credential] = $this->setupInvoiceWithMidtrans();
+
+        $attempt = PaymentAttempt::create([
+            'invoice_id' => $invoice->id,
+            'attempt_number' => 1,
+            'provider' => 'midtrans',
+            'idempotency_key' => 'idemp-expire-sync-test',
+            'merchant_reference' => $invoice->invoice_number.'-A1',
+            'provider_reference' => null,
+            'gateway_merchant_code' => self::MerchantCode,
+            'gateway_environment' => 'sandbox',
+            'gateway_payment_id' => null,
+            'amount' => '50000.00',
+            'currency' => 'IDR',
+            'status' => PaymentAttempt::StatusPending,
+            'checkout_expires_at' => now()->addHours(24), // Initially erroneously set to 24 hours
+            'metadata' => ['payment_method' => 'qris'],
+        ]);
+
+        $outbox = CheckoutOutboxMessage::create([
+            'payment_attempt_id' => $attempt->id,
+            'idempotency_key' => 'midtrans-checkout-attempt-'.$attempt->id,
+            'status' => CheckoutOutboxMessage::StatusProcessing,
+        ]);
+
+        // Midtrans status query returns expired with actual expiry time (Case A5)
+        Http::fake([
+            'https://api.sandbox.midtrans.com/v2/'.$invoice->invoice_number.'-A1/status' => Http::response([
+                'status_code' => '200',
+                'status_message' => 'Midtrans transaction is expired',
+                'transaction_id' => '13a03f8d-3450-4acc-b0d6-2382fab53613',
+                'order_id' => $invoice->invoice_number.'-A1',
+                'gross_amount' => '50000.00',
+                'payment_type' => 'qris',
+                'transaction_status' => 'expire',
+                'expiry_time' => '2026-11-02 22:02:43',
+            ], 200),
+        ]);
+
+        $admin = User::factory()->create(['is_admin' => true]);
+        Sanctum::actingAs($admin, ['admin:access']);
+
+        // First reconcile call
+        $response1 = $this->postJson("/api/v1/admin/payment-attempts/{$attempt->id}/reconcile");
+        $response1->assertOk()
+            ->assertJsonPath('data.status', 'expired')
+            ->assertJsonPath('data.is_expired', true);
+
+        $attempt->refresh();
+        $this->assertSame(PaymentAttempt::StatusExpired, $attempt->status);
+        $this->assertSame('13a03f8d-3450-4acc-b0d6-2382fab53613', $attempt->gateway_payment_id);
+        $this->assertSame('2026-11-02 15:02:43', $attempt->checkout_expires_at->format('Y-m-d H:i:s'));
+        $this->assertSame(Invoice::StatusPending, $invoice->fresh()->status);
+        $this->assertDatabaseCount('payment_allocations', 0);
+        $this->assertDatabaseCount('subscription_period_events', 0);
+
+        // Second reconcile call (idempotent)
+        $response2 = $this->postJson("/api/v1/admin/payment-attempts/{$attempt->id}/reconcile");
+        $response2->assertOk()
+            ->assertJsonPath('data.status', 'expired');
+
+        $this->assertSame(PaymentAttempt::StatusExpired, $attempt->fresh()->status);
+        $this->assertSame(Invoice::StatusPending, $invoice->fresh()->status);
+        $this->assertDatabaseCount('payment_allocations', 0);
+    }
+
+    public function test_expired_payment_attempt_cannot_be_simulated_and_does_not_create_new_checkout(): void
+    {
+        [$invoice, $credential] = $this->setupInvoiceWithMidtrans();
+
+        $attempt = PaymentAttempt::create([
+            'invoice_id' => $invoice->id,
+            'attempt_number' => 1,
+            'provider' => 'midtrans',
+            'idempotency_key' => 'idemp-sim-block-test',
+            'merchant_reference' => $invoice->invoice_number.'-A1',
+            'provider_reference' => 'tx-expired-sim',
+            'gateway_merchant_code' => self::MerchantCode,
+            'gateway_environment' => 'sandbox',
+            'gateway_payment_id' => 'tx-expired-sim',
+            'amount' => '50000.00',
+            'currency' => 'IDR',
+            'status' => PaymentAttempt::StatusExpired,
+            'checkout_expires_at' => now()->subMinutes(10),
+            'metadata' => ['payment_method' => 'qris'],
+        ]);
+
+        $admin = User::factory()->create(['is_admin' => true]);
+        Sanctum::actingAs($admin, ['admin:access']);
+
+        $response = $this->postJson("/api/v1/admin/invoices/{$invoice->id}/sandbox-simulate-payment", [
+            'action' => 'failed',
+        ]);
+
+        $response->assertStatus(422);
+
+        // Assert no new attempt was created
+        $this->assertSame(1, PaymentAttempt::query()->where('invoice_id', $invoice->id)->count());
+        $this->assertSame(Invoice::StatusPending, $invoice->fresh()->status);
+    }
 }

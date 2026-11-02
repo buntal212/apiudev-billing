@@ -28,12 +28,16 @@ class InvoiceCheckoutResource extends JsonResource
                 : null);
         $paymentCode = $metadata['payment_code'] ?? null;
 
-        $checkoutStatus = ($this->checkout_url !== null || $qrContent !== null || $qrUrl !== null || $paymentCode !== null)
-            ? 'ready'
-            : ($this->outbox?->status === CheckoutOutboxMessage::StatusFailed ? 'failed' : 'processing');
+        $isExpired = ($this->status === \App\Models\PaymentAttempt::StatusExpired)
+            || ($this->checkout_expires_at?->isPast() ?? false);
 
-        $isExpired = $this->checkout_expires_at?->isPast() ?? false;
-        $qrImageUrl = $this->provider === 'midtrans' && ! empty($this->id)
+        $checkoutStatus = $isExpired
+            ? 'expired'
+            : (($this->checkout_url !== null || $qrContent !== null || $qrUrl !== null || $paymentCode !== null)
+                ? 'ready'
+                : ($this->outbox?->status === CheckoutOutboxMessage::StatusFailed ? 'failed' : 'processing'));
+
+        $qrImageUrl = $this->provider === 'midtrans' && ! empty($this->id) && ! $isExpired
             ? url("/api/v1/admin/payment-attempts/{$this->id}/qr-image")
             : null;
 

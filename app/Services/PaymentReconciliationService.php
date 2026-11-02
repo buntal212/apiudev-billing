@@ -209,6 +209,7 @@ class PaymentReconciliationService
         PaymentAttempt $attempt,
         string $gatewayStatus,
         ?string $providerReference = null,
+        ?CarbonImmutable $expiresAt = null,
     ): ReconciliationResult {
         $status = match ($gatewayStatus) {
             'failed' => PaymentAttempt::StatusFailed,
@@ -224,8 +225,18 @@ class PaymentReconciliationService
                 failureCode: 'gateway_'.$gatewayStatus,
             );
 
+        $updateAttributes = [];
         if ($providerReference !== null && $updatedAttempt->gateway_payment_id !== $providerReference) {
-            $updatedAttempt->update(['gateway_payment_id' => $providerReference]);
+            $updateAttributes['gateway_payment_id'] = $providerReference;
+        }
+        if ($expiresAt !== null) {
+            $updateAttributes['checkout_expires_at'] = $expiresAt;
+        } elseif ($status === PaymentAttempt::StatusExpired && ($updatedAttempt->checkout_expires_at === null || $updatedAttempt->checkout_expires_at->isFuture())) {
+            $updateAttributes['checkout_expires_at'] = now();
+        }
+
+        if (! empty($updateAttributes)) {
+            $updatedAttempt->update($updateAttributes);
         }
 
         if ($updatedAttempt->checkoutOutbox !== null && $updatedAttempt->checkoutOutbox->status !== CheckoutOutboxMessage::StatusCompleted) {
@@ -578,6 +589,9 @@ class PaymentReconciliationService
 
         if (in_array($transactionStatus, ['expire', 'cancel', 'deny'], true)) {
             $txId = (string) ($raw['transaction_id'] ?? $data['transaction_id'] ?? $attempt->gateway_payment_id);
+            $rawExpiry = $raw['expiry_time'] ?? $data['expiry_time'] ?? ($data['expires_at'] ?? null);
+            $parsedExpiry = MidtransGatewayProvisioningClient::parseMidtransExpiryToUtc($rawExpiry);
+
             try {
                 app(MidtransAuditService::class)->record(
                     merchantCode: (string) $attempt->gateway_merchant_code,
@@ -595,7 +609,7 @@ class PaymentReconciliationService
                 // ignore audit failure
             }
 
-            return $this->finishTerminal($run, $attempt, $transactionStatus, $txId ?: null);
+            return $this->finishTerminal($run, $attempt, $transactionStatus, $txId ?: null, $parsedExpiry);
         }
 
         if ($transactionStatus === 'pending') {
