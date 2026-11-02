@@ -621,9 +621,19 @@ class CheckoutService
                     $this->storeMidtransCheckout($claimed, $existingStatus['data'], $amountMinor, $paymentType, $bank);
 
                     return;
-                } catch (\Throwable $e) {
+                } catch (QueryException $e) {
+                    $this->logMidtransDispatchException('database_storage_failed', $e, $attempt, $claimed);
+                    $this->markDispatchFailure($claimed, false, 'database_storage_failed');
+
+                    return;
+                } catch (ValidationException | RuntimeException $e) {
                     $this->logMidtransDispatchException('payment_instruction_invalid', $e, $attempt, $claimed);
                     $this->markDispatchFailure($claimed, false, 'payment_instruction_invalid');
+
+                    return;
+                } catch (\Throwable $e) {
+                    $this->logMidtransDispatchException('checkout_processing_failed', $e, $attempt, $claimed);
+                    $this->markDispatchFailure($claimed, false, 'checkout_processing_failed');
 
                     return;
                 }
@@ -682,9 +692,19 @@ class CheckoutService
         // 6. Validate and store payment instructions
         try {
             $this->storeMidtransCheckout($claimed, $chargeResult['data'] ?? [], $amountMinor, $paymentType, $bank);
-        } catch (\Throwable $e) {
+        } catch (QueryException $e) {
+            $this->logMidtransDispatchException('database_storage_failed', $e, $attempt, $claimed);
+            $this->markDispatchFailure($claimed, false, 'database_storage_failed');
+
+            return;
+        } catch (ValidationException | RuntimeException $e) {
             $this->logMidtransDispatchException('payment_instruction_invalid', $e, $attempt, $claimed);
             $this->markDispatchFailure($claimed, false, 'payment_instruction_invalid');
+
+            return;
+        } catch (\Throwable $e) {
+            $this->logMidtransDispatchException('checkout_processing_failed', $e, $attempt, $claimed);
+            $this->markDispatchFailure($claimed, false, 'checkout_processing_failed');
 
             return;
         }
@@ -1081,10 +1101,28 @@ class CheckoutService
         }
     }
 
+    private function formatSafeExceptionMessage(\Throwable $exception): string
+    {
+        if ($exception instanceof QueryException) {
+            $previous = $exception->getPrevious();
+            $raw = $previous ? $previous->getMessage() : $exception->getMessage();
+            $cleaned = preg_replace('/\s*\(Connection:.*$/s', '', $raw);
+
+            return $this->sanitizeLogText($cleaned);
+        }
+
+        return $this->sanitizeLogText($exception->getMessage());
+    }
+
     private function sanitizeLogText(string $text): string
     {
+        // Strip SQL statements, connections, and bindings
+        $sanitized = preg_replace('/\s*\(Connection:\s*[^,]+(?:,\s*SQL:\s*[^)]*)?\)/si', '', $text);
+        $sanitized = preg_replace('/\(SQL:\s*[^)]+\)/si', '[REDACTED_SQL]', $sanitized);
+        $sanitized = preg_replace('/\[bindings:\s*[^\]]+\]/si', '[REDACTED_BINDINGS]', $sanitized);
+
         // Redact Midtrans server keys (SB-Mid-server-..., Mid-server-...)
-        $sanitized = preg_replace('/(SB-Mid-server-[A-Za-z0-9_-]+|Mid-server-[A-Za-z0-9_-]+)/i', '[REDACTED_SERVER_KEY]', $text);
+        $sanitized = preg_replace('/(SB-Mid-server-[A-Za-z0-9_-]+|Mid-server-[A-Za-z0-9_-]+)/i', '[REDACTED_SERVER_KEY]', $sanitized);
 
         // Redact Midtrans client keys (SB-Mid-client-..., Mid-client-...)
         $sanitized = preg_replace('/(SB-Mid-client-[A-Za-z0-9_-]+|Mid-client-[A-Za-z0-9_-]+)/i', '[REDACTED_CLIENT_KEY]', $sanitized);
@@ -1098,6 +1136,19 @@ class CheckoutService
 
         // Redact encrypted secret components (nonce, tag, ciphertext)
         $sanitized = preg_replace('/((encrypted_server_key|server_key_nonce|server_key_tag)["\':\s=]+)[A-Za-z0-9+\/=_.-]+/i', '$1[REDACTED_SECRET]', $sanitized);
+
+        // Redact Laravel ciphertext / base64 encrypted payloads (starts with eyJpdi...)
+        $sanitized = preg_replace('/\beyJpdi[A-Za-z0-9_\/+=]{10,}\b/i', '[REDACTED_CIPHERTEXT]', $sanitized);
+        $sanitized = preg_replace('/(["\']?(?:iv|value|mac|tag)["\']?\s*:\s*["\'])[A-Za-z0-9+\/=]{10,}(["\'])/i', '$1[REDACTED_CIPHERTEXT]$2', $sanitized);
+
+        // Redact EMVCo QRIS payload (starts with 000201...)
+        $sanitized = preg_replace('/\b000201[0-9A-Za-z]{10,}\b/i', '[REDACTED_QRIS_PAYLOAD]', $sanitized);
+
+        // Redact customer emails
+        $sanitized = preg_replace('/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/i', '[REDACTED_EMAIL]', $sanitized);
+
+        // Redact customer phone numbers (Indonesian phone format: +628..., 628..., 08...)
+        $sanitized = preg_replace('/(?:\+62|62|0)8[0-9]{8,11}\b/i', '[REDACTED_PHONE]', $sanitized);
 
         return $sanitized;
     }
@@ -1137,10 +1188,12 @@ class CheckoutService
         CheckoutOutboxMessage $claimed,
         array $extraContext = [],
     ): void {
-        Log::error("[Midtrans Checkout Error] {$errorCode}: ".$this->sanitizeLogText($exception->getMessage()), [
+        $safeMessage = $this->formatSafeExceptionMessage($exception);
+
+        Log::error("[Midtrans Checkout Error] {$errorCode}: ".$safeMessage, [
             'error_code' => $errorCode,
             'exception_type' => get_class($exception),
-            'exception_message' => $this->sanitizeLogText($exception->getMessage()),
+            'exception_message' => $safeMessage,
             'location' => $exception->getFile().':'.$exception->getLine(),
             'safe_trace' => $this->safeStackTrace($exception),
             'invoice_id' => $attempt->invoice_id,
@@ -1163,9 +1216,11 @@ class CheckoutService
         CheckoutOutboxMessage $claimed,
         array $extraContext = [],
     ): void {
-        Log::error("[Midtrans Checkout Error] {$errorCode}: ".$this->sanitizeLogText($message), [
+        $safeMessage = $this->sanitizeLogText($message);
+
+        Log::error("[Midtrans Checkout Error] {$errorCode}: ".$safeMessage, [
             'error_code' => $errorCode,
-            'message' => $this->sanitizeLogText($message),
+            'message' => $safeMessage,
             'invoice_id' => $attempt->invoice_id,
             'merchant_reference' => $attempt->merchant_reference,
             'payment_attempt_id' => $attempt->getKey(),

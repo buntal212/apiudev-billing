@@ -1168,6 +1168,152 @@ class MidtransInvoiceCheckoutAndSettlementTest extends TestCase
         });
     }
 
+    public function test_checkout_successfully_stores_36_character_uuid_gateway_payment_id(): void
+    {
+        [$invoice, $credential] = $this->setupInvoiceWithMidtrans();
+
+        $uuid = '43e33f67-a2ef-4786-9a25-a131750699cf';
+        Http::fake([
+            'https://api.sandbox.midtrans.com/v2/charge' => Http::response([
+                'status_code' => '201',
+                'status_message' => 'QRIS transaction is created',
+                'transaction_id' => $uuid,
+                'order_id' => $invoice->invoice_number.'-A1',
+                'gross_amount' => '50000.00',
+                'payment_type' => 'qris',
+                'transaction_status' => 'pending',
+                'qr_string' => '00020101021226590014ID.LINKAJA.WWW0118936009110022201980020300051440014ID.GO-PAY.WWW0215ID10200210081700303UMI5204581253033605405500005802ID5914UDEV Midtrans6007JAKARTA61051234062070703A0163041D3A',
+                'actions' => [
+                    [
+                        'name' => 'generate-qr-code',
+                        'method' => 'GET',
+                        'url' => "https://api.sandbox.midtrans.com/v2/qris/{$uuid}/qr-code",
+                    ],
+                ],
+            ], 201),
+        ]);
+
+        $admin = User::factory()->create(['is_admin' => true]);
+        Sanctum::actingAs($admin, ['admin:access']);
+
+        $response = $this->postJson("/api/v1/admin/invoices/{$invoice->id}/checkout", [
+            'payment_method' => 'qris',
+        ], ['Idempotency-Key' => 'idemp-uuid-chk-001']);
+
+        $response->assertOk()
+            ->assertJsonPath('data.gateway_payment_id', $uuid);
+
+        $attempt = PaymentAttempt::query()->where('invoice_id', $invoice->id)->firstOrFail();
+        $this->assertSame($uuid, $attempt->gateway_payment_id);
+        $this->assertSame($uuid, $attempt->provider_reference);
+        $this->assertSame(36, strlen((string) $attempt->gateway_payment_id));
+        $this->assertSame("https://api.sandbox.midtrans.com/v2/qris/{$uuid}/qr-code", $attempt->checkout_url);
+    }
+
+    public function test_checkout_classifies_database_storage_failure_as_database_storage_failed_and_does_not_leak_bindings_or_pii(): void
+    {
+        [$invoice, $credential] = $this->setupInvoiceWithMidtrans();
+
+        $uuid = '43e33f67-a2ef-4786-9a25-a131750699cf';
+        $sensitiveQr = '00020101021226590014ID.LINKAJA.WWW0118936009110022201980020300051440014ID.GO-PAY.WWW0215ID10200210081700303UMI5204581253033605405500005802ID5914UDEV Midtrans6007JAKARTA61051234062070703A0163041D3A';
+        $sensitiveEmail = 'sensitive_customer@udumbara.my.id';
+        $sensitivePhone = '081234567890';
+        $sensitiveCiphertext = 'eyJpdiI6InNlY3JldGl2MTIzNDU2IiwidmFsdWUiOiJzZWNyZXR2YWx1ZTEyMzQ1NiIsIm1hYyI6IjEyMzQ1NiJ9';
+
+        Http::fake([
+            'https://api.sandbox.midtrans.com/v2/charge' => Http::response([
+                'status_code' => '201',
+                'status_message' => 'QRIS transaction is created',
+                'transaction_id' => $uuid,
+                'order_id' => $invoice->invoice_number.'-A1',
+                'gross_amount' => '50000.00',
+                'payment_type' => 'qris',
+                'transaction_status' => 'pending',
+                'qr_string' => $sensitiveQr,
+                'actions' => [
+                    [
+                        'name' => 'generate-qr-code',
+                        'method' => 'GET',
+                        'url' => "https://api.sandbox.midtrans.com/v2/qris/{$uuid}/qr-code",
+                    ],
+                ],
+            ], 201),
+        ]);
+
+        Log::spy();
+
+        // Simulate QueryException during storeMidtransCheckout attempt update
+        PaymentAttempt::updating(function (PaymentAttempt $model) use ($sensitiveQr, $sensitiveEmail, $sensitivePhone, $sensitiveCiphertext): void {
+            if ($model->isDirty('gateway_payment_id')) {
+                $pdoException = new \PDOException("SQLSTATE[22001]: String data, right truncated: 1406 Data too long for column 'gateway_payment_id' at row 1");
+                throw new \Illuminate\Database\QueryException(
+                    'mysql',
+                    "update `payment_attempts` set `gateway_payment_id` = ?, `checkout_url` = ?, `email` = ?, `phone` = ?, `qr` = ? where `id` = ?",
+                    [
+                        '43e33f67-a2ef-4786-9a25-a131750699cf',
+                        $sensitiveCiphertext,
+                        $sensitiveEmail,
+                        $sensitivePhone,
+                        $sensitiveQr,
+                        $model->id,
+                    ],
+                    $pdoException
+                );
+            }
+        });
+
+        $admin = User::factory()->create(['is_admin' => true]);
+        Sanctum::actingAs($admin, ['admin:access']);
+
+        try {
+            $res = $this->postJson("/api/v1/admin/invoices/{$invoice->id}/checkout", [
+                'payment_method' => 'qris',
+            ], ['Idempotency-Key' => 'idemp-db-error-001']);
+
+            $res->assertStatus(502);
+
+            $outbox = CheckoutOutboxMessage::query()->latest('id')->firstOrFail();
+            $this->assertSame(CheckoutOutboxMessage::StatusFailed, $outbox->status);
+            $this->assertSame('database_storage_failed', $outbox->error_code);
+
+            Log::shouldHaveReceived('error')->withArgs(function (string $message, array $context) use ($sensitiveQr, $sensitiveEmail, $sensitivePhone, $sensitiveCiphertext): bool {
+                $isStorageFailed = str_contains($message, 'database_storage_failed')
+                    && ($context['error_code'] ?? '') === 'database_storage_failed';
+
+                $fullLogString = $message.' '.json_encode($context);
+                $leaksQr = str_contains($fullLogString, $sensitiveQr);
+                $leaksEmail = str_contains($fullLogString, $sensitiveEmail);
+                $leaksPhone = str_contains($fullLogString, $sensitivePhone);
+                $leaksCiphertext = str_contains($fullLogString, $sensitiveCiphertext);
+                $leaksRawSql = str_contains($fullLogString, 'update `payment_attempts`');
+
+                return $isStorageFailed && ! $leaksQr && ! $leaksEmail && ! $leaksPhone && ! $leaksCiphertext && ! $leaksRawSql;
+            });
+        } finally {
+            PaymentAttempt::flushEventListeners();
+            PaymentAttempt::bootIfNotBooted();
+        }
+    }
+
+    public function test_checkout_service_sanitize_log_text_redacts_all_sensitive_patterns(): void
+    {
+        $checkoutService = app(\App\Services\CheckoutService::class);
+        $method = new \ReflectionMethod($checkoutService, 'sanitizeLogText');
+
+        $input = "Error: (Connection: mysql, SQL: select * from users where token = 'SB-Mid-server-abc123' and client = 'SB-Mid-client-xyz789' and auth = 'Authorization: Bearer mytoken123456789' and email = 'user@example.com' and phone = '081234567890' and qr = '00020101021226590014ID.LINKAJA.WWW' and cipher = 'eyJpdiI6Inh4eCIsInZhbHVlIjoiMTIzNCJ9' [bindings: [1, 2]])";
+
+        $output = $method->invoke($checkoutService, $input);
+
+        $this->assertStringNotContainsString('SB-Mid-server-abc123', $output);
+        $this->assertStringNotContainsString('SB-Mid-client-xyz789', $output);
+        $this->assertStringNotContainsString('mytoken123456789', $output);
+        $this->assertStringNotContainsString('user@example.com', $output);
+        $this->assertStringNotContainsString('081234567890', $output);
+        $this->assertStringNotContainsString('00020101021226590014ID.LINKAJA.WWW', $output);
+        $this->assertStringNotContainsString('eyJpdiI6Inh4eCIsInZhbHVlIjoiMTIzNCJ9', $output);
+        $this->assertStringNotContainsString('[bindings:', $output);
+    }
+
     /**
      * @return array{0: Invoice, 1: MidtransMerchantCredential}
      */
