@@ -140,16 +140,35 @@ class PaymentResultService
 
         if (in_array($transactionStatus, ['expire', 'cancel', 'deny'], true)) {
             $status = match ($transactionStatus) {
-                'expire' => PaymentAttempt::StatusExpired,
+                'expire', 'expired' => PaymentAttempt::StatusExpired,
                 'cancel' => PaymentAttempt::StatusCancelled,
                 default => PaymentAttempt::StatusFailed,
             };
 
-            return $this->paymentAttemptService->transitionStatus(
+            $txId = (string) ($data['transaction_id'] ?? $raw['transaction_id'] ?? $paymentAttempt->gateway_payment_id);
+
+            $updatedAttempt = $this->paymentAttemptService->transitionStatus(
                 $paymentAttempt,
                 $status,
+                providerReference: $txId ?: null,
                 failureCode: 'midtrans_'.$transactionStatus,
+                failureMessage: $data['status_message'] ?? 'Transaksi Midtrans telah kedaluwarsa atau dibatalkan.',
             );
+
+            if ($txId !== '' && $updatedAttempt->gateway_payment_id !== $txId) {
+                $updatedAttempt->update(['gateway_payment_id' => $txId]);
+            }
+
+            if ($updatedAttempt->checkoutOutbox !== null && $updatedAttempt->checkoutOutbox->status !== \App\Models\CheckoutOutboxMessage::StatusCompleted) {
+                $updatedAttempt->checkoutOutbox->update([
+                    'status' => \App\Models\CheckoutOutboxMessage::StatusFailed,
+                    'locked_at' => null,
+                    'available_at' => null,
+                    'error_code' => 'transaction_'.$transactionStatus,
+                ]);
+            }
+
+            return $updatedAttempt;
         }
 
         return $paymentAttempt;

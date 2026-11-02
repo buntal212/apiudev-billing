@@ -258,71 +258,77 @@ class MidtransGatewayProvisioningClient
                     ->acceptJson()
                     ->get("{$gatewayUrl}/api/v1/internal/merchants/{$merchantCode}/sandbox-test/status/{$orderId}");
 
-                if ($response->status() === 404) {
-                    $json = $response->json() ?? [];
-
-                    return [
-                        'status' => 'failed',
-                        'http_status' => 404,
-                        'is_not_found' => true,
-                        'message' => $json['message'] ?? 'Transaksi tidak ditemukan di gateway.',
-                        'data' => $json['data'] ?? ['order_id' => $orderId, 'transaction_status' => 'not_found'],
-                    ];
-                }
-
                 if ($response->successful()) {
-                    return $response->json();
+                    $json = $response->json() ?? [];
+                    if (($json['status'] ?? '') === 'success' || ! empty($json['data']['transaction_id'])) {
+                        return $json;
+                    }
                 }
             } catch (ConnectionException) {
-                // Fallback below
+                // Fallback to direct verification with Midtrans Core API below
+            } catch (\Throwable) {
+                // Fallback to direct verification with Midtrans Core API below
             }
         }
 
         $midtransBaseUrl = rtrim((string) config('services.midtrans_gateway.sandbox_base_url', 'https://api.sandbox.midtrans.com/v2'), '/');
 
-        $response = Http::withBasicAuth(trim($serverKey), '')
-            ->withHeaders(['Accept' => 'application/json'])
-            ->timeout(8)
-            ->get("{$midtransBaseUrl}/".urlencode($orderId).'/status');
+        try {
+            $response = Http::withBasicAuth(trim($serverKey), '')
+                ->withHeaders(['Accept' => 'application/json'])
+                ->timeout(8)
+                ->get("{$midtransBaseUrl}/".urlencode($orderId).'/status');
 
-        $body = $response->json() ?? [];
-        $isSuccess = $response->successful();
-        $isNotFound = $response->status() === 404 || ($body['status_code'] ?? '') === '404';
+            $body = $response->json() ?? [];
+            $isSuccess = $response->successful();
+            $isNotFound = $response->status() === 404 || ($body['status_code'] ?? '') === '404';
 
-        $txId = $body['transaction_id'] ?? null;
-        $paymentType = $body['payment_type'] ?? 'qris';
-        $qrUrl = null;
-        if (! empty($body['actions'])) {
-            foreach ($body['actions'] as $action) {
-                if (($action['name'] ?? '') === 'generate-qr-code') {
-                    $qrUrl = $action['url'] ?? null;
-                    break;
+            $txId = $body['transaction_id'] ?? null;
+            $paymentType = $body['payment_type'] ?? 'qris';
+            $qrUrl = null;
+            if (! empty($body['actions'])) {
+                foreach ($body['actions'] as $action) {
+                    if (($action['name'] ?? '') === 'generate-qr-code') {
+                        $qrUrl = $action['url'] ?? null;
+                        break;
+                    }
                 }
             }
-        }
-        if (empty($qrUrl) && $paymentType === 'qris' && ! empty($txId)) {
-            $qrUrl = "https://api.".($environment === 'production' ? '' : 'sandbox.')."midtrans.com/v2/qris/{$txId}/qr-code";
-        }
-        $qrString = $body['qr_string'] ?? ($body['qr_code'] ?? null);
-        $checkoutUrl = $qrUrl;
+            if (empty($qrUrl) && $paymentType === 'qris' && ! empty($txId)) {
+                $qrUrl = "https://api.".($environment === 'production' ? '' : 'sandbox.')."midtrans.com/v2/qris/{$txId}/qr-code";
+            }
+            $qrString = $body['qr_string'] ?? ($body['qr_code'] ?? null);
+            $checkoutUrl = $qrUrl;
 
-        return [
-            'status' => $isSuccess ? 'success' : 'failed',
-            'http_status' => $response->status(),
-            'is_not_found' => $isNotFound,
-            'data' => [
-                'order_id' => $orderId,
-                'transaction_id' => $txId,
-                'transaction_status' => $body['transaction_status'] ?? ($isNotFound ? 'not_found' : 'unknown'),
-                'status_message' => $body['status_message'] ?? null,
-                'gross_amount' => $body['gross_amount'] ?? null,
-                'payment_type' => $paymentType,
-                'qr_string' => $qrString,
-                'qr_url' => $qrUrl,
-                'checkout_url' => $checkoutUrl,
-                'va_numbers' => $body['va_numbers'] ?? null,
-                'raw_response' => $body,
-            ],
-        ];
+            return [
+                'status' => $isSuccess ? 'success' : 'failed',
+                'http_status' => $response->status(),
+                'is_not_found' => $isNotFound,
+                'data' => [
+                    'order_id' => $orderId,
+                    'transaction_id' => $txId,
+                    'transaction_status' => $body['transaction_status'] ?? ($isNotFound ? 'not_found' : 'unknown'),
+                    'status_message' => $body['status_message'] ?? null,
+                    'gross_amount' => $body['gross_amount'] ?? null,
+                    'payment_type' => $paymentType,
+                    'qr_string' => $qrString,
+                    'qr_url' => $qrUrl,
+                    'checkout_url' => $checkoutUrl,
+                    'va_numbers' => $body['va_numbers'] ?? null,
+                    'raw_response' => $body,
+                ],
+            ];
+        } catch (ConnectionException $e) {
+            return [
+                'status' => 'failed',
+                'http_status' => 504,
+                'is_not_found' => false,
+                'message' => 'Gagal terhubung ke Midtrans API: '.$e->getMessage(),
+                'data' => [
+                    'order_id' => $orderId,
+                    'transaction_status' => 'unknown',
+                ],
+            ];
+        }
     }
 }

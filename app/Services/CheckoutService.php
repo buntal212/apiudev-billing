@@ -5,6 +5,7 @@ namespace App\Services;
 use App\Models\ApplicationPaymentGateway;
 use App\Models\CheckoutOutboxMessage;
 use App\Models\Invoice;
+use App\Models\MidtransMerchantCredential;
 use App\Models\PaymentAttempt;
 use Carbon\CarbonImmutable;
 use Illuminate\Database\QueryException;
@@ -46,6 +47,11 @@ class CheckoutService
 
     public function retryCheckout(PaymentAttempt $paymentAttempt): PaymentAttempt
     {
+        if (strtolower((string) $paymentAttempt->provider) === 'midtrans') {
+            $this->verifyAndSyncMidtransStatusBeforeRetry($paymentAttempt);
+            $paymentAttempt->refresh();
+        }
+
         $outboxId = DB::transaction(function () use ($paymentAttempt): int {
             $attempt = PaymentAttempt::query()
                 ->lockForUpdate()
@@ -169,9 +175,10 @@ class CheckoutService
 
                 if ($activeAttempt !== null && strtolower((string) $activeAttempt->provider) === 'midtrans') {
                     $this->recoverMidtransInstructionsIfMissing($activeAttempt);
+                    $activeAttempt->refresh();
                 }
 
-                if ($activeAttempt !== null && $activeAttempt->status !== PaymentAttempt::StatusFailed) {
+                if ($activeAttempt !== null && ! in_array($activeAttempt->status, [PaymentAttempt::StatusFailed, PaymentAttempt::StatusExpired, PaymentAttempt::StatusCancelled], true)) {
                     return CheckoutOutboxMessage::query()
                         ->where('payment_attempt_id', $activeAttempt->getKey())
                         ->lockForUpdate()
@@ -617,6 +624,40 @@ class CheckoutService
             );
 
             if (($existingStatus['status'] ?? '') === 'success' && ! empty($existingStatus['data']['transaction_id'])) {
+                $existingTxStatus = (string) ($existingStatus['data']['transaction_status'] ?? 'pending');
+                $txId = (string) $existingStatus['data']['transaction_id'];
+
+                if (in_array($existingTxStatus, ['expire', 'cancel', 'deny'], true)) {
+                    $terminalStatus = match ($existingTxStatus) {
+                        'expire' => PaymentAttempt::StatusExpired,
+                        'cancel' => PaymentAttempt::StatusCancelled,
+                        default => PaymentAttempt::StatusFailed,
+                    };
+
+                    DB::transaction(function () use ($attempt, $claimed, $txId, $existingTxStatus, $terminalStatus, $existingStatus): void {
+                        $lockedAttempt = PaymentAttempt::query()->lockForUpdate()->findOrFail($attempt->getKey());
+                        $lockedOutbox = CheckoutOutboxMessage::query()->lockForUpdate()->findOrFail($claimed->getKey());
+
+                        $lockedAttempt->update([
+                            'gateway_payment_id' => $txId,
+                            'provider_reference' => $txId,
+                            'status' => $terminalStatus,
+                            'failure_code' => 'midtrans_'.$existingTxStatus,
+                            'failure_message' => $existingStatus['data']['status_message'] ?? 'Transaksi Midtrans telah kedaluwarsa atau dibatalkan.',
+                            'completed_at' => now(),
+                        ]);
+
+                        $lockedOutbox->update([
+                            'status' => CheckoutOutboxMessage::StatusFailed,
+                            'locked_at' => null,
+                            'available_at' => null,
+                            'error_code' => 'transaction_'.$existingTxStatus,
+                        ]);
+                    });
+
+                    return;
+                }
+
                 try {
                     $this->storeMidtransCheckout($claimed, $existingStatus['data'], $amountMinor, $paymentType, $bank);
 
@@ -1065,7 +1106,44 @@ class CheckoutService
 
         if (($statusResult['status'] ?? '') === 'success' && ! empty($statusResult['data']['transaction_id'])) {
             $data = $statusResult['data'];
-            $txId = $data['transaction_id'];
+            $txId = (string) $data['transaction_id'];
+            $transactionStatus = (string) ($data['transaction_status'] ?? 'pending');
+
+            if (in_array($transactionStatus, ['expire', 'cancel', 'deny'], true)) {
+                $terminalStatus = match ($transactionStatus) {
+                    'expire' => PaymentAttempt::StatusExpired,
+                    'cancel' => PaymentAttempt::StatusCancelled,
+                    default => PaymentAttempt::StatusFailed,
+                };
+
+                DB::transaction(function () use ($attempt, $txId, $terminalStatus, $transactionStatus, $data): void {
+                    $lockedAttempt = PaymentAttempt::query()->lockForUpdate()->findOrFail($attempt->getKey());
+                    $lockedAttempt->update([
+                        'gateway_payment_id' => $txId,
+                        'provider_reference' => $txId,
+                        'status' => $terminalStatus,
+                        'failure_code' => 'midtrans_'.$transactionStatus,
+                        'failure_message' => $data['status_message'] ?? 'Transaksi Midtrans telah kedaluwarsa atau dibatalkan.',
+                        'completed_at' => now(),
+                    ]);
+
+                    $outbox = CheckoutOutboxMessage::query()
+                        ->where('payment_attempt_id', $lockedAttempt->getKey())
+                        ->lockForUpdate()
+                        ->first();
+
+                    if ($outbox !== null && $outbox->status !== CheckoutOutboxMessage::StatusCompleted) {
+                        $outbox->update([
+                            'status' => CheckoutOutboxMessage::StatusFailed,
+                            'locked_at' => null,
+                            'error_code' => 'transaction_'.$transactionStatus,
+                        ]);
+                    }
+                });
+
+                return;
+            }
+
             $qrUrl = $data['qr_url'] ?? "https://api.sandbox.midtrans.com/v2/qris/{$txId}/qr-code";
             $qrString = $data['qr_string'] ?? null;
             $checkoutUrl = $data['checkout_url'] ?? $qrUrl;
@@ -1098,6 +1176,80 @@ class CheckoutService
                 'failure_message' => 'Transaksi tidak ditemukan di Midtrans Sandbox.',
                 'completed_at' => now(),
             ]);
+        }
+    }
+
+    private function verifyAndSyncMidtransStatusBeforeRetry(PaymentAttempt $attempt): void
+    {
+        $credential = MidtransMerchantCredential::query()
+            ->where('merchant_code', $attempt->gateway_merchant_code)
+            ->where('environment', 'sandbox')
+            ->first();
+
+        if ($credential === null || empty($credential->encrypted_server_key)) {
+            return;
+        }
+
+        $serverKey = $credential->getServerKey($this->midtransSecretStore);
+        if (empty($serverKey)) {
+            return;
+        }
+
+        $statusResult = $this->midtransClient->querySandboxStatus(
+            merchantCode: (string) $attempt->gateway_merchant_code,
+            serverKey: $serverKey,
+            orderId: (string) $attempt->merchant_reference,
+            environment: 'sandbox',
+        );
+
+        if (($statusResult['status'] ?? '') === 'success' && ! empty($statusResult['data']['transaction_id'])) {
+            $data = $statusResult['data'];
+            $txId = (string) $data['transaction_id'];
+            $transactionStatus = (string) ($data['transaction_status'] ?? 'unknown');
+
+            if (in_array($transactionStatus, ['settlement', 'capture'], true)) {
+                app(PaymentResultService::class)->syncMidtransPaymentAttempt($attempt);
+
+                return;
+            }
+
+            if (in_array($transactionStatus, ['expire', 'cancel', 'deny'], true)) {
+                $terminalStatus = match ($transactionStatus) {
+                    'expire' => PaymentAttempt::StatusExpired,
+                    'cancel' => PaymentAttempt::StatusCancelled,
+                    default => PaymentAttempt::StatusFailed,
+                };
+
+                DB::transaction(function () use ($attempt, $txId, $terminalStatus, $transactionStatus, $data): void {
+                    $lockedAttempt = PaymentAttempt::query()->lockForUpdate()->findOrFail($attempt->getKey());
+                    $lockedAttempt->update([
+                        'gateway_payment_id' => $txId,
+                        'provider_reference' => $txId,
+                        'status' => $terminalStatus,
+                        'failure_code' => 'midtrans_'.$transactionStatus,
+                        'failure_message' => $data['status_message'] ?? 'Transaksi Midtrans telah kedaluwarsa atau dibatalkan.',
+                        'completed_at' => now(),
+                    ]);
+
+                    $outbox = CheckoutOutboxMessage::query()
+                        ->where('payment_attempt_id', $lockedAttempt->getKey())
+                        ->lockForUpdate()
+                        ->first();
+
+                    if ($outbox !== null && $outbox->status !== CheckoutOutboxMessage::StatusCompleted) {
+                        $outbox->update([
+                            'status' => CheckoutOutboxMessage::StatusFailed,
+                            'locked_at' => null,
+                            'available_at' => null,
+                            'error_code' => 'transaction_'.$transactionStatus,
+                        ]);
+                    }
+                });
+
+                return;
+            }
+
+            $this->recoverMidtransInstructionsIfMissing($attempt);
         }
     }
 

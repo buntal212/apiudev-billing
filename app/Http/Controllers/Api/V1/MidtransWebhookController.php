@@ -210,17 +210,32 @@ class MidtransWebhookController extends Controller
 
         if (in_array($transactionStatus, ['expire', 'cancel', 'deny'], true)) {
             $status = match ($transactionStatus) {
-                'expire' => PaymentAttempt::StatusExpired,
+                'expire', 'expired' => PaymentAttempt::StatusExpired,
                 'cancel' => PaymentAttempt::StatusCancelled,
                 default => PaymentAttempt::StatusFailed,
             };
 
             if (! in_array($attempt->status, [PaymentAttempt::StatusSucceeded, $status], true)) {
-                $this->paymentAttemptService->transitionStatus(
+                $updatedAttempt = $this->paymentAttemptService->transitionStatus(
                     $attempt,
                     $status,
+                    providerReference: $transactionId ?: $attempt->gateway_payment_id,
                     failureCode: 'midtrans_'.$transactionStatus,
+                    failureMessage: (string) ($payload['status_message'] ?? 'Transaksi Midtrans telah kedaluwarsa atau dibatalkan.'),
                 );
+
+                if (! empty($transactionId) && $updatedAttempt->gateway_payment_id !== $transactionId) {
+                    $updatedAttempt->update(['gateway_payment_id' => $transactionId]);
+                }
+
+                if ($updatedAttempt->checkoutOutbox !== null && $updatedAttempt->checkoutOutbox->status !== \App\Models\CheckoutOutboxMessage::StatusCompleted) {
+                    $updatedAttempt->checkoutOutbox->update([
+                        'status' => \App\Models\CheckoutOutboxMessage::StatusFailed,
+                        'locked_at' => null,
+                        'available_at' => null,
+                        'error_code' => 'transaction_'.$transactionStatus,
+                    ]);
+                }
             }
 
             $this->auditService->record(

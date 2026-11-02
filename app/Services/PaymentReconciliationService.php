@@ -208,10 +208,11 @@ class PaymentReconciliationService
         PaymentReconciliationRun $run,
         PaymentAttempt $attempt,
         string $gatewayStatus,
+        ?string $providerReference = null,
     ): ReconciliationResult {
         $status = match ($gatewayStatus) {
             'failed' => PaymentAttempt::StatusFailed,
-            'expired' => PaymentAttempt::StatusExpired,
+            'expire', 'expired' => PaymentAttempt::StatusExpired,
             default => PaymentAttempt::StatusCancelled,
         };
         $updatedAttempt = $attempt->status === $status
@@ -219,8 +220,22 @@ class PaymentReconciliationService
             : $this->paymentAttemptService->transitionStatus(
                 $attempt,
                 $status,
+                providerReference: $providerReference ?? $attempt->provider_reference,
                 failureCode: 'gateway_'.$gatewayStatus,
             );
+
+        if ($providerReference !== null && $updatedAttempt->gateway_payment_id !== $providerReference) {
+            $updatedAttempt->update(['gateway_payment_id' => $providerReference]);
+        }
+
+        if ($updatedAttempt->checkoutOutbox !== null && $updatedAttempt->checkoutOutbox->status !== CheckoutOutboxMessage::StatusCompleted) {
+            $updatedAttempt->checkoutOutbox->update([
+                'status' => CheckoutOutboxMessage::StatusFailed,
+                'locked_at' => null,
+                'available_at' => null,
+                'error_code' => 'transaction_'.$gatewayStatus,
+            ]);
+        }
 
         return $this->finishRun(
             $run,
@@ -562,6 +577,7 @@ class PaymentReconciliationService
         }
 
         if (in_array($transactionStatus, ['expire', 'cancel', 'deny'], true)) {
+            $txId = (string) ($raw['transaction_id'] ?? $data['transaction_id'] ?? $attempt->gateway_payment_id);
             try {
                 app(MidtransAuditService::class)->record(
                     merchantCode: (string) $attempt->gateway_merchant_code,
@@ -572,13 +588,14 @@ class PaymentReconciliationService
                         'order_id' => $attempt->merchant_reference,
                         'payment_attempt_id' => $attempt->id,
                         'gateway_status' => $transactionStatus,
+                        'transaction_id' => $txId,
                     ],
                 );
             } catch (\Throwable) {
                 // ignore audit failure
             }
 
-            return $this->finishTerminal($run, $attempt, $transactionStatus);
+            return $this->finishTerminal($run, $attempt, $transactionStatus, $txId ?: null);
         }
 
         if ($transactionStatus === 'pending') {
