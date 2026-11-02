@@ -71,7 +71,7 @@ class PaymentAttemptController extends Controller
         PaymentReconciliationService $reconciliationService,
     ): PaymentAttemptResource {
         $this->authorize('update', $paymentAttempt);
-        $reconciliationService->reconcile($paymentAttempt);
+        $reconciliationService->reconcile($paymentAttempt, true);
 
         return new PaymentAttemptResource($paymentAttempt->fresh()->load([
             'invoice.subscription',

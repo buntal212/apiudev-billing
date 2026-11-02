@@ -30,14 +30,14 @@ class PaymentReconciliationService
         $this->midtransSecretStore = $midtransSecretStore ?? app(MidtransSecretStore::class);
     }
 
-    public function reconcile(PaymentAttempt $paymentAttempt): ReconciliationResult
+    public function reconcile(PaymentAttempt $paymentAttempt, bool $force = false): ReconciliationResult
     {
         $attempt = $paymentAttempt->fresh();
         if ($attempt === null || ! $this->isSupported($attempt)) {
             return new ReconciliationResult('skipped', $attempt ?? $paymentAttempt);
         }
 
-        $run = $this->claimRun($attempt);
+        $run = $this->claimRun($attempt, $force);
         if ($run === null) {
             return new ReconciliationResult('skipped', $attempt->fresh() ?? $attempt);
         }
@@ -75,7 +75,10 @@ class PaymentReconciliationService
         $baseQuery = fn (): Builder => PaymentAttempt::query()
             ->whereIn(DB::raw('LOWER(provider)'), ['dana', 'midtrans'])
             ->where('gateway_environment', 'sandbox')
-            ->whereNotNull('gateway_payment_id')
+            ->where(function (Builder $query): void {
+                $query->whereNotNull('gateway_payment_id')
+                    ->orWhereNotNull('merchant_reference');
+            })
             ->whereIn('status', [PaymentAttempt::StatusInitiated, PaymentAttempt::StatusPending]);
 
         // Prioritaskan attempt yang belum pernah direkonsiliasi agar backlog lama
@@ -315,10 +318,10 @@ class PaymentReconciliationService
         );
     }
 
-    private function claimRun(PaymentAttempt $paymentAttempt): ?PaymentReconciliationRun
+    private function claimRun(PaymentAttempt $paymentAttempt, bool $force = false): ?PaymentReconciliationRun
     {
         try {
-            return DB::transaction(function () use ($paymentAttempt): ?PaymentReconciliationRun {
+            return DB::transaction(function () use ($paymentAttempt, $force): ?PaymentReconciliationRun {
                 $attempt = PaymentAttempt::query()->lockForUpdate()->find($paymentAttempt->getKey());
                 if ($attempt === null || $this->isFinal($attempt->status)) {
                     return null;
@@ -332,8 +335,23 @@ class PaymentReconciliationService
 
                 if ($latest !== null) {
                     $now = now()->toImmutable();
-                    if ($latest->attempt_number >= $this->maxAttempts()
-                        || ! $this->isRunDue($latest, $now)) {
+                    $processingTimeout = $force ? 15 : $this->processingTimeoutSeconds();
+                    // If stuck in processing past the timeout, mark stale run as failed
+                    if ($latest->status === PaymentReconciliationRun::StatusProcessing
+                        && ($latest->started_at === null || $latest->started_at->lte($now->subSeconds($processingTimeout)))) {
+                        $latest->update([
+                            'status' => PaymentReconciliationRun::StatusFailed,
+                            'error_code' => 'reconciliation_stale_timeout',
+                            'finished_at' => now(),
+                        ]);
+                        $latest = $latest->fresh();
+                    }
+
+                    if ($latest->attempt_number >= $this->maxAttempts()) {
+                        return null;
+                    }
+
+                    if (! $force && ! $this->isRunDue($latest, $now)) {
                         return null;
                     }
                 }
@@ -426,6 +444,44 @@ class PaymentReconciliationService
         );
 
         if (($statusResult['status'] ?? '') !== 'success') {
+            $isNotFound = ($statusResult['is_not_found'] ?? false) || ($statusResult['http_status'] ?? 0) === 404;
+            if ($isNotFound) {
+                $run->gateway_status = 'not_found';
+                try {
+                    app(MidtransAuditService::class)->record(
+                        merchantCode: (string) $attempt->gateway_merchant_code,
+                        action: 'sandbox.reconciliation_not_found',
+                        status: 'failed',
+                        responseCode: '404',
+                        metadata: [
+                            'order_id' => $attempt->merchant_reference,
+                            'payment_attempt_id' => $attempt->id,
+                            'message' => 'Transaksi tidak ditemukan di Midtrans Sandbox.',
+                        ],
+                    );
+                } catch (\Throwable) {
+                    // ignore audit failure
+                }
+
+                return $this->finishFailed($run, $attempt, 'midtrans_order_not_found', 404);
+            }
+
+            try {
+                app(MidtransAuditService::class)->record(
+                    merchantCode: (string) $attempt->gateway_merchant_code,
+                    action: 'sandbox.reconciliation_query_failed',
+                    status: 'failed',
+                    responseCode: (string) ($statusResult['http_status'] ?? '500'),
+                    metadata: [
+                        'order_id' => $attempt->merchant_reference,
+                        'payment_attempt_id' => $attempt->id,
+                        'message' => $statusResult['message'] ?? 'Gagal query status Midtrans.',
+                    ],
+                );
+            } catch (\Throwable) {
+                // ignore audit failure
+            }
+
             return $this->finishRetryable($run, $attempt, 'midtrans_query_failed');
         }
 
@@ -481,6 +537,22 @@ class PaymentReconciliationService
                 ),
             );
 
+            try {
+                app(MidtransAuditService::class)->record(
+                    merchantCode: (string) $attempt->gateway_merchant_code,
+                    action: 'sandbox.reconciliation_settled',
+                    status: 'success',
+                    responseCode: '200',
+                    metadata: [
+                        'order_id' => $attempt->merchant_reference,
+                        'payment_attempt_id' => $attempt->id,
+                        'transaction_id' => $raw['transaction_id'] ?? null,
+                    ],
+                );
+            } catch (\Throwable) {
+                // ignore audit failure
+            }
+
             return $this->finishRun(
                 $run,
                 $updatedAttempt,
@@ -490,10 +562,67 @@ class PaymentReconciliationService
         }
 
         if (in_array($transactionStatus, ['expire', 'cancel', 'deny'], true)) {
+            try {
+                app(MidtransAuditService::class)->record(
+                    merchantCode: (string) $attempt->gateway_merchant_code,
+                    action: 'sandbox.reconciliation_terminal',
+                    status: 'processed',
+                    responseCode: '200',
+                    metadata: [
+                        'order_id' => $attempt->merchant_reference,
+                        'payment_attempt_id' => $attempt->id,
+                        'gateway_status' => $transactionStatus,
+                    ],
+                );
+            } catch (\Throwable) {
+                // ignore audit failure
+            }
+
             return $this->finishTerminal($run, $attempt, $transactionStatus);
         }
 
         if ($transactionStatus === 'pending') {
+            $metadata = is_array($attempt->metadata) ? $attempt->metadata : [];
+            $paymentType = $metadata['payment_type'] ?? ($attempt->provider === 'midtrans' ? 'qris' : null);
+            $txId = $raw['transaction_id'] ?? $attempt->gateway_payment_id;
+
+            if ($paymentType === 'qris' && ! empty($txId)) {
+                $recoveredQrUrl = "https://api.sandbox.midtrans.com/v2/qris/{$txId}/qr-code";
+                $updated = false;
+                if (empty($metadata['qr_url'])) {
+                    $metadata['qr_url'] = $recoveredQrUrl;
+                    $updated = true;
+                }
+                if (empty($attempt->checkout_url)) {
+                    $attempt->checkout_url = $recoveredQrUrl;
+                    $updated = true;
+                }
+                if (empty($attempt->provider_reference)) {
+                    $attempt->provider_reference = $txId;
+                    $updated = true;
+                }
+                if ($updated) {
+                    $attempt->metadata = $metadata;
+                    $attempt->save();
+                }
+            }
+
+            try {
+                app(MidtransAuditService::class)->record(
+                    merchantCode: (string) $attempt->gateway_merchant_code,
+                    action: 'sandbox.reconciliation_pending',
+                    status: 'pending',
+                    responseCode: '200',
+                    metadata: [
+                        'order_id' => $attempt->merchant_reference,
+                        'payment_attempt_id' => $attempt->id,
+                        'transaction_id' => $txId,
+                    ],
+                );
+            } catch (\Throwable) {
+                // ignore audit failure
+            }
+
             return $this->finishPending($run, $attempt);
         }
 
@@ -502,10 +631,12 @@ class PaymentReconciliationService
 
     private function isSupported(PaymentAttempt $attempt): bool
     {
+        $hasIdentifier = (is_string($attempt->gateway_payment_id) && $attempt->gateway_payment_id !== '')
+            || (is_string($attempt->merchant_reference) && $attempt->merchant_reference !== '');
+
         return in_array(strtolower((string) $attempt->provider), ['dana', 'midtrans'], true)
             && $attempt->gateway_environment === 'sandbox'
-            && is_string($attempt->gateway_payment_id)
-            && $attempt->gateway_payment_id !== ''
+            && $hasIdentifier
             && in_array($attempt->status, [PaymentAttempt::StatusInitiated, PaymentAttempt::StatusPending], true);
     }
 

@@ -131,7 +131,7 @@ class InvoiceController extends Controller
             abort(Response::HTTP_UNPROCESSABLE_ENTITY, 'Invoice belum memiliki percobaan pembayaran untuk direkonsiliasi.');
         }
 
-        $reconciliationService->reconcile($attempt);
+        $reconciliationService->reconcile($attempt, true);
 
         return $this->show($invoice->fresh());
     }

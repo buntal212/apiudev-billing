@@ -32,6 +32,11 @@ class PaymentAttemptResource extends JsonResource
             'metadata' => $this->metadata,
             'payment_method' => $this->metadata['payment_method'] ?? ($this->provider === 'midtrans' ? 'qris' : 'dana_wallet'),
             'qr_content' => $this->metadata['qr_content'] ?? null,
+            'qr_url' => $this->metadata['qr_url']
+                ?? $this->metadata['payment_instruction']['qr_url']
+                ?? ($this->provider === 'midtrans' && ($this->metadata['payment_type'] ?? null) === 'qris' && ! empty($this->gateway_payment_id)
+                    ? "https://api.".($this->gateway_environment === 'production' ? '' : 'sandbox.')."midtrans.com/v2/qris/{$this->gateway_payment_id}/qr-code"
+                    : null),
             'payment_code' => $this->metadata['payment_code'] ?? null,
             'payment_instruction' => $this->metadata['payment_instruction'] ?? null,
             'checkout_url' => $this->checkout_url,

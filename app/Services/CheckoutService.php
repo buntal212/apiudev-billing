@@ -125,6 +125,72 @@ class CheckoutService
                     }
                 }
 
+                if ($activeAttempt !== null && strtolower((string) $activeAttempt->provider) === 'midtrans') {
+                    $activeMetadata = is_array($activeAttempt->metadata) ? $activeAttempt->metadata : [];
+                    $isQris = ($activeMetadata['payment_method'] ?? 'qris') === 'qris';
+                    $hasInstructions = $isQris
+                        ? (! empty($activeMetadata['qr_content']) || ! empty($activeMetadata['qr_url']) || ! empty($activeAttempt->checkout_url))
+                        : (! empty($activeMetadata['payment_code']) || ! empty($activeAttempt->checkout_url));
+
+                    if (! $hasInstructions) {
+                        // Recover instructions if transaction already exists in Midtrans
+                        $credential = \App\Models\MidtransMerchantCredential::query()
+                            ->where('merchant_code', $activeAttempt->gateway_merchant_code)
+                            ->where('environment', 'sandbox')
+                            ->first();
+
+                        if ($credential !== null && ! empty($credential->encrypted_server_key)) {
+                            $serverKey = $credential->getServerKey($this->midtransSecretStore);
+                            if (! empty($serverKey)) {
+                                $statusResult = $this->midtransClient->querySandboxStatus(
+                                    merchantCode: (string) $activeAttempt->gateway_merchant_code,
+                                    serverKey: $serverKey,
+                                    orderId: (string) $activeAttempt->merchant_reference,
+                                    environment: 'sandbox',
+                                );
+
+                                if (($statusResult['status'] ?? '') === 'success' && ! empty($statusResult['data']['transaction_id'])) {
+                                    $data = $statusResult['data'];
+                                    $txId = $data['transaction_id'];
+                                    $qrUrl = $data['qr_url'] ?? "https://api.sandbox.midtrans.com/v2/qris/{$txId}/qr-code";
+                                    $qrString = $data['qr_string'] ?? null;
+                                    $checkoutUrl = $data['checkout_url'] ?? $qrUrl;
+
+                                    $activeMetadata['transaction_id'] = $txId;
+                                    $activeMetadata['qr_url'] = $qrUrl;
+                                    if ($qrString !== null) {
+                                        $activeMetadata['qr_content'] = $qrString;
+                                    }
+                                    if (empty($activeMetadata['payment_instruction'])) {
+                                        $activeMetadata['payment_instruction'] = [
+                                            'type' => 'qris_mpm',
+                                            'qr_content' => $qrString,
+                                            'qr_url' => $qrUrl,
+                                            'checkout_url' => $checkoutUrl,
+                                            'message' => 'Pindai kode QRIS Midtrans Sandbox menggunakan aplikasi e-wallet atau mobile banking.',
+                                        ];
+                                    }
+
+                                    $activeAttempt->update([
+                                        'provider_reference' => $txId,
+                                        'gateway_payment_id' => $txId,
+                                        'checkout_url' => $checkoutUrl,
+                                        'metadata' => $activeMetadata,
+                                    ]);
+                                } elseif (($statusResult['is_not_found'] ?? false) || ($statusResult['http_status'] ?? 0) === 404) {
+                                    $activeAttempt->update([
+                                        'status' => PaymentAttempt::StatusFailed,
+                                        'failure_code' => 'midtrans_order_not_found',
+                                        'failure_message' => 'Transaksi tidak ditemukan di Midtrans Sandbox.',
+                                        'completed_at' => now(),
+                                    ]);
+                                    $activeAttempt = null;
+                                }
+                            }
+                        }
+                    }
+                }
+
                 if ($activeAttempt !== null) {
                     return CheckoutOutboxMessage::query()
                         ->where('payment_attempt_id', $activeAttempt->getKey())
@@ -568,10 +634,23 @@ class CheckoutService
         $orderId = (string) ($gatewayData['order_id'] ?? '');
         $qrString = $gatewayData['qr_string'] ?? null;
         $checkoutUrl = $gatewayData['checkout_url'] ?? null;
+        $qrUrl = $gatewayData['qr_url'] ?? null;
         $vaNumbers = $gatewayData['va_numbers'] ?? [];
         $permataVaNumber = $gatewayData['permata_va_number'] ?? null;
         $billKey = $gatewayData['bill_key'] ?? null;
         $billerCode = $gatewayData['biller_code'] ?? null;
+
+        if ($paymentType === 'qris') {
+            if ($qrUrl === null && is_string($checkoutUrl) && str_contains($checkoutUrl, 'qr')) {
+                $qrUrl = $checkoutUrl;
+            }
+            if ($qrUrl === null && ! empty($transactionId)) {
+                $qrUrl = "https://api.sandbox.midtrans.com/v2/qris/{$transactionId}/qr-code";
+            }
+            if ($checkoutUrl === null && $qrUrl !== null) {
+                $checkoutUrl = $qrUrl;
+            }
+        }
 
         $paymentCode = null;
         if (! empty($vaNumbers) && is_array($vaNumbers)) {
@@ -592,11 +671,27 @@ class CheckoutService
             $paymentCode = $qrString;
         }
 
+        // Validate completeness of instructions before marking checkout completed
+        if ($paymentType === 'qris') {
+            if (empty($qrString) && empty($qrUrl) && empty($checkoutUrl)) {
+                throw new RuntimeException('Instruksi QRIS Midtrans tidak lengkap dari gateway.');
+            }
+        } elseif (in_array($paymentType, ['bank_transfer', 'echannel'], true)) {
+            if (empty($paymentCode)) {
+                throw new RuntimeException('Instruksi Virtual Account Midtrans tidak lengkap dari gateway.');
+            }
+        } elseif ($paymentType === 'gopay') {
+            if (empty($checkoutUrl)) {
+                throw new RuntimeException('Tautan pembayaran GoPay Midtrans tidak lengkap dari gateway.');
+            }
+        }
+
         $instruction = null;
         if ($paymentType === 'qris') {
             $instruction = [
                 'type' => 'qris_mpm',
                 'qr_content' => $qrString,
+                'qr_url' => $qrUrl,
                 'message' => 'Pindai kode QRIS Midtrans Sandbox menggunakan aplikasi e-wallet atau mobile banking.',
             ];
         } elseif (in_array($paymentType, ['bank_transfer', 'echannel'], true)) {
@@ -623,6 +718,7 @@ class CheckoutService
             $transactionId,
             $orderId,
             $checkoutUrl,
+            $qrUrl,
             $paymentCode,
             $instruction,
             $qrString,
@@ -645,6 +741,9 @@ class CheckoutService
             if ($qrString !== null) {
                 $currentMetadata['qr_content'] = $qrString;
             }
+            if ($qrUrl !== null) {
+                $currentMetadata['qr_url'] = $qrUrl;
+            }
             if ($billKey !== null) {
                 $currentMetadata['bill_key'] = $billKey;
                 $currentMetadata['biller_code'] = $billerCode;
@@ -654,11 +753,13 @@ class CheckoutService
             }
             $currentMetadata['payment_type'] = $paymentType;
 
-            $hasValidCheckoutUrl = is_string($checkoutUrl) && filter_var($checkoutUrl, FILTER_VALIDATE_URL);
+            $effectiveCheckoutUrl = $checkoutUrl ?: $qrUrl;
+            $hasValidCheckoutUrl = is_string($effectiveCheckoutUrl) && filter_var($effectiveCheckoutUrl, FILTER_VALIDATE_URL);
 
             $attempt->update([
                 'gateway_payment_id' => $transactionId ?: $orderId,
-                'checkout_url' => $hasValidCheckoutUrl ? $checkoutUrl : null,
+                'provider_reference' => $transactionId ?: $orderId,
+                'checkout_url' => $hasValidCheckoutUrl ? $effectiveCheckoutUrl : null,
                 'checkout_expires_at' => now()->toImmutable()->addHours(24),
                 'status' => PaymentAttempt::StatusPending,
                 'metadata' => $currentMetadata,

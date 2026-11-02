@@ -574,6 +574,217 @@ class MidtransInvoiceCheckoutAndSettlementTest extends TestCase
         $this->assertSame(Invoice::StatusPaid, $invoice->fresh()->status);
     }
 
+    public function test_midtrans_qris_returns_qr_url_and_checkout_url(): void
+    {
+        [$invoice, $credential] = $this->setupInvoiceWithMidtrans();
+
+        Http::fake([
+            'https://api.sandbox.midtrans.com/v2/charge' => Http::response([
+                'status_code' => '201',
+                'status_message' => 'QRIS transaction is created',
+                'transaction_id' => 'tx-midtrans-qris-url-01',
+                'order_id' => $invoice->invoice_number.'-A1',
+                'gross_amount' => '50000.00',
+                'payment_type' => 'qris',
+                'transaction_status' => 'pending',
+                'actions' => [
+                    [
+                        'name' => 'generate-qr-code',
+                        'method' => 'GET',
+                        'url' => 'https://api.sandbox.midtrans.com/v2/qris/tx-midtrans-qris-url-01/qr-code',
+                    ],
+                ],
+                'qr_string' => '00020101021226590014ID.LINKAJA.WWW',
+            ], 201),
+        ]);
+
+        $admin = User::factory()->create(['is_admin' => true]);
+        Sanctum::actingAs($admin, ['admin:access']);
+
+        $response = $this->postJson("/api/v1/admin/invoices/{$invoice->id}/checkout", [
+            'payment_method' => 'qris',
+            'provider' => 'midtrans',
+        ], ['Idempotency-Key' => 'idemp-chk-qris-url-01']);
+
+        $response->assertOk()
+            ->assertJsonPath('data.checkout_status', 'ready')
+            ->assertJsonPath('data.qr_url', 'https://api.sandbox.midtrans.com/v2/qris/tx-midtrans-qris-url-01/qr-code')
+            ->assertJsonPath('data.checkout_url', 'https://api.sandbox.midtrans.com/v2/qris/tx-midtrans-qris-url-01/qr-code');
+
+        $attempt = PaymentAttempt::query()->where('invoice_id', $invoice->id)->firstOrFail();
+        $this->assertSame('tx-midtrans-qris-url-01', $attempt->provider_reference);
+        $this->assertSame('https://api.sandbox.midtrans.com/v2/qris/tx-midtrans-qris-url-01/qr-code', $attempt->checkout_url);
+        $this->assertSame('https://api.sandbox.midtrans.com/v2/qris/tx-midtrans-qris-url-01/qr-code', $attempt->metadata['qr_url']);
+    }
+
+    public function test_midtrans_qris_recovers_when_reconciled_with_missing_qr_url(): void
+    {
+        [$invoice, $credential] = $this->setupInvoiceWithMidtrans();
+
+        $attempt = PaymentAttempt::query()->create([
+            'invoice_id' => $invoice->id,
+            'attempt_number' => 1,
+            'provider' => 'midtrans',
+            'merchant_reference' => $invoice->invoice_number.'-A1',
+            'gateway_merchant_code' => self::MerchantCode,
+            'gateway_environment' => 'sandbox',
+            'amount' => $invoice->amount,
+            'currency' => 'IDR',
+            'status' => PaymentAttempt::StatusPending,
+            'gateway_payment_id' => 'tx-missing-recovered-01',
+            'provider_reference' => null,
+            'checkout_url' => null,
+            'idempotency_key' => 'checkout:'.$invoice->id.':rec',
+            'requested_at' => now(),
+            'metadata' => [
+                'payment_method' => 'qris',
+                'payment_type' => 'qris',
+            ],
+        ]);
+
+        Http::fake([
+            'https://api.sandbox.midtrans.com/v2/'.$attempt->merchant_reference.'/status' => Http::response([
+                'status_code' => '201',
+                'status_message' => 'Success, transaction found',
+                'transaction_id' => 'tx-missing-recovered-01',
+                'order_id' => $attempt->merchant_reference,
+                'gross_amount' => '50000.00',
+                'payment_type' => 'qris',
+                'transaction_status' => 'pending',
+            ], 200),
+        ]);
+
+        $admin = User::factory()->create(['is_admin' => true]);
+        Sanctum::actingAs($admin, ['admin:access']);
+
+        $res = $this->postJson("/api/v1/admin/invoices/{$invoice->id}/reconcile");
+        $res->assertOk();
+
+        $refreshed = $attempt->fresh();
+        $this->assertSame('tx-missing-recovered-01', $refreshed->provider_reference);
+        $this->assertSame('https://api.sandbox.midtrans.com/v2/qris/tx-missing-recovered-01/qr-code', $refreshed->checkout_url);
+        $this->assertSame('https://api.sandbox.midtrans.com/v2/qris/tx-missing-recovered-01/qr-code', $refreshed->metadata['qr_url']);
+    }
+
+    public function test_midtrans_reconcile_forces_stale_processing_recovery(): void
+    {
+        [$invoice, $credential] = $this->setupInvoiceWithMidtrans();
+
+        $attempt = PaymentAttempt::query()->create([
+            'invoice_id' => $invoice->id,
+            'attempt_number' => 1,
+            'provider' => 'midtrans',
+            'merchant_reference' => $invoice->invoice_number.'-A1',
+            'gateway_merchant_code' => self::MerchantCode,
+            'gateway_environment' => 'sandbox',
+            'amount' => $invoice->amount,
+            'currency' => 'IDR',
+            'status' => PaymentAttempt::StatusPending,
+            'gateway_payment_id' => 'tx-stale-01',
+            'idempotency_key' => 'checkout:'.$invoice->id.':stale',
+            'requested_at' => now(),
+            'metadata' => [
+                'payment_method' => 'qris',
+            ],
+        ]);
+
+        // Create a run stuck in processing 20 seconds ago
+        $staleRun = \App\Models\PaymentReconciliationRun::query()->create([
+            'payment_attempt_id' => $attempt->id,
+            'attempt_number' => 1,
+            'status' => \App\Models\PaymentReconciliationRun::StatusProcessing,
+            'idempotency_key' => 'reconciliation:try:stale-01',
+            'started_at' => now()->subSeconds(20),
+        ]);
+
+        Http::fake([
+            'https://api.sandbox.midtrans.com/v2/'.$attempt->merchant_reference.'/status' => Http::response([
+                'status_code' => '201',
+                'status_message' => 'Success, transaction found',
+                'transaction_id' => 'tx-stale-01',
+                'order_id' => $attempt->merchant_reference,
+                'gross_amount' => '50000.00',
+                'payment_type' => 'qris',
+                'transaction_status' => 'pending',
+            ], 200),
+        ]);
+
+        $admin = User::factory()->create(['is_admin' => true]);
+        Sanctum::actingAs($admin, ['admin:access']);
+
+        $res = $this->postJson("/api/v1/admin/invoices/{$invoice->id}/reconcile");
+        $res->assertOk();
+
+        // The stale run should have been marked failed due to timeout
+        $this->assertSame(\App\Models\PaymentReconciliationRun::StatusFailed, $staleRun->fresh()->status);
+        $this->assertSame('reconciliation_stale_timeout', $staleRun->fresh()->error_code);
+
+        // A new run should have been created and succeeded in pending check
+        $latestRun = $attempt->latestReconciliationRun()->first();
+        $this->assertNotNull($latestRun);
+        $this->assertSame(2, $latestRun->attempt_number);
+        $this->assertSame(\App\Models\PaymentReconciliationRun::StatusPending, $latestRun->status);
+    }
+
+    public function test_midtrans_idempotent_settlement_prevents_duplicate_subscription_extension(): void
+    {
+        [$invoice, $credential] = $this->setupInvoiceWithMidtrans();
+
+        $subscription = Subscription::factory()->create([
+            'application_customer_id' => $invoice->application_customer_id,
+            'subscription_plan_id' => $invoice->subscription_plan_id,
+            'status' => Subscription::StatusActive,
+            'starts_at' => now()->subDays(10),
+            'expires_at' => now()->addDays(20),
+        ]);
+        $invoice->update(['subscription_id' => $subscription->id]);
+
+        $attempt = PaymentAttempt::query()->create([
+            'invoice_id' => $invoice->id,
+            'attempt_number' => 1,
+            'provider' => 'midtrans',
+            'merchant_reference' => $invoice->invoice_number.'-A1',
+            'gateway_merchant_code' => self::MerchantCode,
+            'gateway_environment' => 'sandbox',
+            'amount' => $invoice->amount,
+            'currency' => 'IDR',
+            'status' => PaymentAttempt::StatusPending,
+            'gateway_payment_id' => 'tx-dup-settle-01',
+            'idempotency_key' => 'checkout:'.$invoice->id.':dup',
+            'requested_at' => now(),
+        ]);
+
+        $serverKey = self::TestServerKey;
+        $orderId = $attempt->merchant_reference;
+        $statusCode = '200';
+        $grossAmount = '50000.00';
+        $signature = hash('sha512', $orderId.$statusCode.$grossAmount.$serverKey);
+
+        $payload = [
+            'order_id' => $orderId,
+            'status_code' => $statusCode,
+            'gross_amount' => $grossAmount,
+            'signature_key' => $signature,
+            'transaction_status' => 'settlement',
+            'fraud_status' => 'accept',
+            'transaction_id' => 'tx-dup-settle-01',
+            'settlement_time' => now()->format('Y-m-d H:i:s'),
+        ];
+
+        // First webhook call: settles invoice
+        $r1 = $this->postJson('/api/v1/payment-gateways/midtrans/webhook', $payload);
+        $r1->assertOk();
+        $this->assertSame(Invoice::StatusPaid, $invoice->fresh()->status);
+        $initialExpiresAt = $subscription->fresh()->expires_at;
+
+        // Second duplicate webhook call: idempotent, no extra extension
+        $r2 = $this->postJson('/api/v1/payment-gateways/midtrans/webhook', $payload);
+        $r2->assertOk();
+
+        $this->assertEquals($initialExpiresAt, $subscription->fresh()->expires_at);
+        $this->assertSame(1, PaymentAllocation::query()->where('payment_attempt_id', $attempt->id)->count());
+    }
+
     /**
      * @return array{0: Invoice, 1: MidtransMerchantCredential}
      */

@@ -32,6 +32,7 @@ class InvoiceCheckoutController extends Controller
         $resource = new InvoiceCheckoutResource($attempt, $outbox);
         $isReady = $attempt->checkout_url !== null
             || ! empty($attempt->metadata['qr_content'] ?? null)
+            || ! empty($attempt->metadata['qr_url'] ?? null)
             || ! empty($attempt->metadata['payment_code'] ?? null);
 
         return $resource

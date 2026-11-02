@@ -170,16 +170,39 @@ class MidtransGatewayProvisioningClient
 
         $body = $response->json() ?? [];
         $statusCode = $response->status();
-        $isSuccess = ($statusCode >= 200 && $statusCode < 300) || ($body['status_code'] ?? '') === '201';
+        $midtransCode = (string) ($body['status_code'] ?? '');
 
-        $qrString = $body['qr_string'] ?? null;
+        // If duplicate order ID (406), attempt recovery via Midtrans status query
+        if ($statusCode === 406 || $midtransCode === '406') {
+            $statusResult = $this->querySandboxStatus($merchantCode, $serverKey, $orderId, $environment);
+            if (($statusResult['status'] ?? '') === 'success' && ! empty($statusResult['data']['raw_response'])) {
+                $body = $statusResult['data']['raw_response'];
+                $statusCode = 200;
+                $midtransCode = (string) ($body['status_code'] ?? '200');
+            }
+        }
+
+        $isSuccess = in_array($midtransCode, ['200', '201'], true)
+            || ($statusCode === 201 && $midtransCode === '')
+            || ($statusCode >= 200 && $statusCode < 300 && in_array($body['transaction_status'] ?? '', ['pending', 'settlement', 'capture'], true));
+
+        $qrString = $body['qr_string'] ?? ($body['qr_code'] ?? null);
         $checkoutUrl = null;
+        $qrUrl = null;
         if (! empty($body['actions'])) {
             foreach ($body['actions'] as $action) {
-                if (($action['name'] ?? '') === 'generate-qr-code' || ($action['name'] ?? '') === 'deeplink-redirect') {
+                if (($action['name'] ?? '') === 'generate-qr-code') {
+                    $qrUrl = $action['url'] ?? null;
+                    $checkoutUrl = $action['url'] ?? $checkoutUrl;
+                } elseif (($action['name'] ?? '') === 'deeplink-redirect') {
                     $checkoutUrl = $action['url'] ?? $checkoutUrl;
                 }
             }
+        }
+
+        if ($paymentType === 'qris' && empty($qrUrl) && ! empty($body['transaction_id'])) {
+            $qrUrl = "https://api.".($environment === 'production' ? '' : 'sandbox.')."midtrans.com/v2/qris/{$body['transaction_id']}/qr-code";
+            $checkoutUrl = $checkoutUrl ?: $qrUrl;
         }
 
         $vaNumbers = $body['va_numbers'] ?? null;
@@ -206,6 +229,7 @@ class MidtransGatewayProvisioningClient
                 'bank' => $bank,
                 'transaction_status' => $body['transaction_status'] ?? 'pending',
                 'qr_string' => $qrString,
+                'qr_url' => $qrUrl,
                 'checkout_url' => $checkoutUrl,
                 'va_numbers' => $vaNumbers,
                 'permata_va_number' => $permataVaNumber,
@@ -234,6 +258,18 @@ class MidtransGatewayProvisioningClient
                     ->acceptJson()
                     ->get("{$gatewayUrl}/api/v1/internal/merchants/{$merchantCode}/sandbox-test/status/{$orderId}");
 
+                if ($response->status() === 404) {
+                    $json = $response->json() ?? [];
+
+                    return [
+                        'status' => 'failed',
+                        'http_status' => 404,
+                        'is_not_found' => true,
+                        'message' => $json['message'] ?? 'Transaksi tidak ditemukan di gateway.',
+                        'data' => $json['data'] ?? ['order_id' => $orderId, 'transaction_status' => 'not_found'],
+                    ];
+                }
+
                 if ($response->successful()) {
                     return $response->json();
                 }
@@ -251,15 +287,40 @@ class MidtransGatewayProvisioningClient
 
         $body = $response->json() ?? [];
         $isSuccess = $response->successful();
+        $isNotFound = $response->status() === 404 || ($body['status_code'] ?? '') === '404';
+
+        $txId = $body['transaction_id'] ?? null;
+        $paymentType = $body['payment_type'] ?? 'qris';
+        $qrUrl = null;
+        if (! empty($body['actions'])) {
+            foreach ($body['actions'] as $action) {
+                if (($action['name'] ?? '') === 'generate-qr-code') {
+                    $qrUrl = $action['url'] ?? null;
+                    break;
+                }
+            }
+        }
+        if (empty($qrUrl) && $paymentType === 'qris' && ! empty($txId)) {
+            $qrUrl = "https://api.".($environment === 'production' ? '' : 'sandbox.')."midtrans.com/v2/qris/{$txId}/qr-code";
+        }
+        $qrString = $body['qr_string'] ?? ($body['qr_code'] ?? null);
+        $checkoutUrl = $qrUrl;
 
         return [
             'status' => $isSuccess ? 'success' : 'failed',
+            'http_status' => $response->status(),
+            'is_not_found' => $isNotFound,
             'data' => [
                 'order_id' => $orderId,
-                'transaction_status' => $body['transaction_status'] ?? 'unknown',
+                'transaction_id' => $txId,
+                'transaction_status' => $body['transaction_status'] ?? ($isNotFound ? 'not_found' : 'unknown'),
                 'status_message' => $body['status_message'] ?? null,
                 'gross_amount' => $body['gross_amount'] ?? null,
-                'payment_type' => $body['payment_type'] ?? null,
+                'payment_type' => $paymentType,
+                'qr_string' => $qrString,
+                'qr_url' => $qrUrl,
+                'checkout_url' => $checkoutUrl,
+                'va_numbers' => $body['va_numbers'] ?? null,
                 'raw_response' => $body,
             ],
         ];
