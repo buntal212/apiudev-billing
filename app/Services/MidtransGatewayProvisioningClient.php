@@ -290,8 +290,28 @@ class MidtransGatewayProvisioningClient
                 ->get("{$midtransBaseUrl}/".urlencode($orderId).'/status');
 
             $body = $response->json() ?? [];
-            $isSuccess = $response->successful();
-            $isNotFound = $response->status() === 404 || ($body['status_code'] ?? '') === '404';
+            $statusCode = $response->status();
+            $midtransCode = (string) ($body['status_code'] ?? '');
+
+            $isAuthError = in_array($statusCode, [401, 403], true) || in_array($midtransCode, ['401', '403'], true);
+            if ($isAuthError) {
+                return [
+                    'status' => 'failed',
+                    'http_status' => $statusCode,
+                    'is_not_found' => false,
+                    'error_type' => 'gateway_authentication_failed',
+                    'message' => $body['status_message'] ?? 'Autentikasi Midtrans gagal. Periksa Server Key merchant.',
+                    'data' => [
+                        'order_id' => $orderId,
+                        'transaction_status' => 'unauthorized',
+                        'raw_response' => $body,
+                    ],
+                ];
+            }
+
+            // Only mark is_not_found if Midtrans Core API explicitly returns 404 (and not auth or server error)
+            $isNotFound = ($statusCode === 404 || $midtransCode === '404') && ! in_array($statusCode, [401, 403, 500, 502, 503, 504], true);
+            $isSuccess = $response->successful() && ! $isNotFound;
 
             $txId = $body['transaction_id'] ?? null;
             $paymentType = $body['payment_type'] ?? 'qris';

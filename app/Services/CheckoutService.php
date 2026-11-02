@@ -1251,7 +1251,7 @@ class CheckoutService
                 $updatePayload['checkout_expires_at'] = $parsedExpiry;
             }
             $attempt->update($updatePayload);
-        } elseif (($statusResult['is_not_found'] ?? false) || ($statusResult['http_status'] ?? 0) === 404) {
+        } elseif ($statusResult['is_not_found'] ?? false) {
             $attempt->update([
                 'status' => PaymentAttempt::StatusFailed,
                 'failure_code' => 'midtrans_order_not_found',

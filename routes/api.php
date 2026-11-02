@@ -29,7 +29,7 @@ use App\Http\Controllers\Api\V1\PaymentResultController;
 use Illuminate\Support\Facades\Route;
 
 Route::get('v1/payment-results/{reference}', [PaymentResultController::class, 'show'])
-    ->whereUlid('reference')
+    ->where('reference', '[A-Za-z0-9._:-]{1,100}')
     ->middleware('throttle:payment-result');
 
 Route::post('v1/payment-gateways/midtrans/webhook', MidtransWebhookController::class)

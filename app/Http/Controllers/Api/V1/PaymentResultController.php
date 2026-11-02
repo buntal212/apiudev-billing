@@ -12,12 +12,13 @@ class PaymentResultController extends Controller
     public function show(string $reference, PaymentResultService $paymentResultService): JsonResponse
     {
         $paymentAttempt = $paymentResultService->find($reference);
-        $application = $paymentAttempt->invoice->plan->application;
+        $application = $paymentAttempt->invoice?->plan?->application
+            ?? $paymentAttempt->invoice?->customer?->application;
 
         return response()
             ->json([
                 'data' => [
-                    'reference' => $paymentAttempt->gateway_payment_id,
+                    'reference' => $paymentAttempt->gateway_payment_id ?: ($paymentAttempt->provider_reference ?: $paymentAttempt->merchant_reference),
                     'status' => $this->publicStatus($paymentAttempt),
                     'amount' => $paymentAttempt->amount,
                     'currency' => $paymentAttempt->currency,
@@ -34,7 +35,7 @@ class PaymentResultController extends Controller
     {
         return match ($paymentAttempt->status) {
             PaymentAttempt::StatusSucceeded => $this->isGatewayVerified($paymentAttempt) ? 'paid' : 'pending',
-            PaymentAttempt::StatusInitiated, PaymentAttempt::StatusPending => 'pending',
+            PaymentAttempt::StatusInitiated, PaymentAttempt::StatusPending => ($paymentAttempt->checkout_expires_at?->isPast() ?? false) ? 'expired' : 'pending',
             PaymentAttempt::StatusFailed => 'failed',
             PaymentAttempt::StatusExpired => 'expired',
             PaymentAttempt::StatusCancelled => 'cancelled',

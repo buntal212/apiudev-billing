@@ -2,9 +2,15 @@
 
 namespace Tests\Feature;
 
+use App\Models\Application;
+use App\Models\ApplicationCustomer;
 use App\Models\ApplicationPaymentGateway;
+use App\Models\Invoice;
+use App\Models\MidtransMerchantCredential;
 use App\Models\PaymentAttempt;
 use App\Models\Subscription;
+use App\Models\SubscriptionPlan;
+use App\Services\MidtransSecretStore;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Str;
@@ -146,6 +152,212 @@ class PaymentResultApiTest extends TestCase
             ->assertJsonPath('data.return_url', null);
 
         Http::assertNothingSent();
+    }
+
+    public function test_payment_results_endpoint_handles_midtrans_uuid_reference_and_syncs_expired_status_idempotently(): void
+    {
+        $app = Application::factory()->create(['name' => 'Aplikasi Larissama']);
+        $customer = ApplicationCustomer::factory()->create(['application_id' => $app->id]);
+        $plan = SubscriptionPlan::factory()->create([
+            'application_id' => $app->id,
+            'price' => '10000.00',
+            'duration_days' => 30,
+        ]);
+        $invoice = Invoice::factory()->create([
+            'application_customer_id' => $customer->id,
+            'subscription_plan_id' => $plan->id,
+            'amount' => '10000.00',
+            'currency' => 'IDR',
+            'duration_days' => 30,
+            'status' => Invoice::StatusPending,
+            'due_at' => now()->addDays(3),
+        ]);
+
+        $secretStore = app(MidtransSecretStore::class);
+        $encrypted = $secretStore->encryptSecret('SB-Mid-server-TESTKEY1234567890', 'larissama', 'server_key');
+
+        MidtransMerchantCredential::create([
+            'merchant_code' => 'larissama',
+            'merchant_name' => 'Larissama Store',
+            'environment' => 'sandbox',
+            'encrypted_server_key' => $encrypted['ciphertext'],
+            'server_key_nonce' => $encrypted['nonce'],
+            'server_key_tag' => $encrypted['tag'],
+            'key_version' => $encrypted['key_version'],
+            'is_active' => true,
+        ]);
+
+        ApplicationPaymentGateway::create([
+            'application_id' => $app->id,
+            'provider' => 'midtrans',
+            'environment' => 'sandbox',
+            'gateway_merchant_code' => 'larissama',
+            'is_active' => true,
+        ]);
+
+        // Case A5: payment attempt 29 with UUID gateway_payment_id
+        $uuid = '10dcd836-21f0-4919-af47-c781bac0c118';
+        $orderId = 'INV-20261101-VDWNVAOGGV-A5';
+        $attempt = PaymentAttempt::create([
+            'id' => 29,
+            'invoice_id' => $invoice->id,
+            'attempt_number' => 5,
+            'provider' => 'midtrans',
+            'merchant_reference' => $orderId,
+            'gateway_merchant_code' => 'larissama',
+            'gateway_environment' => 'sandbox',
+            'amount' => '10000.00',
+            'currency' => 'IDR',
+            'status' => PaymentAttempt::StatusPending,
+            'gateway_payment_id' => $uuid,
+            'idempotency_key' => 'checkout:'.$invoice->id.':5',
+            'checkout_expires_at' => '2026-11-03 14:47:43',
+            'requested_at' => now(),
+            'metadata' => [
+                'order_id' => $orderId,
+                'transaction_id' => $uuid,
+                'payment_method' => 'qris',
+            ],
+        ]);
+
+        config()->set('services.midtrans_gateway', [
+            'sandbox_base_url' => 'https://api.sandbox.midtrans.com/v2',
+            'gateway_service_url' => '',
+            'service_token' => 'test-service-token-123456',
+            'timeout' => 5,
+            'connect_timeout' => 3,
+        ]);
+
+        // Midtrans returns status=expire, expiry_time=2026-11-02 22:02:43 (WIB)
+        Http::fake([
+            "https://api.sandbox.midtrans.com/v2/{$orderId}/status" => Http::response([
+                'status_code' => '200',
+                'status_message' => 'Success, transaction is found',
+                'transaction_id' => $uuid,
+                'order_id' => $orderId,
+                'gross_amount' => '10000.00',
+                'payment_type' => 'qris',
+                'transaction_status' => 'expire',
+                'expiry_time' => '2026-11-02 22:02:43',
+            ], 200),
+        ]);
+
+        $response = $this->getJson("/api/v1/payment-results/{$uuid}")
+            ->assertOk()
+            ->assertJsonPath('data.status', 'expired')
+            ->assertJsonPath('data.reference', $uuid);
+
+        $attempt->refresh();
+        $this->assertSame(PaymentAttempt::StatusExpired, $attempt->status);
+        $this->assertSame('2026-11-02 15:02:43', $attempt->checkout_expires_at->format('Y-m-d H:i:s'));
+
+        $this->assertSame(Invoice::StatusPending, $invoice->fresh()->status);
+        $this->assertSame(0, $invoice->fresh()->paymentAllocation()->count());
+
+        // Idempotent second call
+        $this->getJson("/api/v1/payment-results/{$uuid}")
+            ->assertOk()
+            ->assertJsonPath('data.status', 'expired')
+            ->assertJsonPath('data.reference', $uuid);
+    }
+
+    public function test_payment_results_falls_back_to_direct_midtrans_when_microservice_returns_404_merchant_not_found(): void
+    {
+        $app = Application::factory()->create(['name' => 'Aplikasi Larissama']);
+        $customer = ApplicationCustomer::factory()->create(['application_id' => $app->id]);
+        $plan = SubscriptionPlan::factory()->create([
+            'application_id' => $app->id,
+            'price' => '10000.00',
+            'duration_days' => 30,
+        ]);
+        $invoice = Invoice::factory()->create([
+            'application_customer_id' => $customer->id,
+            'subscription_plan_id' => $plan->id,
+            'amount' => '10000.00',
+            'currency' => 'IDR',
+            'duration_days' => 30,
+            'status' => Invoice::StatusPending,
+            'due_at' => now()->addDays(3),
+        ]);
+
+        $secretStore = app(MidtransSecretStore::class);
+        $encrypted = $secretStore->encryptSecret('SB-Mid-server-TESTKEY1234567890', 'larissama', 'server_key');
+
+        MidtransMerchantCredential::create([
+            'merchant_code' => 'larissama',
+            'merchant_name' => 'Larissama Store',
+            'environment' => 'sandbox',
+            'encrypted_server_key' => $encrypted['ciphertext'],
+            'server_key_nonce' => $encrypted['nonce'],
+            'server_key_tag' => $encrypted['tag'],
+            'key_version' => $encrypted['key_version'],
+            'is_active' => true,
+        ]);
+
+        ApplicationPaymentGateway::create([
+            'application_id' => $app->id,
+            'provider' => 'midtrans',
+            'environment' => 'sandbox',
+            'gateway_merchant_code' => 'larissama',
+            'is_active' => true,
+        ]);
+
+        $uuid = '10dcd836-21f0-4919-af47-c781bac0c118';
+        $orderId = 'INV-20261101-VDWNVAOGGV-A5';
+        $attempt = PaymentAttempt::create([
+            'id' => 29,
+            'invoice_id' => $invoice->id,
+            'attempt_number' => 5,
+            'provider' => 'midtrans',
+            'merchant_reference' => $orderId,
+            'gateway_merchant_code' => 'larissama',
+            'gateway_environment' => 'sandbox',
+            'amount' => '10000.00',
+            'currency' => 'IDR',
+            'status' => PaymentAttempt::StatusPending,
+            'gateway_payment_id' => $uuid,
+            'idempotency_key' => 'checkout:'.$invoice->id.':5',
+            'requested_at' => now(),
+        ]);
+
+        config()->set('services.midtrans_gateway', [
+            'sandbox_base_url' => 'https://api.sandbox.midtrans.com/v2',
+            'gateway_service_url' => 'https://midtrans-service.test',
+            'service_token' => 'test-service-token-123456',
+            'timeout' => 5,
+            'connect_timeout' => 3,
+        ]);
+
+        Http::fake([
+            // Microservice returns 404 merchant_not_found
+            'https://midtrans-service.test/api/v1/internal/merchants/larissama/payments/sandbox/*' => Http::response([
+                'success' => false,
+                'error' => [
+                    'code' => 'merchant_not_found',
+                    'message' => 'Merchant not found',
+                ],
+            ], 404),
+            // Direct Midtrans fallback succeeds
+            "https://api.sandbox.midtrans.com/v2/{$orderId}/status" => Http::response([
+                'status_code' => '200',
+                'status_message' => 'Success, transaction is found',
+                'transaction_id' => $uuid,
+                'order_id' => $orderId,
+                'gross_amount' => '10000.00',
+                'payment_type' => 'qris',
+                'transaction_status' => 'expire',
+                'expiry_time' => '2026-11-02 22:02:43',
+            ], 200),
+        ]);
+
+        $this->getJson("/api/v1/payment-results/{$uuid}")
+            ->assertOk()
+            ->assertJsonPath('data.status', 'expired')
+            ->assertJsonPath('data.reference', $uuid);
+
+        $attempt->refresh();
+        $this->assertSame(PaymentAttempt::StatusExpired, $attempt->status);
+        $this->assertSame('2026-11-02 15:02:43', $attempt->checkout_expires_at->format('Y-m-d H:i:s'));
     }
 
     private function paymentAttempt(): PaymentAttempt

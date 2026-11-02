@@ -25,12 +25,27 @@ class PaymentResultService
         $this->midtransSecretStore = $midtransSecretStore ?? app(MidtransSecretStore::class);
     }
 
-    public function find(string $gatewayPaymentId): PaymentAttempt
+    public function find(string $reference): PaymentAttempt
     {
         $paymentAttempt = PaymentAttempt::query()
-            ->with('invoice.plan.application')
-            ->where('gateway_payment_id', $gatewayPaymentId)
+            ->with(['invoice.plan.application', 'invoice.customer.application', 'checkoutOutbox'])
+            ->where(function ($query) use ($reference): void {
+                $query->where('gateway_payment_id', $reference)
+                    ->orWhere('provider_reference', $reference)
+                    ->orWhere('merchant_reference', $reference);
+                if (is_numeric($reference)) {
+                    $query->orWhere('id', (int) $reference);
+                }
+            })
             ->first();
+
+        if ($paymentAttempt === null) {
+            $paymentAttempt = PaymentAttempt::query()
+                ->with(['invoice.plan.application', 'invoice.customer.application', 'checkoutOutbox'])
+                ->where('metadata->transaction_id', $reference)
+                ->orWhere('metadata->order_id', $reference)
+                ->first();
+        }
 
         if ($paymentAttempt === null) {
             throw (new ModelNotFoundException)->setModel(PaymentAttempt::class);
@@ -44,7 +59,7 @@ class PaymentResultService
                     $paymentAttempt->gateway_merchant_code,
                     $paymentAttempt->gateway_environment,
                 );
-                $gatewayPayment = $this->gatewayClient->findPayment($merchant, $gatewayPaymentId);
+                $gatewayPayment = $this->gatewayClient->findPayment($merchant, $reference);
                 $this->validateGatewayPayment($paymentAttempt, $gatewayPayment);
                 $paymentAttempt = $this->synchronize($paymentAttempt, $gatewayPayment);
 
@@ -54,7 +69,7 @@ class PaymentResultService
             }
         }
 
-        return $paymentAttempt->fresh('invoice.plan.application');
+        return $paymentAttempt->fresh(['invoice.plan.application', 'invoice.customer.application']);
     }
 
     private function synchronizeMidtrans(PaymentAttempt $paymentAttempt): PaymentAttempt
@@ -64,6 +79,31 @@ class PaymentResultService
             ->where('environment', 'sandbox')
             ->first();
 
+        if ($credential === null) {
+            $appId = $paymentAttempt->invoice?->plan?->application_id ?? $paymentAttempt->invoice?->customer?->application_id;
+            if ($appId !== null) {
+                $mapping = \App\Models\ApplicationPaymentGateway::query()
+                    ->where('application_id', $appId)
+                    ->where('provider', 'midtrans')
+                    ->where('environment', 'sandbox')
+                    ->where('is_active', true)
+                    ->first();
+                if ($mapping !== null) {
+                    $credential = \App\Models\MidtransMerchantCredential::query()
+                        ->where('merchant_code', $mapping->gateway_merchant_code)
+                        ->where('environment', 'sandbox')
+                        ->first();
+                }
+            }
+        }
+
+        if ($credential === null) {
+            $credential = \App\Models\MidtransMerchantCredential::query()
+                ->where('environment', 'sandbox')
+                ->where('is_active', true)
+                ->first();
+        }
+
         if ($credential === null || empty($credential->encrypted_server_key)) {
             return $paymentAttempt;
         }
@@ -72,12 +112,31 @@ class PaymentResultService
         if (empty($serverKey)) {
             return $paymentAttempt;
         }
+
+        $merchantCode = (string) ($credential->merchant_code ?? $paymentAttempt->gateway_merchant_code);
+        $orderId = (string) $paymentAttempt->merchant_reference;
+
         $result = $this->midtransClient->querySandboxStatus(
-            (string) $paymentAttempt->gateway_merchant_code,
+            $merchantCode,
             $serverKey,
-            (string) $paymentAttempt->merchant_reference,
+            $orderId,
             'sandbox',
         );
+
+        if ((($result['status'] ?? '') !== 'success' || ($result['is_not_found'] ?? false))
+            && ! empty($paymentAttempt->gateway_payment_id)
+            && $paymentAttempt->gateway_payment_id !== $orderId
+        ) {
+            $txResult = $this->midtransClient->querySandboxStatus(
+                $merchantCode,
+                $serverKey,
+                (string) $paymentAttempt->gateway_payment_id,
+                'sandbox',
+            );
+            if (($txResult['status'] ?? '') === 'success' && ! ($txResult['is_not_found'] ?? false)) {
+                $result = $txResult;
+            }
+        }
 
         if (($result['status'] ?? '') !== 'success') {
             return $paymentAttempt;

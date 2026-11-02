@@ -1756,7 +1756,7 @@ class MidtransInvoiceCheckoutAndSettlementTest extends TestCase
                 'gross_amount' => '50000.00',
                 'payment_type' => 'qris',
                 'transaction_status' => 'pending',
-                'expiry_time' => '2026-11-02 23:00:00',
+                'expiry_time' => now()->addHour()->setTimezone('Asia/Jakarta')->format('Y-m-d H:i:s'),
                 'qr_string' => '00020101021226590014ID.LINKAJA.WWW0118...',
                 'actions' => [
                     [

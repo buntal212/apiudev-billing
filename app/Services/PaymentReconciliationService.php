@@ -470,7 +470,7 @@ class PaymentReconciliationService
         );
 
         if (($statusResult['status'] ?? '') !== 'success') {
-            $isNotFound = ($statusResult['is_not_found'] ?? false) || ($statusResult['http_status'] ?? 0) === 404;
+            $isNotFound = (bool) ($statusResult['is_not_found'] ?? false);
             if ($isNotFound) {
                 $run->gateway_status = 'not_found';
                 try {
