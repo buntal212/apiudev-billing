@@ -218,6 +218,8 @@ Route::prefix('v1/admin')
         Route::post('invoices/{invoice}/checkout', [InvoiceCheckoutController::class, 'store']);
         Route::apiResource('payment-attempts', PaymentAttemptController::class)
             ->only(['index', 'show']);
+        Route::get('payment-attempts/{paymentAttempt}/qr-image', [PaymentAttemptController::class, 'qrImage'])
+            ->name('admin.payment-attempts.qr-image');
         Route::post('payment-attempts/{paymentAttempt}/checkout/retry', [PaymentAttemptController::class, 'retryCheckout'])
             ->middleware('throttle:admin-dana-gateway-write');
         Route::post('payment-attempts/{paymentAttempt}/reconcile', [PaymentAttemptController::class, 'reconcile'])

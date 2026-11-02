@@ -761,9 +761,20 @@ class CheckoutService
     ): void {
         $transactionId = (string) ($gatewayData['transaction_id'] ?? $gatewayData['order_id'] ?? '');
         $orderId = (string) ($gatewayData['order_id'] ?? '');
-        $qrString = $gatewayData['qr_string'] ?? null;
+        $rawResponse = is_array($gatewayData['raw_response'] ?? null) ? $gatewayData['raw_response'] : [];
+        $qrString = $gatewayData['qr_string'] ?? ($rawResponse['qr_string'] ?? null);
         $checkoutUrl = $gatewayData['checkout_url'] ?? null;
         $qrUrl = $gatewayData['qr_url'] ?? null;
+
+        if (empty($qrUrl) && ! empty($rawResponse['actions'])) {
+            foreach ($rawResponse['actions'] as $action) {
+                if (($action['name'] ?? '') === 'generate-qr-code') {
+                    $qrUrl = $action['url'] ?? null;
+                    break;
+                }
+            }
+        }
+
         $vaNumbers = $gatewayData['va_numbers'] ?? [];
         $permataVaNumber = $gatewayData['permata_va_number'] ?? null;
         $billKey = $gatewayData['bill_key'] ?? null;
@@ -815,12 +826,31 @@ class CheckoutService
             }
         }
 
+        $rawExpiry = $gatewayData['expiry_time'] ?? $gatewayData['expires_at'] ?? ($rawResponse['expiry_time'] ?? null);
+        if (! empty($rawExpiry)) {
+            try {
+                $checkoutExpiresAt = \Illuminate\Support\Carbon::parse($rawExpiry)->toImmutable();
+            } catch (\Throwable) {
+                $checkoutExpiresAt = $paymentType === 'qris'
+                    ? now()->toImmutable()->addMinutes(15)
+                    : now()->toImmutable()->addHours(24);
+            }
+        } else {
+            $checkoutExpiresAt = $paymentType === 'qris'
+                ? now()->toImmutable()->addMinutes(15)
+                : now()->toImmutable()->addHours(24);
+        }
+
         $instruction = null;
         if ($paymentType === 'qris') {
             $instruction = [
                 'type' => 'qris_mpm',
                 'qr_content' => $qrString,
                 'qr_url' => $qrUrl,
+                'checkout_url' => $checkoutUrl,
+                'expiry_time' => $checkoutExpiresAt->toIso8601String(),
+                'expires_at' => $checkoutExpiresAt->toIso8601String(),
+                'transaction_id' => $transactionId,
                 'message' => 'Pindai kode QRIS Midtrans Sandbox menggunakan aplikasi e-wallet atau mobile banking.',
             ];
         } elseif (in_array($paymentType, ['bank_transfer', 'echannel'], true)) {
@@ -830,17 +860,21 @@ class CheckoutService
                 'payment_code' => $paymentCode,
                 'bill_key' => $billKey,
                 'biller_code' => $billerCode,
+                'expiry_time' => $checkoutExpiresAt->toIso8601String(),
+                'expires_at' => $checkoutExpiresAt->toIso8601String(),
+                'transaction_id' => $transactionId,
                 'message' => 'Bayar melalui Virtual Account '.strtoupper($bank ?: 'BCA').' sebelum batas waktu.',
             ];
         } elseif ($paymentType === 'gopay') {
             $instruction = [
                 'type' => 'gopay',
                 'checkout_url' => $checkoutUrl,
+                'expiry_time' => $checkoutExpiresAt->toIso8601String(),
+                'expires_at' => $checkoutExpiresAt->toIso8601String(),
+                'transaction_id' => $transactionId,
                 'message' => 'Lanjutkan pembayaran di aplikasi GoPay.',
             ];
         }
-
-        $checkoutExpiresAt = now()->toImmutable()->addHours(24);
 
         DB::transaction(function () use (
             $claimed,
@@ -855,6 +889,7 @@ class CheckoutService
             $billerCode,
             $bank,
             $paymentType,
+            $checkoutExpiresAt,
         ): void {
             $outbox = CheckoutOutboxMessage::query()->lockForUpdate()->findOrFail($claimed->getKey());
             $attempt = PaymentAttempt::query()->lockForUpdate()->findOrFail($outbox->payment_attempt_id);
@@ -867,6 +902,8 @@ class CheckoutService
             $currentMetadata['transaction_id'] = $transactionId;
             $currentMetadata['payment_code'] = $paymentCode;
             $currentMetadata['payment_instruction'] = $instruction;
+            $currentMetadata['expiry_time'] = $checkoutExpiresAt->toIso8601String();
+            $currentMetadata['expires_at'] = $checkoutExpiresAt->toIso8601String();
             if ($qrString !== null) {
                 $currentMetadata['qr_content'] = $qrString;
             }
@@ -889,7 +926,7 @@ class CheckoutService
                 'gateway_payment_id' => $transactionId ?: $orderId,
                 'provider_reference' => $transactionId ?: $orderId,
                 'checkout_url' => $hasValidCheckoutUrl ? $effectiveCheckoutUrl : null,
-                'checkout_expires_at' => now()->toImmutable()->addHours(24),
+                'checkout_expires_at' => $checkoutExpiresAt,
                 'status' => PaymentAttempt::StatusPending,
                 'metadata' => $currentMetadata,
             ]);

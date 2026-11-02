@@ -32,19 +32,28 @@ class InvoiceCheckoutResource extends JsonResource
             ? 'ready'
             : ($this->outbox?->status === CheckoutOutboxMessage::StatusFailed ? 'failed' : 'processing');
 
+        $isExpired = $this->checkout_expires_at?->isPast() ?? false;
+        $qrImageUrl = $this->provider === 'midtrans' && ! empty($this->id)
+            ? url("/api/v1/admin/payment-attempts/{$this->id}/qr-image")
+            : null;
+
         return [
             'invoice_id' => $this->invoice_id,
             'payment_attempt_id' => $this->id,
             'gateway_payment_id' => $this->gateway_payment_id,
+            'transaction_id' => $metadata['transaction_id'] ?? $this->gateway_payment_id,
             'status' => $this->status,
             'payment_method' => $metadata['payment_method'] ?? 'dana_wallet',
             'checkout_status' => $checkoutStatus,
             'checkout_url' => $this->checkout_url,
             'qr_content' => $qrContent,
+            'qr_string' => $qrContent,
             'qr_url' => $qrUrl,
+            'qr_image_url' => $qrImageUrl,
             'payment_code' => $paymentCode,
             'payment_instruction' => $instruction,
             'expires_at' => $this->checkout_expires_at?->toISOString(),
+            'is_expired' => $isExpired,
         ];
     }
 }

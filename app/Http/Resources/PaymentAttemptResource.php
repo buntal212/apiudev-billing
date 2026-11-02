@@ -22,6 +22,7 @@ class PaymentAttemptResource extends JsonResource
             'merchant_reference' => $this->merchant_reference,
             'provider_reference' => $this->provider_reference,
             'gateway_payment_id' => $this->gateway_payment_id,
+            'transaction_id' => $this->metadata['transaction_id'] ?? $this->gateway_payment_id,
             'amount' => $this->amount,
             'currency' => $this->currency,
             'status' => $this->status,
@@ -32,15 +33,21 @@ class PaymentAttemptResource extends JsonResource
             'metadata' => $this->metadata,
             'payment_method' => $this->metadata['payment_method'] ?? ($this->provider === 'midtrans' ? 'qris' : 'dana_wallet'),
             'qr_content' => $this->metadata['qr_content'] ?? null,
+            'qr_string' => $this->metadata['qr_content'] ?? null,
             'qr_url' => $this->metadata['qr_url']
                 ?? $this->metadata['payment_instruction']['qr_url']
                 ?? ($this->provider === 'midtrans' && ($this->metadata['payment_type'] ?? null) === 'qris' && ! empty($this->gateway_payment_id)
                     ? "https://api.".($this->gateway_environment === 'production' ? '' : 'sandbox.')."midtrans.com/v2/qris/{$this->gateway_payment_id}/qr-code"
                     : null),
+            'qr_image_url' => $this->provider === 'midtrans' && ! empty($this->id)
+                ? url("/api/v1/admin/payment-attempts/{$this->id}/qr-image")
+                : null,
             'payment_code' => $this->metadata['payment_code'] ?? null,
             'payment_instruction' => $this->metadata['payment_instruction'] ?? null,
             'checkout_url' => $this->checkout_url,
             'checkout_expires_at' => $this->checkout_expires_at?->toISOString(),
+            'expires_at' => $this->checkout_expires_at?->toISOString(),
+            'is_expired' => $this->checkout_expires_at?->isPast() ?? false,
             'checkout' => $this->whenLoaded('checkoutOutbox', fn (): ?array => $this->checkoutOutbox ? [
                 'status' => $this->checkoutOutbox->status,
                 'attempts' => $this->checkoutOutbox->attempts,

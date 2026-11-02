@@ -1663,4 +1663,124 @@ class MidtransInvoiceCheckoutAndSettlementTest extends TestCase
 
         return [$invoice->fresh(['plan', 'customer']), $credential];
     }
+
+    public function test_qr_image_proxy_returns_image_for_active_midtrans_attempt(): void
+    {
+        [$invoice, $credential] = $this->setupInvoiceWithMidtrans();
+
+        $attempt = PaymentAttempt::create([
+            'invoice_id' => $invoice->id,
+            'attempt_number' => 1,
+            'provider' => 'midtrans',
+            'idempotency_key' => 'idemp-qr-image-test-001',
+            'merchant_reference' => $invoice->invoice_number.'-A1',
+            'provider_reference' => 'midtrans-tx-qris-001',
+            'gateway_merchant_code' => self::MerchantCode,
+            'gateway_environment' => 'sandbox',
+            'gateway_payment_id' => 'midtrans-tx-qris-001',
+            'amount' => '50000.00',
+            'currency' => 'IDR',
+            'status' => PaymentAttempt::StatusPending,
+            'checkout_expires_at' => now()->addMinutes(15),
+            'metadata' => [
+                'payment_method' => 'qris',
+                'payment_type' => 'qris',
+                'transaction_id' => 'midtrans-tx-qris-001',
+                'qr_url' => 'https://api.sandbox.midtrans.com/v2/qris/midtrans-tx-qris-001/qr-code',
+                'qr_content' => '00020101021226590014...',
+            ],
+        ]);
+
+        $fakePng = base64_decode('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==');
+
+        Http::fake([
+            'https://api.sandbox.midtrans.com/v2/qris/midtrans-tx-qris-001/qr-code' => Http::response($fakePng, 200, [
+                'Content-Type' => 'image/png',
+            ]),
+        ]);
+
+        $admin = User::factory()->create(['is_admin' => true]);
+        Sanctum::actingAs($admin, ['admin:access']);
+
+        $response = $this->get("/api/v1/admin/payment-attempts/{$attempt->id}/qr-image");
+
+        $response->assertOk();
+        $this->assertSame('image/png', $response->headers->get('Content-Type'));
+        $this->assertSame($fakePng, $response->getContent());
+    }
+
+    public function test_qr_image_proxy_returns_410_when_attempt_is_expired(): void
+    {
+        [$invoice, $credential] = $this->setupInvoiceWithMidtrans();
+
+        $attempt = PaymentAttempt::create([
+            'invoice_id' => $invoice->id,
+            'attempt_number' => 1,
+            'provider' => 'midtrans',
+            'idempotency_key' => 'idemp-qr-image-test-expired',
+            'merchant_reference' => $invoice->invoice_number.'-A1',
+            'provider_reference' => 'midtrans-tx-qris-expired',
+            'gateway_merchant_code' => self::MerchantCode,
+            'gateway_environment' => 'sandbox',
+            'gateway_payment_id' => 'midtrans-tx-qris-expired',
+            'amount' => '50000.00',
+            'currency' => 'IDR',
+            'status' => PaymentAttempt::StatusExpired,
+            'checkout_expires_at' => now()->subMinutes(5),
+            'metadata' => [
+                'payment_method' => 'qris',
+                'transaction_id' => 'midtrans-tx-qris-expired',
+                'qr_url' => 'https://api.sandbox.midtrans.com/v2/qris/midtrans-tx-qris-expired/qr-code',
+            ],
+        ]);
+
+        $admin = User::factory()->create(['is_admin' => true]);
+        Sanctum::actingAs($admin, ['admin:access']);
+
+        $response = $this->getJson("/api/v1/admin/payment-attempts/{$attempt->id}/qr-image");
+
+        $response->assertStatus(410)
+            ->assertJsonPath('error', 'qris_expired');
+    }
+
+    public function test_checkout_resource_separates_qr_url_qr_string_and_transaction_id(): void
+    {
+        [$invoice, $credential] = $this->setupInvoiceWithMidtrans();
+
+        Http::fake([
+            'https://api.sandbox.midtrans.com/v2/charge' => Http::response([
+                'status_code' => '201',
+                'status_message' => 'QRIS transaction is created',
+                'transaction_id' => 'midtrans-tx-sep-001',
+                'order_id' => $invoice->invoice_number.'-A1',
+                'gross_amount' => '50000.00',
+                'payment_type' => 'qris',
+                'transaction_status' => 'pending',
+                'expiry_time' => '2026-11-02 23:00:00',
+                'qr_string' => '00020101021226590014ID.LINKAJA.WWW0118...',
+                'actions' => [
+                    [
+                        'name' => 'generate-qr-code',
+                        'method' => 'GET',
+                        'url' => 'https://api.sandbox.midtrans.com/v2/qris/midtrans-tx-sep-001/qr-code',
+                    ],
+                ],
+            ], 201),
+        ]);
+
+        $admin = User::factory()->create(['is_admin' => true]);
+        Sanctum::actingAs($admin, ['admin:access']);
+
+        $response = $this->postJson("/api/v1/admin/invoices/{$invoice->id}/checkout", [
+            'payment_method' => 'qris',
+        ], ['Idempotency-Key' => 'idemp-midtrans-chk-sep-001']);
+
+        $response->assertOk()
+            ->assertJsonPath('data.transaction_id', 'midtrans-tx-sep-001')
+            ->assertJsonPath('data.qr_url', 'https://api.sandbox.midtrans.com/v2/qris/midtrans-tx-sep-001/qr-code')
+            ->assertJsonPath('data.qr_string', '00020101021226590014ID.LINKAJA.WWW0118...')
+            ->assertJsonPath('data.is_expired', false);
+
+        $this->assertStringContainsString('qr-image', $response->json('data.qr_image_url'));
+    }
 }
