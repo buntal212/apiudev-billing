@@ -10,6 +10,7 @@ use Carbon\CarbonImmutable;
 use Illuminate\Database\QueryException;
 use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Validation\ValidationException;
 use RuntimeException;
 use Symfony\Component\HttpFoundation\Response;
@@ -550,50 +551,64 @@ class CheckoutService
 
     private function dispatchMidtrans(CheckoutOutboxMessage $claimed): void
     {
+        $attempt = $claimed->paymentAttempt;
+
+        // 1. Resolve merchant credentials
+        $credential = \App\Models\MidtransMerchantCredential::query()
+            ->where('merchant_code', $attempt->gateway_merchant_code)
+            ->where('environment', 'sandbox')
+            ->first();
+
+        if ($credential === null || empty($credential->encrypted_server_key)) {
+            $this->logMidtransDispatchError('merchant_not_configured', 'Kredensial merchant Midtrans Sandbox belum dikonfigurasi.', $attempt, $claimed);
+            $this->markDispatchFailure($claimed, false, 'merchant_not_configured');
+
+            return;
+        }
+
+        // 2. Decrypt server key
         try {
-            $attempt = $claimed->paymentAttempt;
-            $credential = \App\Models\MidtransMerchantCredential::query()
-                ->where('merchant_code', $attempt->gateway_merchant_code)
-                ->where('environment', 'sandbox')
-                ->first();
-
-            if ($credential === null || empty($credential->encrypted_server_key)) {
-                $this->markDispatchFailure($claimed, false, 'merchant_not_configured');
-
-                return;
-            }
-
             $serverKey = $credential->getServerKey($this->midtransSecretStore);
-            if (empty($serverKey)) {
-                $this->markDispatchFailure($claimed, false, 'merchant_not_configured');
+        } catch (\Throwable $e) {
+            $this->logMidtransDispatchException('credential_decryption_failed', $e, $attempt, $claimed);
+            $this->markDispatchFailure($claimed, false, 'credential_decryption_failed');
 
-                return;
-            }
-            $method = $attempt->metadata['payment_method'] ?? 'qris';
-            $bank = $attempt->metadata['bank'] ?? null;
+            return;
+        }
 
-            $paymentType = 'qris';
-            if ($method === 'gopay') {
-                $paymentType = 'gopay';
-            } elseif ($method === 'bank_transfer') {
-                $paymentType = ($bank === 'mandiri' || $bank === 'echannel') ? 'echannel' : 'bank_transfer';
-            } elseif (str_starts_with($method, 'va_')) {
-                $bankName = substr($method, 3);
-                if ($bankName === 'mandiri') {
-                    $paymentType = 'echannel';
-                    $bank = 'mandiri';
-                } else {
-                    $paymentType = 'bank_transfer';
-                    $bank = $bankName;
-                }
-            } elseif ($method === 'echannel') {
+        if (empty($serverKey)) {
+            $this->logMidtransDispatchError('credential_decryption_failed', 'Server key Midtrans kosong setelah dekripsi.', $attempt, $claimed);
+            $this->markDispatchFailure($claimed, false, 'credential_decryption_failed');
+
+            return;
+        }
+
+        $method = $attempt->metadata['payment_method'] ?? 'qris';
+        $bank = $attempt->metadata['bank'] ?? null;
+
+        $paymentType = 'qris';
+        if ($method === 'gopay') {
+            $paymentType = 'gopay';
+        } elseif ($method === 'bank_transfer') {
+            $paymentType = ($bank === 'mandiri' || $bank === 'echannel') ? 'echannel' : 'bank_transfer';
+        } elseif (str_starts_with($method, 'va_')) {
+            $bankName = substr($method, 3);
+            if ($bankName === 'mandiri') {
                 $paymentType = 'echannel';
                 $bank = 'mandiri';
+            } else {
+                $paymentType = 'bank_transfer';
+                $bank = $bankName;
             }
+        } elseif ($method === 'echannel') {
+            $paymentType = 'echannel';
+            $bank = 'mandiri';
+        }
 
-            $amountMinor = $this->amountMinor((string) $attempt->getRawOriginal('amount'));
+        $amountMinor = $this->amountMinor((string) $attempt->getRawOriginal('amount'));
 
-            // Prevent duplicate Midtrans charge: check if order already exists in Midtrans first
+        // 3. Pre-check order status to prevent duplicate charge
+        try {
             $existingStatus = $this->midtransClient->querySandboxStatus(
                 merchantCode: (string) $attempt->gateway_merchant_code,
                 serverKey: $serverKey,
@@ -602,11 +617,31 @@ class CheckoutService
             );
 
             if (($existingStatus['status'] ?? '') === 'success' && ! empty($existingStatus['data']['transaction_id'])) {
-                $this->storeMidtransCheckout($claimed, $existingStatus['data'], $amountMinor, $paymentType, $bank);
+                try {
+                    $this->storeMidtransCheckout($claimed, $existingStatus['data'], $amountMinor, $paymentType, $bank);
 
-                return;
+                    return;
+                } catch (\Throwable $e) {
+                    $this->logMidtransDispatchException('payment_instruction_invalid', $e, $attempt, $claimed);
+                    $this->markDispatchFailure($claimed, false, 'payment_instruction_invalid');
+
+                    return;
+                }
             }
+        } catch (ConnectionException $e) {
+            $this->logMidtransDispatchException('microservice_connection_failed', $e, $attempt, $claimed);
+            $this->markDispatchFailure($claimed, false, 'microservice_connection_failed');
 
+            return;
+        } catch (\Throwable $e) {
+            $this->logMidtransDispatchException('gateway_status_query_failed', $e, $attempt, $claimed);
+            $this->markDispatchFailure($claimed, false, 'gateway_status_query_failed');
+
+            return;
+        }
+
+        // 4. Create charge transaction in Midtrans
+        try {
             $chargeResult = $this->midtransClient->createSandboxCharge(
                 merchantCode: $attempt->gateway_merchant_code,
                 serverKey: $serverKey,
@@ -620,18 +655,38 @@ class CheckoutService
                 ],
                 environment: 'sandbox',
             );
+        } catch (ConnectionException $e) {
+            // Status at gateway is uncertain: DO NOT automatically retry!
+            $this->logMidtransDispatchException('gateway_connection_timeout', $e, $attempt, $claimed);
+            $this->markDispatchFailure($claimed, false, 'gateway_connection_timeout');
 
-            if (($chargeResult['status'] ?? '') !== 'success') {
-                $this->markDispatchFailure($claimed, false, 'gateway_response_invalid');
-
-                return;
-            }
-
-            $this->storeMidtransCheckout($claimed, $chargeResult['data'] ?? [], $amountMinor, $paymentType, $bank);
-        } catch (ConnectionException) {
-            $this->markDispatchFailure($claimed, true, 'network_timeout');
-        } catch (\Throwable) {
+            return;
+        } catch (\Throwable $e) {
+            $this->logMidtransDispatchException('checkout_processing_failed', $e, $attempt, $claimed);
             $this->markDispatchFailure($claimed, false, 'checkout_processing_failed');
+
+            return;
+        }
+
+        // 5. Evaluate gateway response
+        if (($chargeResult['status'] ?? '') !== 'success') {
+            $message = $chargeResult['message'] ?? 'Respons gateway Midtrans tidak valid.';
+            $this->logMidtransDispatchError('gateway_response_invalid', $message, $attempt, $claimed, [
+                'gateway_http_status' => $chargeResult['http_status'] ?? null,
+            ]);
+            $this->markDispatchFailure($claimed, false, 'gateway_response_invalid');
+
+            return;
+        }
+
+        // 6. Validate and store payment instructions
+        try {
+            $this->storeMidtransCheckout($claimed, $chargeResult['data'] ?? [], $amountMinor, $paymentType, $bank);
+        } catch (\Throwable $e) {
+            $this->logMidtransDispatchException('payment_instruction_invalid', $e, $attempt, $claimed);
+            $this->markDispatchFailure($claimed, false, 'payment_instruction_invalid');
+
+            return;
         }
     }
 
@@ -1024,5 +1079,100 @@ class CheckoutService
                 'completed_at' => now(),
             ]);
         }
+    }
+
+    private function sanitizeLogText(string $text): string
+    {
+        // Redact Midtrans server keys (SB-Mid-server-..., Mid-server-...)
+        $sanitized = preg_replace('/(SB-Mid-server-[A-Za-z0-9_-]+|Mid-server-[A-Za-z0-9_-]+)/i', '[REDACTED_SERVER_KEY]', $text);
+
+        // Redact Midtrans client keys (SB-Mid-client-..., Mid-client-...)
+        $sanitized = preg_replace('/(SB-Mid-client-[A-Za-z0-9_-]+|Mid-client-[A-Za-z0-9_-]+)/i', '[REDACTED_CLIENT_KEY]', $sanitized);
+
+        // Redact Authorization headers and Basic/Bearer tokens
+        $sanitized = preg_replace('/(Authorization:\s*(Basic|Bearer)\s+)[^\s\r\n]+/i', '$1[REDACTED_TOKEN]', $sanitized);
+        $sanitized = preg_replace('/((Basic|Bearer)\s+)[A-Za-z0-9+\/=_.-]{10,}/i', '$1[REDACTED_TOKEN]', $sanitized);
+
+        // Redact service tokens
+        $sanitized = preg_replace('/(service_token["\':\s=]+)[A-Za-z0-9_-]+/i', '$1[REDACTED_SERVICE_TOKEN]', $sanitized);
+
+        // Redact encrypted secret components (nonce, tag, ciphertext)
+        $sanitized = preg_replace('/((encrypted_server_key|server_key_nonce|server_key_tag)["\':\s=]+)[A-Za-z0-9+\/=_.-]+/i', '$1[REDACTED_SECRET]', $sanitized);
+
+        return $sanitized;
+    }
+
+    /**
+     * @return array<int, string>
+     */
+    private function safeStackTrace(\Throwable $exception, int $maxFrames = 10): array
+    {
+        $frames = [];
+        $trace = $exception->getTrace();
+        $count = min(count($trace), $maxFrames);
+
+        for ($i = 0; $i < $count; $i++) {
+            $frame = $trace[$i];
+            $file = isset($frame['file']) ? str_replace(base_path().DIRECTORY_SEPARATOR, '', $frame['file']) : '[internal]';
+            $file = str_replace(base_path(), '', $file);
+            $line = $frame['line'] ?? '?';
+            $class = $frame['class'] ?? '';
+            $type = $frame['type'] ?? '';
+            $function = $frame['function'] ?? '';
+
+            // Note: Omit $frame['args'] to prevent leaking any secret arguments into logs
+            $frames[] = $this->sanitizeLogText("#{$i} {$file}:{$line} {$class}{$type}{$function}()");
+        }
+
+        return $frames;
+    }
+
+    /**
+     * @param  array<string, mixed>  $extraContext
+     */
+    private function logMidtransDispatchException(
+        string $errorCode,
+        \Throwable $exception,
+        PaymentAttempt $attempt,
+        CheckoutOutboxMessage $claimed,
+        array $extraContext = [],
+    ): void {
+        Log::error("[Midtrans Checkout Error] {$errorCode}: ".$this->sanitizeLogText($exception->getMessage()), [
+            'error_code' => $errorCode,
+            'exception_type' => get_class($exception),
+            'exception_message' => $this->sanitizeLogText($exception->getMessage()),
+            'location' => $exception->getFile().':'.$exception->getLine(),
+            'safe_trace' => $this->safeStackTrace($exception),
+            'invoice_id' => $attempt->invoice_id,
+            'merchant_reference' => $attempt->merchant_reference,
+            'payment_attempt_id' => $attempt->getKey(),
+            'outbox_id' => $claimed->getKey(),
+            'provider' => $attempt->provider,
+            'merchant_code' => $attempt->gateway_merchant_code,
+            ...$extraContext,
+        ]);
+    }
+
+    /**
+     * @param  array<string, mixed>  $extraContext
+     */
+    private function logMidtransDispatchError(
+        string $errorCode,
+        string $message,
+        PaymentAttempt $attempt,
+        CheckoutOutboxMessage $claimed,
+        array $extraContext = [],
+    ): void {
+        Log::error("[Midtrans Checkout Error] {$errorCode}: ".$this->sanitizeLogText($message), [
+            'error_code' => $errorCode,
+            'message' => $this->sanitizeLogText($message),
+            'invoice_id' => $attempt->invoice_id,
+            'merchant_reference' => $attempt->merchant_reference,
+            'payment_attempt_id' => $attempt->getKey(),
+            'outbox_id' => $claimed->getKey(),
+            'provider' => $attempt->provider,
+            'merchant_code' => $attempt->gateway_merchant_code,
+            ...$extraContext,
+        ]);
     }
 }

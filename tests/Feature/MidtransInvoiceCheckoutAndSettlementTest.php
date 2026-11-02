@@ -17,8 +17,10 @@ use App\Models\User;
 use App\Services\MidtransSecretStore;
 use Carbon\CarbonImmutable;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Http\Client\Request;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Log;
 use Laravel\Sanctum\Sanctum;
 use Tests\TestCase;
 
@@ -989,6 +991,181 @@ class MidtransInvoiceCheckoutAndSettlementTest extends TestCase
 
         // Charge was NOT called, only status query
         Http::assertNotSent(fn (Request $request) => str_contains($request->url(), '/charge'));
+    }
+
+    public function test_checkout_logs_and_marks_failure_when_credential_decryption_fails_without_leaking_secrets(): void
+    {
+        [$invoice, $credential] = $this->setupInvoiceWithMidtrans();
+
+        // Corrupt encrypted server key so decryption fails
+        $credential->update([
+            'encrypted_server_key' => base64_encode('corrupted-data-that-fails-decryption'),
+            'server_key_tag' => base64_encode(str_repeat('A', 16)),
+        ]);
+
+        Log::spy();
+
+        $admin = User::factory()->create(['is_admin' => true]);
+        Sanctum::actingAs($admin, ['admin:access']);
+
+        $res = $this->postJson("/api/v1/admin/invoices/{$invoice->id}/checkout", [
+            'payment_method' => 'qris',
+            'provider' => 'midtrans',
+        ], ['Idempotency-Key' => 'idemp-decrypt-fail-01']);
+
+        $res->assertStatus(502);
+
+        $outbox = CheckoutOutboxMessage::query()->latest('id')->firstOrFail();
+        $this->assertSame(CheckoutOutboxMessage::StatusFailed, $outbox->status);
+        $this->assertSame('credential_decryption_failed', $outbox->error_code);
+        $this->assertNull($outbox->available_at);
+
+        Log::shouldHaveReceived('error')->withArgs(function (string $message, array $context): bool {
+            $isTarget = str_contains($message, 'credential_decryption_failed');
+            if (! $isTarget) {
+                return false;
+            }
+
+            // Verify safe sanitized logging
+            $this->assertSame('credential_decryption_failed', $context['error_code']);
+            $this->assertStringNotContainsString(self::TestServerKey, json_encode($context));
+            $this->assertStringNotContainsString(self::TestServerKey, $message);
+            $this->assertNotEmpty($context['location']);
+            $this->assertNotEmpty($context['safe_trace']);
+
+            return true;
+        });
+    }
+
+    public function test_checkout_logs_and_marks_failure_when_gateway_charge_times_out_without_auto_retry(): void
+    {
+        [$invoice] = $this->setupInvoiceWithMidtrans();
+
+        Http::fake([
+            'https://api.sandbox.midtrans.com/v2/'.$invoice->invoice_number.'-A1/status' => Http::response([
+                'status_code' => '404',
+                'status_message' => 'Transaction does not exist',
+            ], 404),
+            'https://api.sandbox.midtrans.com/v2/charge' => function () {
+                throw new ConnectionException('cURL error 28: Operation timed out with SB-Mid-server-TESTKEY1234567890');
+            },
+        ]);
+
+        Log::spy();
+
+        $admin = User::factory()->create(['is_admin' => true]);
+        Sanctum::actingAs($admin, ['admin:access']);
+
+        $res = $this->postJson("/api/v1/admin/invoices/{$invoice->id}/checkout", [
+            'payment_method' => 'qris',
+            'provider' => 'midtrans',
+        ], ['Idempotency-Key' => 'idemp-charge-timeout-01']);
+
+        $res->assertStatus(502);
+
+        $outbox = CheckoutOutboxMessage::query()->latest('id')->firstOrFail();
+        // Uncertain gateway status: MUST NOT automatically retry!
+        $this->assertSame(CheckoutOutboxMessage::StatusFailed, $outbox->status);
+        $this->assertSame('gateway_connection_timeout', $outbox->error_code);
+        $this->assertNull($outbox->available_at);
+
+        Log::shouldHaveReceived('error')->withArgs(function (string $message, array $context): bool {
+            $isTarget = str_contains($message, 'gateway_connection_timeout');
+            if (! $isTarget) {
+                return false;
+            }
+
+            $this->assertSame('gateway_connection_timeout', $context['error_code']);
+            // Server key must be redacted in exception message and context
+            $this->assertStringNotContainsString(self::TestServerKey, $message);
+            $this->assertStringNotContainsString(self::TestServerKey, json_encode($context));
+            $this->assertStringContainsString('[REDACTED_SERVER_KEY]', $message);
+
+            return true;
+        });
+    }
+
+    public function test_checkout_logs_and_marks_failure_when_gateway_returns_error_response(): void
+    {
+        [$invoice] = $this->setupInvoiceWithMidtrans();
+
+        Http::fake([
+            'https://api.sandbox.midtrans.com/v2/'.$invoice->invoice_number.'-A1/status' => Http::response([
+                'status_code' => '404',
+                'status_message' => 'Transaction does not exist',
+            ], 404),
+            'https://api.sandbox.midtrans.com/v2/charge' => Http::response([
+                'status_code' => '400',
+                'status_message' => 'Invalid gross amount or merchant inactive',
+            ], 400),
+        ]);
+
+        Log::spy();
+
+        $admin = User::factory()->create(['is_admin' => true]);
+        Sanctum::actingAs($admin, ['admin:access']);
+
+        $res = $this->postJson("/api/v1/admin/invoices/{$invoice->id}/checkout", [
+            'payment_method' => 'qris',
+            'provider' => 'midtrans',
+        ], ['Idempotency-Key' => 'idemp-gateway-err-01']);
+
+        $res->assertStatus(502);
+
+        $outbox = CheckoutOutboxMessage::query()->latest('id')->firstOrFail();
+        $this->assertSame(CheckoutOutboxMessage::StatusFailed, $outbox->status);
+        $this->assertSame('gateway_response_invalid', $outbox->error_code);
+        $this->assertNull($outbox->available_at);
+
+        Log::shouldHaveReceived('error')->withArgs(function (string $message, array $context): bool {
+            return str_contains($message, 'gateway_response_invalid')
+                && $context['error_code'] === 'gateway_response_invalid';
+        });
+    }
+
+    public function test_checkout_logs_and_marks_failure_when_payment_instructions_are_incomplete(): void
+    {
+        [$invoice] = $this->setupInvoiceWithMidtrans();
+
+        // Response 201 from Midtrans for VA BCA but completely missing va_numbers
+        Http::fake([
+            'https://api.sandbox.midtrans.com/v2/'.$invoice->invoice_number.'-A1/status' => Http::response([
+                'status_code' => '404',
+            ], 404),
+            'https://api.sandbox.midtrans.com/v2/charge' => Http::response([
+                'status_code' => '201',
+                'status_message' => 'VA created but empty',
+                'transaction_id' => 'tx-empty-inst-01',
+                'order_id' => $invoice->invoice_number.'-A1',
+                'gross_amount' => '50000.00',
+                'payment_type' => 'bank_transfer',
+                'transaction_status' => 'pending',
+                'va_numbers' => [],
+            ], 201),
+        ]);
+
+        Log::spy();
+
+        $admin = User::factory()->create(['is_admin' => true]);
+        Sanctum::actingAs($admin, ['admin:access']);
+
+        $res = $this->postJson("/api/v1/admin/invoices/{$invoice->id}/checkout", [
+            'payment_method' => 'va_bca',
+            'bank' => 'bca',
+            'provider' => 'midtrans',
+        ], ['Idempotency-Key' => 'idemp-empty-inst-01']);
+
+        $res->assertStatus(502);
+
+        $outbox = CheckoutOutboxMessage::query()->latest('id')->firstOrFail();
+        $this->assertSame(CheckoutOutboxMessage::StatusFailed, $outbox->status);
+        $this->assertSame('payment_instruction_invalid', $outbox->error_code);
+
+        Log::shouldHaveReceived('error')->withArgs(function (string $message, array $context): bool {
+            return str_contains($message, 'payment_instruction_invalid')
+                && $context['error_code'] === 'payment_instruction_invalid'
+                && str_contains($context['exception_message'], 'tidak lengkap');
+        });
     }
 
     /**
