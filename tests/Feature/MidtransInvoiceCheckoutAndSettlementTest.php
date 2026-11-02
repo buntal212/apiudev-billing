@@ -785,6 +785,212 @@ class MidtransInvoiceCheckoutAndSettlementTest extends TestCase
         $this->assertSame(1, PaymentAllocation::query()->where('payment_attempt_id', $attempt->id)->count());
     }
 
+    public function test_checkout_with_same_idempotency_key_returns_existing_attempt_without_creating_new_attempt(): void
+    {
+        [$invoice] = $this->setupInvoiceWithMidtrans();
+
+        Http::fake([
+            'https://api.sandbox.midtrans.com/v2/charge' => Http::response([
+                'status_code' => '201',
+                'status_message' => 'QRIS transaction is created',
+                'transaction_id' => 'midtrans-tx-same-idemp-01',
+                'order_id' => $invoice->invoice_number.'-A1',
+                'gross_amount' => '50000.00',
+                'payment_type' => 'qris',
+                'transaction_status' => 'pending',
+                'qr_string' => '00020101021226590014ID.LINKAJA.WWW0118936009110022201980020300051440014ID.GO-PAY.WWW0215ID10200210081700303UMI5204581253033605405500005802ID5914UDEV Midtrans6007JAKARTA61051234062070703A0163041D3A',
+                'actions' => [
+                    [
+                        'name' => 'generate-qr-code',
+                        'method' => 'GET',
+                        'url' => 'https://api.sandbox.midtrans.com/v2/qris/midtrans-tx-same-idemp-01/qr-code',
+                    ],
+                ],
+            ], 201),
+        ]);
+
+        $admin = User::factory()->create(['is_admin' => true]);
+        Sanctum::actingAs($admin, ['admin:access']);
+
+        // First request with idempotency key
+        $res1 = $this->postJson("/api/v1/admin/invoices/{$invoice->id}/checkout", [
+            'payment_method' => 'qris',
+            'provider' => 'midtrans',
+        ], ['Idempotency-Key' => 'idemp-midtrans-idempotent-test-01']);
+        $res1->assertOk();
+        $attemptId1 = $res1->json('data.id');
+
+        // Second request with SAME idempotency key and matching parameters
+        $res2 = $this->postJson("/api/v1/admin/invoices/{$invoice->id}/checkout", [
+            'payment_method' => 'qris',
+            'provider' => 'midtrans',
+        ], ['Idempotency-Key' => 'idemp-midtrans-idempotent-test-01']);
+        $res2->assertOk();
+        $attemptId2 = $res2->json('data.id');
+
+        // Exactly the same attempt is returned, no new attempt created
+        $this->assertSame($attemptId1, $attemptId2);
+        $this->assertSame(1, PaymentAttempt::query()->where('invoice_id', $invoice->id)->count());
+        $this->assertCount(1, Http::recorded(fn (Request $request) => str_contains($request->url(), '/charge')));
+    }
+
+    public function test_checkout_with_same_idempotency_key_but_different_parameters_returns_409_conflict(): void
+    {
+        [$invoice] = $this->setupInvoiceWithMidtrans();
+
+        Http::fake([
+            'https://api.sandbox.midtrans.com/v2/charge' => Http::response([
+                'status_code' => '201',
+                'status_message' => 'QRIS transaction is created',
+                'transaction_id' => 'midtrans-tx-conflict-01',
+                'order_id' => $invoice->invoice_number.'-A1',
+                'gross_amount' => '50000.00',
+                'payment_type' => 'qris',
+                'transaction_status' => 'pending',
+                'qr_string' => '00020101021226590014ID.LINKAJA.WWW0118936009110022201980020300051440014ID.GO-PAY.WWW0215ID10200210081700303UMI5204581253033605405500005802ID5914UDEV Midtrans6007JAKARTA61051234062070703A0163041D3A',
+                'actions' => [
+                    [
+                        'name' => 'generate-qr-code',
+                        'method' => 'GET',
+                        'url' => 'https://api.sandbox.midtrans.com/v2/qris/midtrans-tx-conflict-01/qr-code',
+                    ],
+                ],
+            ], 201),
+        ]);
+
+        $admin = User::factory()->create(['is_admin' => true]);
+        Sanctum::actingAs($admin, ['admin:access']);
+
+        // First request: QRIS
+        $res1 = $this->postJson("/api/v1/admin/invoices/{$invoice->id}/checkout", [
+            'payment_method' => 'qris',
+            'provider' => 'midtrans',
+        ], ['Idempotency-Key' => 'idemp-midtrans-conflict-test-01']);
+        $res1->assertOk();
+
+        // Second request with SAME idempotency key but DIFFERENT parameters (va_bca instead of qris)
+        $res2 = $this->postJson("/api/v1/admin/invoices/{$invoice->id}/checkout", [
+            'payment_method' => 'va_bca',
+            'bank' => 'bca',
+            'provider' => 'midtrans',
+        ], ['Idempotency-Key' => 'idemp-midtrans-conflict-test-01']);
+
+        // Must return HTTP 409 Conflict with informative message
+        $res2->assertStatus(409)
+            ->assertJsonStructure(['message']);
+        $this->assertStringContainsString('parameter berbeda', $res2->json('message'));
+
+        // No new attempt is created; attempt count remains 1
+        $this->assertSame(1, PaymentAttempt::query()->where('invoice_id', $invoice->id)->count());
+    }
+
+    public function test_checkout_switching_methods_with_new_idempotency_key_cancels_previous_and_creates_new_attempt_cleanly(): void
+    {
+        [$invoice] = $this->setupInvoiceWithMidtrans();
+
+        Http::fake([
+            'https://api.sandbox.midtrans.com/v2/charge' => Http::sequence()
+                ->push([
+                    'status_code' => '201',
+                    'status_message' => 'QRIS transaction is created',
+                    'transaction_id' => 'midtrans-tx-switch-01',
+                    'order_id' => $invoice->invoice_number.'-A1',
+                    'gross_amount' => '50000.00',
+                    'payment_type' => 'qris',
+                    'transaction_status' => 'pending',
+                    'qr_string' => '00020101021226590014ID.LINKAJA.WWW0118936009110022201980020300051440014ID.GO-PAY.WWW0215ID10200210081700303UMI5204581253033605405500005802ID5914UDEV Midtrans6007JAKARTA61051234062070703A0163041D3A',
+                    'actions' => [
+                        [
+                            'name' => 'generate-qr-code',
+                            'method' => 'GET',
+                            'url' => 'https://api.sandbox.midtrans.com/v2/qris/midtrans-tx-switch-01/qr-code',
+                        ],
+                    ],
+                ], 201)
+                ->push([
+                    'status_code' => '201',
+                    'status_message' => 'VA BCA transaction is created',
+                    'transaction_id' => 'midtrans-tx-switch-02',
+                    'order_id' => $invoice->invoice_number.'-A2',
+                    'gross_amount' => '50000.00',
+                    'payment_type' => 'bank_transfer',
+                    'transaction_status' => 'pending',
+                    'va_numbers' => [
+                        ['bank' => 'bca', 'va_number' => '9988776655'],
+                    ],
+                ], 201),
+        ]);
+
+        $admin = User::factory()->create(['is_admin' => true]);
+        Sanctum::actingAs($admin, ['admin:access']);
+
+        // First attempt: QRIS with key A
+        $res1 = $this->postJson("/api/v1/admin/invoices/{$invoice->id}/checkout", [
+            'payment_method' => 'qris',
+            'provider' => 'midtrans',
+        ], ['Idempotency-Key' => 'idemp-switch-key-A']);
+        $res1->assertOk();
+
+        $attempt1 = PaymentAttempt::query()->where('invoice_id', $invoice->id)->where('attempt_number', 1)->firstOrFail();
+        $this->assertSame(PaymentAttempt::StatusPending, $attempt1->status);
+
+        // Second attempt: Switch to VA BCA with key B (fresh idempotency key from frontend)
+        $res2 = $this->postJson("/api/v1/admin/invoices/{$invoice->id}/checkout", [
+            'payment_method' => 'va_bca',
+            'bank' => 'bca',
+            'provider' => 'midtrans',
+        ], ['Idempotency-Key' => 'idemp-switch-key-B']);
+
+        // Succeeded cleanly without HTTP 500 or duplicate key exception
+        $res2->assertOk()
+            ->assertJsonPath('data.payment_method', 'va_bca')
+            ->assertJsonPath('data.payment_code', '9988776655');
+
+        // Attempt 1 was cancelled cleanly
+        $this->assertSame(PaymentAttempt::StatusCancelled, $attempt1->fresh()->status);
+
+        // Attempt 2 was created as attempt_number 2
+        $attempt2 = PaymentAttempt::query()->where('invoice_id', $invoice->id)->where('attempt_number', 2)->firstOrFail();
+        $this->assertSame(PaymentAttempt::StatusPending, $attempt2->status);
+        $this->assertSame('9988776655', $attempt2->metadata['payment_code']);
+    }
+
+    public function test_checkout_recovery_does_not_call_create_charge_when_transaction_already_exists(): void
+    {
+        [$invoice] = $this->setupInvoiceWithMidtrans();
+
+        // Simulate that Midtrans already has this transaction created
+        Http::fake([
+            'https://api.sandbox.midtrans.com/v2/'.$invoice->invoice_number.'-A1/status' => Http::response([
+                'status_code' => '200',
+                'status_message' => 'Success, transaction is found',
+                'transaction_id' => 'midtrans-tx-recovered-99',
+                'order_id' => $invoice->invoice_number.'-A1',
+                'gross_amount' => '50000.00',
+                'payment_type' => 'qris',
+                'transaction_status' => 'pending',
+            ], 200),
+            'https://api.sandbox.midtrans.com/v2/charge' => Http::response([
+                'status_code' => '500',
+                'status_message' => 'Should never be called!',
+            ], 500),
+        ]);
+
+        $admin = User::factory()->create(['is_admin' => true]);
+        Sanctum::actingAs($admin, ['admin:access']);
+
+        $res = $this->postJson("/api/v1/admin/invoices/{$invoice->id}/checkout", [
+            'payment_method' => 'qris',
+            'provider' => 'midtrans',
+        ], ['Idempotency-Key' => 'idemp-recovery-existing-01']);
+
+        $res->assertOk()
+            ->assertJsonPath('data.gateway_payment_id', 'midtrans-tx-recovered-99');
+
+        // Charge was NOT called, only status query
+        Http::assertNotSent(fn (Request $request) => str_contains($request->url(), '/charge'));
+    }
+
     /**
      * @return array{0: Invoice, 1: MidtransMerchantCredential}
      */

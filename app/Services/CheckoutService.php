@@ -12,6 +12,7 @@ use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\ValidationException;
 use RuntimeException;
+use Symfony\Component\HttpFoundation\Response;
 
 class CheckoutService
 {
@@ -100,7 +101,48 @@ class CheckoutService
                 $this->assertInvoiceCanStartCheckout($lockedInvoice);
 
                 $resolvedProvider = $this->resolveProvider($lockedInvoice, $paymentMethod, $provider);
+                $fullIdempotencyKey = 'checkout:'.$lockedInvoice->getKey().':'.$requestIdempotencyKey;
 
+                // 1. Idempotency Check: Request with identical idempotency key must not create a new attempt
+                $existingAttemptByIdempotency = PaymentAttempt::query()
+                    ->where('idempotency_key', $fullIdempotencyKey)
+                    ->lockForUpdate()
+                    ->first();
+
+                if ($existingAttemptByIdempotency !== null) {
+                    if (! $this->attemptMatchesParameters($existingAttemptByIdempotency, $lockedInvoice, $paymentMethod, $resolvedProvider, $bank)) {
+                        $existingMetadata = is_array($existingAttemptByIdempotency->metadata) ? $existingAttemptByIdempotency->metadata : [];
+                        $existingMethod = $existingMetadata['payment_method'] ?? 'dana_wallet';
+                        $existingBank = $existingMetadata['bank'] ?? null;
+                        $existingProvider = $existingAttemptByIdempotency->provider;
+                        $existingDesc = $existingMethod.($existingBank ? " ({$existingBank})" : '')." via {$existingProvider}";
+                        $newDesc = $paymentMethod.($bank ? " ({$bank})" : '')." via {$resolvedProvider}";
+
+                        abort(Response::HTTP_CONFLICT, "Idempotency key '{$requestIdempotencyKey}' sudah digunakan untuk checkout invoice {$lockedInvoice->invoice_number} dengan parameter berbeda ({$existingDesc} vs {$newDesc}). Gunakan idempotency key baru untuk membuat transaksi baru.");
+                    }
+
+                    if (strtolower((string) $existingAttemptByIdempotency->provider) === 'midtrans'
+                        && in_array($existingAttemptByIdempotency->status, [PaymentAttempt::StatusInitiated, PaymentAttempt::StatusPending], true)) {
+                        $this->recoverMidtransInstructionsIfMissing($existingAttemptByIdempotency);
+                    }
+
+                    $outbox = CheckoutOutboxMessage::query()
+                        ->where('payment_attempt_id', $existingAttemptByIdempotency->getKey())
+                        ->lockForUpdate()
+                        ->first();
+
+                    if ($outbox === null) {
+                        $outbox = CheckoutOutboxMessage::query()->create([
+                            'payment_attempt_id' => $existingAttemptByIdempotency->getKey(),
+                            'idempotency_key' => strtolower((string) $existingAttemptByIdempotency->provider).'-checkout-attempt-'.$existingAttemptByIdempotency->getKey(),
+                            'status' => CheckoutOutboxMessage::StatusCompleted,
+                        ]);
+                    }
+
+                    return $outbox;
+                }
+
+                // 2. Active Attempt Check on Invoice
                 $activeAttempt = PaymentAttempt::query()
                     ->where('invoice_id', $lockedInvoice->getKey())
                     ->whereIn('status', [PaymentAttempt::StatusInitiated, PaymentAttempt::StatusPending])
@@ -115,8 +157,7 @@ class CheckoutService
                             'completed_at' => now(),
                         ]);
                         $activeAttempt = null;
-                    } elseif (($activeAttempt->metadata['payment_method'] ?? 'dana_wallet') !== $paymentMethod
-                        || strtolower((string) $activeAttempt->provider) !== $resolvedProvider) {
+                    } elseif (! $this->attemptMatchesParameters($activeAttempt, $lockedInvoice, $paymentMethod, $resolvedProvider, $bank)) {
                         $activeAttempt->update([
                             'status' => PaymentAttempt::StatusCancelled,
                             'completed_at' => now(),
@@ -126,72 +167,10 @@ class CheckoutService
                 }
 
                 if ($activeAttempt !== null && strtolower((string) $activeAttempt->provider) === 'midtrans') {
-                    $activeMetadata = is_array($activeAttempt->metadata) ? $activeAttempt->metadata : [];
-                    $isQris = ($activeMetadata['payment_method'] ?? 'qris') === 'qris';
-                    $hasInstructions = $isQris
-                        ? (! empty($activeMetadata['qr_content']) || ! empty($activeMetadata['qr_url']) || ! empty($activeAttempt->checkout_url))
-                        : (! empty($activeMetadata['payment_code']) || ! empty($activeAttempt->checkout_url));
-
-                    if (! $hasInstructions) {
-                        // Recover instructions if transaction already exists in Midtrans
-                        $credential = \App\Models\MidtransMerchantCredential::query()
-                            ->where('merchant_code', $activeAttempt->gateway_merchant_code)
-                            ->where('environment', 'sandbox')
-                            ->first();
-
-                        if ($credential !== null && ! empty($credential->encrypted_server_key)) {
-                            $serverKey = $credential->getServerKey($this->midtransSecretStore);
-                            if (! empty($serverKey)) {
-                                $statusResult = $this->midtransClient->querySandboxStatus(
-                                    merchantCode: (string) $activeAttempt->gateway_merchant_code,
-                                    serverKey: $serverKey,
-                                    orderId: (string) $activeAttempt->merchant_reference,
-                                    environment: 'sandbox',
-                                );
-
-                                if (($statusResult['status'] ?? '') === 'success' && ! empty($statusResult['data']['transaction_id'])) {
-                                    $data = $statusResult['data'];
-                                    $txId = $data['transaction_id'];
-                                    $qrUrl = $data['qr_url'] ?? "https://api.sandbox.midtrans.com/v2/qris/{$txId}/qr-code";
-                                    $qrString = $data['qr_string'] ?? null;
-                                    $checkoutUrl = $data['checkout_url'] ?? $qrUrl;
-
-                                    $activeMetadata['transaction_id'] = $txId;
-                                    $activeMetadata['qr_url'] = $qrUrl;
-                                    if ($qrString !== null) {
-                                        $activeMetadata['qr_content'] = $qrString;
-                                    }
-                                    if (empty($activeMetadata['payment_instruction'])) {
-                                        $activeMetadata['payment_instruction'] = [
-                                            'type' => 'qris_mpm',
-                                            'qr_content' => $qrString,
-                                            'qr_url' => $qrUrl,
-                                            'checkout_url' => $checkoutUrl,
-                                            'message' => 'Pindai kode QRIS Midtrans Sandbox menggunakan aplikasi e-wallet atau mobile banking.',
-                                        ];
-                                    }
-
-                                    $activeAttempt->update([
-                                        'provider_reference' => $txId,
-                                        'gateway_payment_id' => $txId,
-                                        'checkout_url' => $checkoutUrl,
-                                        'metadata' => $activeMetadata,
-                                    ]);
-                                } elseif (($statusResult['is_not_found'] ?? false) || ($statusResult['http_status'] ?? 0) === 404) {
-                                    $activeAttempt->update([
-                                        'status' => PaymentAttempt::StatusFailed,
-                                        'failure_code' => 'midtrans_order_not_found',
-                                        'failure_message' => 'Transaksi tidak ditemukan di Midtrans Sandbox.',
-                                        'completed_at' => now(),
-                                    ]);
-                                    $activeAttempt = null;
-                                }
-                            }
-                        }
-                    }
+                    $this->recoverMidtransInstructionsIfMissing($activeAttempt);
                 }
 
-                if ($activeAttempt !== null) {
+                if ($activeAttempt !== null && $activeAttempt->status !== PaymentAttempt::StatusFailed) {
                     return CheckoutOutboxMessage::query()
                         ->where('payment_attempt_id', $activeAttempt->getKey())
                         ->lockForUpdate()
@@ -242,7 +221,7 @@ class CheckoutService
                         'amount' => $lockedInvoice->amount,
                         'currency' => $lockedInvoice->currency,
                         'status' => PaymentAttempt::StatusInitiated,
-                        'idempotency_key' => 'checkout:'.$lockedInvoice->getKey().':'.$requestIdempotencyKey,
+                        'idempotency_key' => $fullIdempotencyKey,
                         'requested_at' => now(),
                         'metadata' => [
                             'invoice_number' => $lockedInvoice->invoice_number,
@@ -276,7 +255,7 @@ class CheckoutService
                     'amount' => $lockedInvoice->amount,
                     'currency' => $lockedInvoice->currency,
                     'status' => PaymentAttempt::StatusInitiated,
-                    'idempotency_key' => 'checkout:'.$lockedInvoice->getKey().':'.$requestIdempotencyKey,
+                    'idempotency_key' => $fullIdempotencyKey,
                     'requested_at' => now(),
                     'metadata' => [
                         'invoice_number' => $lockedInvoice->invoice_number,
@@ -294,6 +273,25 @@ class CheckoutService
                 ]);
             });
         } catch (QueryException $exception) {
+            $sqlState = (string) $exception->getCode();
+            $message = $exception->getMessage();
+            if ($sqlState === '23000' || str_contains($message, 'pay_idempotency_uq') || str_contains($message, '1062')) {
+                $fullKey = 'checkout:'.$invoice->getKey().':'.$requestIdempotencyKey;
+                $existing = PaymentAttempt::query()->where('idempotency_key', $fullKey)->first();
+                if ($existing !== null) {
+                    $resolvedProvider = $this->resolveProvider($invoice, $paymentMethod, $provider);
+                    if (! $this->attemptMatchesParameters($existing, $invoice, $paymentMethod, $resolvedProvider, $bank)) {
+                        abort(Response::HTTP_CONFLICT, "Idempotency key '{$requestIdempotencyKey}' sudah digunakan untuk checkout invoice {$invoice->invoice_number} dengan parameter berbeda.");
+                    }
+                    $outbox = CheckoutOutboxMessage::query()
+                        ->where('payment_attempt_id', $existing->getKey())
+                        ->first();
+                    if ($outbox !== null) {
+                        return $outbox;
+                    }
+                }
+            }
+
             throw new RuntimeException('Checkout tidak dapat disiapkan secara aman.', previous: $exception);
         }
     }
@@ -594,6 +592,21 @@ class CheckoutService
             }
 
             $amountMinor = $this->amountMinor((string) $attempt->getRawOriginal('amount'));
+
+            // Prevent duplicate Midtrans charge: check if order already exists in Midtrans first
+            $existingStatus = $this->midtransClient->querySandboxStatus(
+                merchantCode: (string) $attempt->gateway_merchant_code,
+                serverKey: $serverKey,
+                orderId: (string) $attempt->merchant_reference,
+                environment: 'sandbox',
+            );
+
+            if (($existingStatus['status'] ?? '') === 'success' && ! empty($existingStatus['data']['transaction_id'])) {
+                $this->storeMidtransCheckout($claimed, $existingStatus['data'], $amountMinor, $paymentType, $bank);
+
+                return;
+            }
+
             $chargeResult = $this->midtransClient->createSandboxCharge(
                 merchantCode: $attempt->gateway_merchant_code,
                 serverKey: $serverKey,
@@ -891,5 +904,125 @@ class CheckoutService
         }
 
         return (int) $matches[1];
+    }
+
+    private function resolveEffectiveBank(string $paymentMethod, ?string $bank): ?string
+    {
+        if (! empty($bank)) {
+            return strtolower(trim($bank));
+        }
+
+        if (str_starts_with($paymentMethod, 'va_')) {
+            $inferred = substr($paymentMethod, 3);
+
+            return $inferred === 'mandiri' ? 'echannel' : strtolower($inferred);
+        }
+
+        if ($paymentMethod === 'echannel') {
+            return 'echannel';
+        }
+
+        return null;
+    }
+
+    private function attemptMatchesParameters(
+        PaymentAttempt $attempt,
+        Invoice $invoice,
+        string $paymentMethod,
+        string $resolvedProvider,
+        ?string $bank = null,
+    ): bool {
+        if ((int) $attempt->invoice_id !== (int) $invoice->getKey()) {
+            return false;
+        }
+
+        if (strtolower((string) $attempt->provider) !== strtolower($resolvedProvider)) {
+            return false;
+        }
+
+        $metadata = is_array($attempt->metadata) ? $attempt->metadata : [];
+        $existingMethod = $metadata['payment_method'] ?? 'dana_wallet';
+        if ($existingMethod !== $paymentMethod) {
+            return false;
+        }
+
+        $existingBank = $this->resolveEffectiveBank($existingMethod, $metadata['bank'] ?? null);
+        $requestedBank = $this->resolveEffectiveBank($paymentMethod, $bank);
+        if ($existingBank !== $requestedBank) {
+            return false;
+        }
+
+        return true;
+    }
+
+    private function recoverMidtransInstructionsIfMissing(PaymentAttempt $attempt): void
+    {
+        $metadata = is_array($attempt->metadata) ? $attempt->metadata : [];
+        $isQris = ($metadata['payment_method'] ?? 'qris') === 'qris';
+        $hasInstructions = $isQris
+            ? (! empty($metadata['qr_content']) || ! empty($metadata['qr_url']) || ! empty($attempt->checkout_url))
+            : (! empty($metadata['payment_code']) || ! empty($attempt->checkout_url));
+
+        if ($hasInstructions) {
+            return;
+        }
+
+        $credential = \App\Models\MidtransMerchantCredential::query()
+            ->where('merchant_code', $attempt->gateway_merchant_code)
+            ->where('environment', 'sandbox')
+            ->first();
+
+        if ($credential === null || empty($credential->encrypted_server_key)) {
+            return;
+        }
+
+        $serverKey = $credential->getServerKey($this->midtransSecretStore);
+        if (empty($serverKey)) {
+            return;
+        }
+
+        $statusResult = $this->midtransClient->querySandboxStatus(
+            merchantCode: (string) $attempt->gateway_merchant_code,
+            serverKey: $serverKey,
+            orderId: (string) $attempt->merchant_reference,
+            environment: 'sandbox',
+        );
+
+        if (($statusResult['status'] ?? '') === 'success' && ! empty($statusResult['data']['transaction_id'])) {
+            $data = $statusResult['data'];
+            $txId = $data['transaction_id'];
+            $qrUrl = $data['qr_url'] ?? "https://api.sandbox.midtrans.com/v2/qris/{$txId}/qr-code";
+            $qrString = $data['qr_string'] ?? null;
+            $checkoutUrl = $data['checkout_url'] ?? $qrUrl;
+
+            $metadata['transaction_id'] = $txId;
+            $metadata['qr_url'] = $qrUrl;
+            if ($qrString !== null) {
+                $metadata['qr_content'] = $qrString;
+            }
+            if (empty($metadata['payment_instruction'])) {
+                $metadata['payment_instruction'] = [
+                    'type' => 'qris_mpm',
+                    'qr_content' => $qrString,
+                    'qr_url' => $qrUrl,
+                    'checkout_url' => $checkoutUrl,
+                    'message' => 'Pindai kode QRIS Midtrans Sandbox menggunakan aplikasi e-wallet atau mobile banking.',
+                ];
+            }
+
+            $attempt->update([
+                'provider_reference' => $txId,
+                'gateway_payment_id' => $txId,
+                'checkout_url' => $checkoutUrl,
+                'metadata' => $metadata,
+            ]);
+        } elseif (($statusResult['is_not_found'] ?? false) || ($statusResult['http_status'] ?? 0) === 404) {
+            $attempt->update([
+                'status' => PaymentAttempt::StatusFailed,
+                'failure_code' => 'midtrans_order_not_found',
+                'failure_message' => 'Transaksi tidak ditemukan di Midtrans Sandbox.',
+                'completed_at' => now(),
+            ]);
+        }
     }
 }
