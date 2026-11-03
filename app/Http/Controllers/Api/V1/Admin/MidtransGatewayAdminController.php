@@ -6,8 +6,10 @@ use App\Http\Controllers\Controller;
 use App\Models\ApplicationPaymentGateway;
 use App\Models\MidtransGatewayAudit;
 use App\Models\MidtransMerchantCredential;
+use App\Models\MidtransPaymentMethodFee;
 use App\Models\PaymentAttempt;
 use App\Services\MidtransAuditService;
+use App\Services\MidtransFeeService;
 use App\Services\MidtransGatewayProvisioningClient;
 use App\Services\MidtransSecretStore;
 use Illuminate\Http\JsonResponse;
@@ -20,7 +22,10 @@ class MidtransGatewayAdminController extends Controller
         private MidtransSecretStore $secretStore,
         private MidtransGatewayProvisioningClient $gatewayClient,
         private MidtransAuditService $auditService,
-    ) {}
+        private ?MidtransFeeService $feeService = null,
+    ) {
+        $this->feeService = $feeService ?? app(MidtransFeeService::class);
+    }
 
     public function indexMerchants(Request $request): JsonResponse
     {
@@ -686,6 +691,230 @@ class MidtransGatewayAdminController extends Controller
                 ] : null,
                 'api_status' => $apiStatus,
             ],
+        ]);
+    }
+
+    public function indexFees(Request $request): JsonResponse
+    {
+        $merchantCode = trim((string) $request->query('merchant_code', 'udev-central'));
+        if ($merchantCode === '') {
+            $merchantCode = 'udev-central';
+        }
+
+        $this->feeService->ensureDefaultFeesForMerchant($merchantCode);
+
+        $query = MidtransPaymentMethodFee::query()
+            ->where('merchant_code', $merchantCode);
+
+        $search = trim((string) $request->query('search', ''));
+        if ($search !== '') {
+            $query->where(function ($q) use ($search) {
+                $q->where('payment_method', 'like', "%{$search}%")
+                    ->orWhere('payment_method_name', 'like', "%{$search}%");
+            });
+        }
+
+        $feeType = $request->query('fee_type');
+        if (! empty($feeType) && in_array($feeType, ['fixed', 'percent'], true)) {
+            $query->where('fee_type', $feeType);
+        }
+
+        $status = $request->query('status');
+        if ($status === 'active') {
+            $query->where('is_active', true);
+        } elseif ($status === 'inactive') {
+            $query->where('is_active', false);
+        }
+
+        $perPage = (int) $request->query('per_page', 15);
+        if ($perPage < 1) {
+            $perPage = 15;
+        }
+
+        $fees = $query->orderBy('id')->paginate($perPage);
+
+        return response()->json([
+            'status' => 'success',
+            'data' => $fees->items(),
+            'meta' => [
+                'current_page' => $fees->currentPage(),
+                'per_page' => $fees->perPage(),
+                'total' => $fees->total(),
+                'last_page' => $fees->lastPage(),
+                'has_more' => $fees->hasMorePages(),
+            ],
+        ]);
+    }
+
+    public function storeFee(Request $request): JsonResponse
+    {
+        $validated = $request->validate([
+            'merchant_code' => ['nullable', 'string', 'max:60'],
+            'payment_method' => ['required', 'string', 'max:50'],
+            'payment_method_name' => ['required', 'string', 'max:100'],
+            'fee_type' => ['required', 'string', 'in:fixed,percent'],
+            'fee_rate' => ['nullable', 'numeric', 'min:0', 'max:100'],
+            'fixed_amount' => ['nullable', 'numeric', 'min:0'],
+            'min_fee' => ['nullable', 'numeric', 'min:0'],
+            'max_fee' => ['nullable', 'numeric', 'min:0'],
+            'is_active' => ['sometimes', 'boolean'],
+            'notes' => ['nullable', 'string', 'max:255'],
+        ]);
+
+        $merchantCode = $validated['merchant_code'] ?? 'udev-central';
+        $paymentMethod = $validated['payment_method'];
+
+        $exists = MidtransPaymentMethodFee::query()
+            ->where('merchant_code', $merchantCode)
+            ->where('payment_method', $paymentMethod)
+            ->exists();
+
+        if ($exists) {
+            return response()->json([
+                'status' => 'error',
+                'message' => "Metode pembayaran '{$paymentMethod}' sudah dikonfigurasi untuk merchant '{$merchantCode}'.",
+                'errors' => [
+                    'payment_method' => ["Metode pembayaran '{$paymentMethod}' sudah ada."],
+                ],
+            ], Response::HTTP_UNPROCESSABLE_ENTITY);
+        }
+
+        $fee = MidtransPaymentMethodFee::query()->create([
+            'merchant_code' => $merchantCode,
+            'payment_method' => $paymentMethod,
+            'payment_method_name' => $validated['payment_method_name'],
+            'fee_type' => $validated['fee_type'],
+            'fee_rate' => $validated['fee_rate'] ?? 0.0000,
+            'fixed_amount' => $validated['fixed_amount'] ?? 0.00,
+            'min_fee' => $validated['min_fee'] ?? null,
+            'max_fee' => $validated['max_fee'] ?? null,
+            'is_active' => $validated['is_active'] ?? true,
+            'notes' => $validated['notes'] ?? null,
+        ]);
+
+        $this->auditService->record(
+            merchantCode: $merchantCode,
+            action: 'fee.created',
+            status: 'success',
+            metadata: [
+                'fee_id' => $fee->id,
+                'payment_method' => $paymentMethod,
+                'fee_type' => $fee->fee_type,
+                'fee_rate' => $fee->fee_rate,
+                'fixed_amount' => $fee->fixed_amount,
+            ]
+        );
+
+        return response()->json([
+            'status' => 'success',
+            'message' => 'Biaya metode pembayaran berhasil ditambahkan.',
+            'data' => $fee,
+        ], Response::HTTP_CREATED);
+    }
+
+    public function showFee(string $id): JsonResponse
+    {
+        $fee = MidtransPaymentMethodFee::query()->findOrFail($id);
+
+        return response()->json([
+            'status' => 'success',
+            'data' => $fee,
+        ]);
+    }
+
+    public function updateFee(Request $request, string $id): JsonResponse
+    {
+        $fee = MidtransPaymentMethodFee::query()->findOrFail($id);
+
+        $validated = $request->validate([
+            'payment_method_name' => ['sometimes', 'required', 'string', 'max:100'],
+            'fee_type' => ['sometimes', 'required', 'string', 'in:fixed,percent'],
+            'fee_rate' => ['nullable', 'numeric', 'min:0', 'max:100'],
+            'fixed_amount' => ['nullable', 'numeric', 'min:0'],
+            'min_fee' => ['nullable', 'numeric', 'min:0'],
+            'max_fee' => ['nullable', 'numeric', 'min:0'],
+            'is_active' => ['sometimes', 'boolean'],
+            'notes' => ['nullable', 'string', 'max:255'],
+        ]);
+
+        $fee->update($validated);
+
+        $this->auditService->record(
+            merchantCode: $fee->merchant_code,
+            action: 'fee.updated',
+            status: 'success',
+            metadata: array_merge(['fee_id' => $fee->id], $validated)
+        );
+
+        return response()->json([
+            'status' => 'success',
+            'message' => 'Konfigurasi biaya metode pembayaran berhasil diperbarui.',
+            'data' => $fee,
+        ]);
+    }
+
+    public function toggleFeeStatus(Request $request, string $id): JsonResponse
+    {
+        $fee = MidtransPaymentMethodFee::query()->findOrFail($id);
+
+        $validated = $request->validate([
+            'is_active' => ['required', 'boolean'],
+        ]);
+
+        $fee->update(['is_active' => $validated['is_active']]);
+
+        $this->auditService->record(
+            merchantCode: $fee->merchant_code,
+            action: $validated['is_active'] ? 'fee.activated' : 'fee.deactivated',
+            status: 'success',
+            metadata: ['fee_id' => $fee->id, 'payment_method' => $fee->payment_method]
+        );
+
+        return response()->json([
+            'status' => 'success',
+            'message' => 'Status biaya metode pembayaran berhasil diperbarui.',
+            'data' => $fee,
+        ]);
+    }
+
+    public function destroyFee(string $id): JsonResponse
+    {
+        $fee = MidtransPaymentMethodFee::query()->findOrFail($id);
+        $merchantCode = $fee->merchant_code;
+        $paymentMethod = $fee->payment_method;
+
+        $fee->delete();
+
+        $this->auditService->record(
+            merchantCode: $merchantCode,
+            action: 'fee.deleted',
+            status: 'success',
+            metadata: ['fee_id' => $id, 'payment_method' => $paymentMethod]
+        );
+
+        return response()->json([
+            'status' => 'success',
+            'message' => 'Konfigurasi biaya metode pembayaran berhasil dihapus.',
+        ]);
+    }
+
+    public function calculateFeePreview(Request $request): JsonResponse
+    {
+        $validated = $request->validate([
+            'merchant_code' => ['nullable', 'string'],
+            'payment_method' => ['required', 'string'],
+            'amount' => ['required', 'numeric', 'min:0'],
+        ]);
+
+        $merchantCode = $validated['merchant_code'] ?? 'udev-central';
+        $paymentMethod = $validated['payment_method'];
+        $subtotal = (float) $validated['amount'];
+
+        $result = $this->feeService->calculateFee($merchantCode, $paymentMethod, $subtotal);
+
+        return response()->json([
+            'status' => 'success',
+            'data' => $result,
         ]);
     }
 }

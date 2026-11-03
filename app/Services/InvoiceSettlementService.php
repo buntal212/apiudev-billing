@@ -218,7 +218,7 @@ class InvoiceSettlementService
                 || $attempt->merchant_reference === null
                 || $this->amountMinor($allocation->getRawOriginal('amount')) !== $this->amountMinor($lockedInvoice->getRawOriginal('amount'))
                 || strtoupper((string) $allocation->currency) !== strtoupper((string) $lockedInvoice->currency)
-                || $this->amountMinor($attempt->getRawOriginal('amount')) !== $this->amountMinor($lockedInvoice->getRawOriginal('amount'))
+                || $this->amountMinor($attempt->getRawOriginal('amount')) !== $this->amountMinor((string) ((float) $lockedInvoice->getRawOriginal('amount') + (float) ($attempt->metadata['fee_breakdown']['fee_amount'] ?? 0)))
                 || strtoupper((string) $attempt->currency) !== strtoupper((string) $lockedInvoice->currency)) {
                 throw ValidationException::withMessages([
                     'invoice' => ['Data settlement tidak konsisten sehingga pemulihan dihentikan.'],
@@ -323,10 +323,13 @@ class InvoiceSettlementService
             $this->reject('merchant_identity_mismatch', 'Merchant gateway tidak cocok dengan payment attempt.');
         }
 
+        $feeAmount = (float) ($attempt->metadata['fee_breakdown']['fee_amount'] ?? 0.0);
+        $expectedAttemptAmount = (float) $invoice->getRawOriginal('amount') + $feeAmount;
+
         if (strtoupper((string) $attempt->currency) !== $verification->currency
             || strtoupper((string) $invoice->currency) !== $verification->currency
             || $this->amountMinor($attempt->getRawOriginal('amount')) !== $verification->amountMinor
-            || $this->amountMinor($invoice->getRawOriginal('amount')) !== $verification->amountMinor) {
+            || $this->amountMinor((string) $expectedAttemptAmount) !== $this->amountMinor($attempt->getRawOriginal('amount'))) {
             $this->reject('amount_or_currency_mismatch', 'Nominal atau currency pembayaran tidak cocok.');
         }
     }

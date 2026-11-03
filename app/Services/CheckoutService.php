@@ -20,6 +20,7 @@ class CheckoutService
 {
     private MidtransGatewayProvisioningClient $midtransClient;
     private MidtransSecretStore $midtransSecretStore;
+    private MidtransFeeService $midtransFeeService;
 
     public function __construct(
         private DanaGatewayClient $gatewayClient,
@@ -27,9 +28,11 @@ class CheckoutService
         private SubscriptionBillingMerchantResolver $subscriptionMerchantResolver,
         ?MidtransGatewayProvisioningClient $midtransClient = null,
         ?MidtransSecretStore $midtransSecretStore = null,
+        ?MidtransFeeService $midtransFeeService = null,
     ) {
         $this->midtransClient = $midtransClient ?? app(MidtransGatewayProvisioningClient::class);
         $this->midtransSecretStore = $midtransSecretStore ?? app(MidtransSecretStore::class);
+        $this->midtransFeeService = $midtransFeeService ?? app(MidtransFeeService::class);
     }
 
     public function startCheckout(
@@ -219,6 +222,14 @@ class CheckoutService
                         ]);
                     }
 
+                    $feeSnapshot = $this->midtransFeeService->buildFeeSnapshot(
+                        invoice: $lockedInvoice,
+                        paymentMethod: $paymentMethod,
+                        bank: $bank,
+                        merchantCode: $recipientMerchantCode,
+                    );
+                    $attemptAmount = $feeSnapshot['total_amount'];
+
                     $attempt = PaymentAttempt::query()->create([
                         'invoice_id' => $lockedInvoice->getKey(),
                         'attempt_number' => $attemptNumber,
@@ -226,7 +237,7 @@ class CheckoutService
                         'merchant_reference' => $merchantReference,
                         'gateway_merchant_code' => $recipientMerchantCode,
                         'gateway_environment' => 'sandbox',
-                        'amount' => $lockedInvoice->amount,
+                        'amount' => $attemptAmount,
                         'currency' => $lockedInvoice->currency,
                         'status' => PaymentAttempt::StatusInitiated,
                         'idempotency_key' => $fullIdempotencyKey,
@@ -239,6 +250,7 @@ class CheckoutService
                             'payment_method' => $paymentMethod,
                             'bank' => $bank,
                             'gateway_provider' => 'midtrans',
+                            'fee_breakdown' => $feeSnapshot,
                         ],
                     ]);
 
@@ -711,17 +723,42 @@ class CheckoutService
 
         // 4. Create charge transaction in Midtrans
         try {
+            $chargeDetails = [
+                'order_id' => $attempt->merchant_reference,
+                'amount' => $amountMinor,
+                'payment_type' => $paymentType,
+                'bank' => $bank ?: 'bca',
+                'customer_name' => $attempt->invoice->customer?->name ?? 'Pelanggan UDEV',
+                'customer_email' => $attempt->invoice->customer?->email ?? 'sandbox@udumbara.my.id',
+            ];
+
+            $feeBreakdown = $attempt->metadata['fee_breakdown'] ?? null;
+            if (is_array($feeBreakdown)) {
+                $chargeDetails['fee_breakdown'] = $feeBreakdown;
+                $feeAmount = (float) ($feeBreakdown['fee_amount'] ?? 0);
+                $subtotalAmount = (float) ($feeBreakdown['subtotal_amount'] ?? $attempt->invoice->amount);
+                if ($feeAmount > 0) {
+                    $chargeDetails['item_details'] = [
+                        [
+                            'id' => 'package',
+                            'price' => (int) round($subtotalAmount),
+                            'quantity' => 1,
+                            'name' => substr((string) ($feeBreakdown['package_name'] ?? 'Paket Langganan'), 0, 50),
+                        ],
+                        [
+                            'id' => 'admin_fee',
+                            'price' => (int) round($feeAmount),
+                            'quantity' => 1,
+                            'name' => 'Biaya Admin',
+                        ],
+                    ];
+                }
+            }
+
             $chargeResult = $this->midtransClient->createSandboxCharge(
                 merchantCode: $attempt->gateway_merchant_code,
                 serverKey: $serverKey,
-                chargeDetails: [
-                    'order_id' => $attempt->merchant_reference,
-                    'amount' => $amountMinor,
-                    'payment_type' => $paymentType,
-                    'bank' => $bank ?: 'bca',
-                    'customer_name' => $attempt->invoice->customer?->name ?? 'Pelanggan UDEV',
-                    'customer_email' => $attempt->invoice->customer?->email ?? 'sandbox@udumbara.my.id',
-                ],
+                chargeDetails: $chargeDetails,
                 environment: 'sandbox',
             );
         } catch (ConnectionException $e) {
@@ -979,10 +1016,14 @@ class CheckoutService
 
         $this->assertInvoiceCanStartCheckout($invoice);
 
+        $metadata = is_array($attempt->metadata) ? $attempt->metadata : [];
+        $feeAmount = (float) ($metadata['fee_breakdown']['fee_amount'] ?? 0.0);
+        $expectedAmount = (float) $invoice->getRawOriginal('amount') + $feeAmount;
+
         $expectedMerchantReference = $invoice->invoice_number.'-A'.$attempt->attempt_number;
         if ($attempt->merchant_reference !== $expectedMerchantReference
             || strtoupper((string) $attempt->currency) !== strtoupper((string) $invoice->currency)
-            || $this->amountMinor($attempt->getRawOriginal('amount')) !== $this->amountMinor($invoice->getRawOriginal('amount'))) {
+            || $this->amountMinor($attempt->getRawOriginal('amount')) !== $this->amountMinor((string) $expectedAmount)) {
             throw ValidationException::withMessages([
                 'payment_attempt' => ['Referensi, nominal, atau currency checkout tidak cocok dengan invoice.'],
             ]);

@@ -49,6 +49,10 @@ class IntegrationInvoiceResource extends JsonResource
                 'provider' => $attempt->provider,
                 'payment_method' => $attempt->metadata['payment_method'] ?? ($attempt->provider === 'midtrans' ? 'qris' : 'dana_wallet'),
                 'bank' => $attempt->metadata['bank'] ?? null,
+                'amount' => $attempt->amount,
+                'subtotal_amount' => (float) ($attempt->metadata['fee_breakdown']['subtotal_amount'] ?? $attempt->amount),
+                'admin_fee' => (float) ($attempt->metadata['fee_breakdown']['fee_amount'] ?? 0.0),
+                'fee_breakdown' => $attempt->metadata['fee_breakdown'] ?? null,
                 'checkout_status' => ($attempt->checkout_url !== null || ! empty($attempt->metadata['qr_content'] ?? null) || ! empty($attempt->metadata['payment_code'] ?? null) || ! empty($attempt->metadata['payment_instruction'] ?? null))
                     ? 'ready'
                     : ($attempt->checkoutOutbox?->status === 'failed' ? 'failed' : 'processing'),

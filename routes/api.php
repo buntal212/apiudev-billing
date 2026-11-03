@@ -198,6 +198,13 @@ Route::prefix('v1/admin')
             Route::get('sandbox-transactions', [MidtransGatewayAdminController::class, 'sandboxTestTransactions'])->name('sandbox-transactions');
             Route::get('audits', [MidtransGatewayAdminController::class, 'indexAudits'])->name('audits');
             Route::get('dashboard-summary', [MidtransGatewayAdminController::class, 'dashboardSummary'])->name('dashboard-summary');
+            Route::get('fees', [MidtransGatewayAdminController::class, 'indexFees'])->name('fees.index');
+            Route::post('fees', [MidtransGatewayAdminController::class, 'storeFee'])->name('fees.store');
+            Route::get('fees/{id}', [MidtransGatewayAdminController::class, 'showFee'])->name('fees.show');
+            Route::put('fees/{id}', [MidtransGatewayAdminController::class, 'updateFee'])->name('fees.update');
+            Route::patch('fees/{id}/status', [MidtransGatewayAdminController::class, 'toggleFeeStatus'])->name('fees.status');
+            Route::delete('fees/{id}', [MidtransGatewayAdminController::class, 'destroyFee'])->name('fees.destroy');
+            Route::post('calculate-fee', [MidtransGatewayAdminController::class, 'calculateFeePreview'])->name('fees.calculate');
         });
         Route::apiResource('application-customers', ApplicationCustomerController::class)
             ->only(['index', 'store', 'show', 'update']);
