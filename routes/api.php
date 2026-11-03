@@ -17,6 +17,7 @@ use App\Http\Controllers\Api\V1\Admin\MidtransGatewayAdminController;
 use App\Http\Controllers\Api\V1\Admin\PartnerController;
 use App\Http\Controllers\Api\V1\Admin\PaymentAttemptController;
 use App\Http\Controllers\Api\V1\Admin\ReferralCodeController;
+use App\Http\Controllers\Api\V1\Admin\ReferralCommissionController;
 use App\Http\Controllers\Api\V1\Admin\SubscriptionController;
 use App\Http\Controllers\Api\V1\Admin\SubscriptionPlanController;
 use App\Http\Controllers\Api\V1\Auth\AuthController;
@@ -79,6 +80,10 @@ Route::prefix('v1/admin')
     ->group(function (): void {
         Route::apiResource('partners', PartnerController::class)
             ->only(['index', 'store', 'show', 'update', 'destroy']);
+        Route::get('referral-commissions/summary', [ReferralCommissionController::class, 'summary']);
+        Route::get('referral-commissions', [ReferralCommissionController::class, 'index']);
+        Route::post('referral-commissions/{referralCommission}/reverse', [ReferralCommissionController::class, 'reverse']);
+        Route::get('referral-warungs', [ReferralCommissionController::class, 'warungs']);
         Route::get('referral-codes/{referralCode}/usages', [ReferralCodeController::class, 'usages']);
         Route::apiResource('referral-codes', ReferralCodeController::class)
             ->only(['index', 'store', 'show', 'update']);

@@ -21,7 +21,8 @@ class PartnerController extends Controller
     {
         $this->authorize('viewAny', Partner::class);
         $filters = $request->validated();
-        $partners = Partner::query()->withCount('referralCodes')
+        $commissionService = app(\App\Services\ReferralCommissionService::class);
+        $partners = Partner::query()->withCount(['referralCodes', 'customerReferrals'])
             ->when($filters['search'] ?? null, function (Builder $query, string $search): void {
                 $query->where(function (Builder $query) use ($search): void {
                     $query->where('name', 'like', "%{$search}%")->orWhere('whatsapp_number', 'like', "%{$search}%")->orWhere('email', 'like', "%{$search}%");
@@ -30,6 +31,15 @@ class PartnerController extends Controller
             ->when(array_key_exists('is_active', $filters), fn (Builder $query): Builder => $query->where('is_active', $request->boolean('is_active')))
             ->orderBy($filters['sort'] ?? 'created_at', $filters['direction'] ?? 'desc')->orderBy('id')
             ->paginate($filters['per_page'] ?? 15)->withQueryString();
+
+        $partners->getCollection()->transform(function (Partner $partner) use ($commissionService): Partner {
+            $balances = $commissionService->getPartnerBalances($partner);
+            $partner->setAttribute('balances', $balances);
+            $partner->setAttribute('referred_warungs_count', $partner->customer_referrals_count ?? 0);
+            $partner->setAttribute('commission_total', (string) $balances['available_balance']);
+
+            return $partner;
+        });
 
         return PartnerResource::collection($partners);
     }
@@ -46,8 +56,11 @@ class PartnerController extends Controller
     public function show(Partner $partner): PartnerResource
     {
         $this->authorize('view', $partner);
-        $partner->load(['referralCodes' => fn ($query) => $query->withCount('customerReferrals')->latest()])->loadCount('referralCodes');
-        $partner->setAttribute('commission_total', (string) $partner->commissionLedgers()->sum('amount'));
+        $partner->load(['referralCodes' => fn ($query) => $query->withCount('customerReferrals')->latest()])->loadCount(['referralCodes', 'customerReferrals']);
+        $balances = app(\App\Services\ReferralCommissionService::class)->getPartnerBalances($partner);
+        $partner->setAttribute('balances', $balances);
+        $partner->setAttribute('referred_warungs_count', $partner->customer_referrals_count ?? 0);
+        $partner->setAttribute('commission_total', (string) $balances['available_balance']);
 
         return new PartnerResource($partner);
     }

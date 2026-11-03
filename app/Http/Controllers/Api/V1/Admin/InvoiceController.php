@@ -114,6 +114,8 @@ class InvoiceController extends Controller
             'paymentAttempts.checkoutOutbox',
             'paymentAttempts.paymentAllocation',
             'paymentAttempts.settlementEvents',
+            'referralCommissionLedgers.partner',
+            'referralCommissionLedgers.referralCode',
         ]));
     }
 

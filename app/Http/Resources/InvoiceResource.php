@@ -99,6 +99,32 @@ class InvoiceResource extends JsonResource
             'payment_attempts' => PaymentAttemptResource::collection(
                 $this->whenLoaded('paymentAttempts')
             ),
+            'referral_commission' => $this->whenLoaded('referralCommissionLedgers', function (): ?array {
+                $commission = $this->referralCommissionLedgers->firstWhere('commission_type', '!=', \App\Models\ReferralCommissionLedger::TypeReversal);
+                if ($commission === null) {
+                    return null;
+                }
+
+                $reversal = $this->referralCommissionLedgers->firstWhere('commission_type', \App\Models\ReferralCommissionLedger::TypeReversal);
+
+                return [
+                    'id' => $commission->id,
+                    'partner_id' => $commission->partner_id,
+                    'partner_name' => $commission->partner?->name,
+                    'referral_code' => $commission->referralCode?->code,
+                    'commission_type' => $commission->commission_type,
+                    'amount' => $commission->amount,
+                    'status' => $commission->status,
+                    'is_reversed' => $commission->status === \App\Models\ReferralCommissionLedger::StatusReversed,
+                    'verified_at' => $commission->verified_at?->toISOString(),
+                    'reversal' => $reversal ? [
+                        'id' => $reversal->id,
+                        'amount' => $reversal->amount,
+                        'notes' => $reversal->notes,
+                        'created_at' => $reversal->created_at?->toISOString(),
+                    ] : null,
+                ];
+            }),
             'created_at' => $this->created_at?->toISOString(),
             'updated_at' => $this->updated_at?->toISOString(),
         ];

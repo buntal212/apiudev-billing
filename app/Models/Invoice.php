@@ -73,6 +73,25 @@ class Invoice extends Model
     }
 
     /**
+     * @return HasMany<ReferralCommissionLedger, $this>
+     */
+    public function referralCommissionLedgers(): HasMany
+    {
+        return $this->hasMany(ReferralCommissionLedger::class);
+    }
+
+    /**
+     * @return HasOne<ReferralCommissionLedger, $this>
+     */
+    public function referralCommissionLedger(): HasOne
+    {
+        return $this->hasOne(ReferralCommissionLedger::class)->whereIn('commission_type', [
+            ReferralCommissionLedger::TypeFirstPayment,
+            ReferralCommissionLedger::TypeRenewal,
+        ]);
+    }
+
+    /**
      * @return array<string, string>
      */
     protected function casts(): array

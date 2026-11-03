@@ -27,6 +27,12 @@ class Partner extends Model
         return $this->hasMany(ReferralCommissionLedger::class);
     }
 
+    /** @return HasMany<CustomerReferral, $this> */
+    public function customerReferrals(): HasMany
+    {
+        return $this->hasMany(CustomerReferral::class);
+    }
+
     /** @return array<string, string> */
     protected function casts(): array
     {

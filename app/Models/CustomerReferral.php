@@ -38,6 +38,12 @@ class CustomerReferral extends Model
         return $this->belongsTo(ReferralCode::class, 'referral_code_id');
     }
 
+    /** @return \Illuminate\Database\Eloquent\Relations\HasMany<ReferralCommissionLedger, $this> */
+    public function commissionLedgers(): \Illuminate\Database\Eloquent\Relations\HasMany
+    {
+        return $this->hasMany(ReferralCommissionLedger::class);
+    }
+
     /** @return array<string, string> */
     protected function casts(): array
     {
