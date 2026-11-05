@@ -74,9 +74,11 @@ class PaymentResultService
 
     private function synchronizeMidtrans(PaymentAttempt $paymentAttempt): PaymentAttempt
     {
+        $environment = $paymentAttempt->gateway_environment ?: 'sandbox';
+
         $credential = \App\Models\MidtransMerchantCredential::query()
             ->where('merchant_code', $paymentAttempt->gateway_merchant_code)
-            ->where('environment', 'sandbox')
+            ->where('environment', $environment)
             ->first();
 
         if ($credential === null) {
@@ -85,13 +87,13 @@ class PaymentResultService
                 $mapping = \App\Models\ApplicationPaymentGateway::query()
                     ->where('application_id', $appId)
                     ->where('provider', 'midtrans')
-                    ->where('environment', 'sandbox')
+                    ->where('environment', $environment)
                     ->where('is_active', true)
                     ->first();
                 if ($mapping !== null) {
                     $credential = \App\Models\MidtransMerchantCredential::query()
                         ->where('merchant_code', $mapping->gateway_merchant_code)
-                        ->where('environment', 'sandbox')
+                        ->where('environment', $environment)
                         ->first();
                 }
             }
@@ -99,7 +101,7 @@ class PaymentResultService
 
         if ($credential === null) {
             $credential = \App\Models\MidtransMerchantCredential::query()
-                ->where('environment', 'sandbox')
+                ->where('environment', $environment)
                 ->where('is_active', true)
                 ->first();
         }
@@ -120,7 +122,7 @@ class PaymentResultService
             $merchantCode,
             $serverKey,
             $orderId,
-            'sandbox',
+            $environment,
         );
 
         if ((($result['status'] ?? '') !== 'success' || ($result['is_not_found'] ?? false))
@@ -131,7 +133,7 @@ class PaymentResultService
                 $merchantCode,
                 $serverKey,
                 (string) $paymentAttempt->gateway_payment_id,
-                'sandbox',
+                $environment,
             );
             if (($txResult['status'] ?? '') === 'success' && ! ($txResult['is_not_found'] ?? false)) {
                 $result = $txResult;

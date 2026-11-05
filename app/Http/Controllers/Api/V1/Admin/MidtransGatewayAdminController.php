@@ -16,6 +16,9 @@ use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Symfony\Component\HttpFoundation\Response;
 
+use App\Services\MidtransEnvironmentService;
+use Illuminate\Validation\Rule;
+
 class MidtransGatewayAdminController extends Controller
 {
     public function __construct(
@@ -23,13 +26,15 @@ class MidtransGatewayAdminController extends Controller
         private MidtransGatewayProvisioningClient $gatewayClient,
         private MidtransAuditService $auditService,
         private ?MidtransFeeService $feeService = null,
+        private ?MidtransEnvironmentService $environmentService = null,
     ) {
         $this->feeService = $feeService ?? app(MidtransFeeService::class);
+        $this->environmentService = $environmentService ?? app(MidtransEnvironmentService::class);
     }
 
     public function indexMerchants(Request $request): JsonResponse
     {
-        // Ensure default merchants exist
+        // Ensure default merchants exist for both environments
         MidtransMerchantCredential::query()->firstOrCreate(
             ['merchant_code' => 'udev-central', 'environment' => 'sandbox'],
             ['merchant_name' => 'UDEV Central Billing', 'is_active' => true]
@@ -38,12 +43,19 @@ class MidtransGatewayAdminController extends Controller
             ['merchant_code' => 'larissama', 'environment' => 'sandbox'],
             ['merchant_name' => 'Larissama', 'is_active' => false]
         );
+        MidtransMerchantCredential::query()->firstOrCreate(
+            ['merchant_code' => 'udev-central', 'environment' => 'production'],
+            ['merchant_name' => 'UDEV Central Billing', 'is_active' => true]
+        );
 
         $search = trim((string) $request->query('search', ''));
         $status = (string) $request->query('status', '');
+        $environment = (string) $request->query('environment', 'sandbox');
 
-        $query = MidtransMerchantCredential::query()
-            ->where('environment', 'sandbox');
+        $query = MidtransMerchantCredential::query();
+        if ($environment !== 'all') {
+            $query->where('environment', in_array($environment, ['sandbox', 'production'], true) ? $environment : 'sandbox');
+        }
 
         if ($search !== '') {
             $query->where(function ($q) use ($search) {
@@ -64,12 +76,15 @@ class MidtransGatewayAdminController extends Controller
 
         $merchants = $query->orderBy('id')->get();
 
-        $mappings = ApplicationPaymentGateway::query()
+        $mappingsQuery = ApplicationPaymentGateway::query()
             ->with('application:id,code,name')
-            ->where('provider', 'midtrans')
-            ->where('environment', 'sandbox')
-            ->get()
-            ->groupBy('gateway_merchant_code');
+            ->where('provider', 'midtrans');
+
+        if ($environment !== 'all') {
+            $mappingsQuery->where('environment', in_array($environment, ['sandbox', 'production'], true) ? $environment : 'sandbox');
+        }
+
+        $mappings = $mappingsQuery->get()->groupBy('gateway_merchant_code');
 
         $data = $merchants->map(function (MidtransMerchantCredential $cred) use ($mappings) {
             $hasServerKey = ! empty($cred->encrypted_server_key);
@@ -108,17 +123,22 @@ class MidtransGatewayAdminController extends Controller
 
     public function storeMerchant(Request $request): JsonResponse
     {
+        $environment = (string) $request->input('environment', 'sandbox');
+        $environment = in_array($environment, ['sandbox', 'production'], true) ? $environment : 'sandbox';
+
         $validated = $request->validate([
             'merchant_code' => [
                 'required',
                 'string',
                 'max:60',
                 'regex:/^[a-z0-9_-]+$/',
-                'unique:midtrans_merchant_credentials,merchant_code',
+                Rule::unique('midtrans_merchant_credentials', 'merchant_code')
+                    ->where('environment', $environment),
             ],
             'merchant_name' => ['required', 'string', 'max:100'],
             'midtrans_merchant_id' => ['nullable', 'string', 'max:100'],
             'client_key' => ['nullable', 'string', 'max:150'],
+            'environment' => ['nullable', 'string', 'in:sandbox,production'],
             'is_active' => ['nullable', 'boolean'],
         ]);
 
@@ -127,7 +147,7 @@ class MidtransGatewayAdminController extends Controller
             'merchant_name' => $validated['merchant_name'],
             'midtrans_merchant_id' => $validated['midtrans_merchant_id'] ?? null,
             'client_key' => $validated['client_key'] ?? null,
-            'environment' => 'sandbox',
+            'environment' => $environment,
             'is_active' => $validated['is_active'] ?? true,
         ]);
 
@@ -135,7 +155,7 @@ class MidtransGatewayAdminController extends Controller
             merchantCode: $merchant->merchant_code,
             action: 'merchant.created',
             status: 'success',
-            metadata: ['merchant_code' => $merchant->merchant_code, 'merchant_name' => $merchant->merchant_name]
+            metadata: ['merchant_code' => $merchant->merchant_code, 'merchant_name' => $merchant->merchant_name, 'environment' => $environment]
         );
 
         return response()->json([
@@ -145,11 +165,12 @@ class MidtransGatewayAdminController extends Controller
         ], Response::HTTP_CREATED);
     }
 
-    public function showMerchant(string $merchantCode): JsonResponse
+    public function showMerchant(Request $request, string $merchantCode): JsonResponse
     {
+        $environment = (string) $request->query('environment', 'sandbox');
         $merchant = MidtransMerchantCredential::query()
             ->where('merchant_code', $merchantCode)
-            ->where('environment', 'sandbox')
+            ->where('environment', $environment)
             ->firstOrFail();
 
         return response()->json(['data' => $merchant]);
@@ -157,9 +178,10 @@ class MidtransGatewayAdminController extends Controller
 
     public function updateMerchant(Request $request, string $merchantCode): JsonResponse
     {
+        $environment = (string) ($request->input('environment') ?: $request->query('environment', 'sandbox'));
         $merchant = MidtransMerchantCredential::query()
             ->where('merchant_code', $merchantCode)
-            ->where('environment', 'sandbox')
+            ->where('environment', $environment)
             ->firstOrFail();
 
         $validated = $request->validate([
@@ -175,7 +197,7 @@ class MidtransGatewayAdminController extends Controller
             merchantCode: $merchant->merchant_code,
             action: 'merchant.updated',
             status: 'success',
-            metadata: $validated
+            metadata: array_merge($validated, ['environment' => $environment])
         );
 
         return response()->json([
@@ -187,9 +209,10 @@ class MidtransGatewayAdminController extends Controller
 
     public function toggleMerchantStatus(Request $request, string $merchantCode): JsonResponse
     {
+        $environment = (string) ($request->input('environment') ?: $request->query('environment', 'sandbox'));
         $merchant = MidtransMerchantCredential::query()
             ->where('merchant_code', $merchantCode)
-            ->where('environment', 'sandbox')
+            ->where('environment', $environment)
             ->firstOrFail();
 
         $validated = $request->validate([
@@ -201,7 +224,8 @@ class MidtransGatewayAdminController extends Controller
         $this->auditService->record(
             merchantCode: $merchant->merchant_code,
             action: $validated['is_active'] ? 'merchant.activated' : 'merchant.deactivated',
-            status: 'success'
+            status: 'success',
+            metadata: ['environment' => $environment]
         );
 
         return response()->json([
@@ -211,16 +235,17 @@ class MidtransGatewayAdminController extends Controller
         ]);
     }
 
-    public function destroyMerchant(string $merchantCode): JsonResponse
+    public function destroyMerchant(Request $request, string $merchantCode): JsonResponse
     {
+        $environment = (string) ($request->input('environment') ?: $request->query('environment', 'sandbox'));
         $merchant = MidtransMerchantCredential::query()
             ->where('merchant_code', $merchantCode)
-            ->where('environment', 'sandbox')
+            ->where('environment', $environment)
             ->firstOrFail();
 
         $mappingCount = ApplicationPaymentGateway::query()
             ->where('provider', 'midtrans')
-            ->where('environment', 'sandbox')
+            ->where('environment', $environment)
             ->where('gateway_merchant_code', $merchantCode)
             ->count();
 
@@ -236,7 +261,8 @@ class MidtransGatewayAdminController extends Controller
         $this->auditService->record(
             merchantCode: $merchantCode,
             action: 'merchant.deleted',
-            status: 'success'
+            status: 'success',
+            metadata: ['environment' => $environment]
         );
 
         return response()->json([
@@ -248,10 +274,12 @@ class MidtransGatewayAdminController extends Controller
     public function showConfiguration(Request $request): JsonResponse
     {
         $merchantCode = (string) $request->query('merchant_code', 'udev-central');
+        $environment = (string) $request->query('environment', 'sandbox');
+        $environment = in_array($environment, ['sandbox', 'production'], true) ? $environment : 'sandbox';
 
         $cred = MidtransMerchantCredential::query()
             ->where('merchant_code', $merchantCode)
-            ->where('environment', 'sandbox')
+            ->where('environment', $environment)
             ->first();
 
         if ($cred === null) {
@@ -270,12 +298,13 @@ class MidtransGatewayAdminController extends Controller
                     $cred->server_key_tag,
                     $cred->merchant_code,
                     'server_key',
-                    $cred->key_version ?? 'v1'
+                    $cred->key_version ?? 'v1',
+                    $cred->environment ?? 'sandbox',
                 );
                 $len = strlen($decrypted);
                 $maskedServerKey = $len <= 8 ? str_repeat('*', $len) : substr($decrypted, 0, 8).str_repeat('*', max(4, $len - 12)).substr($decrypted, -4);
             } catch (\Throwable) {
-                $maskedServerKey = 'SB-Mid-server-********';
+                $maskedServerKey = ($environment === 'production' ? 'Mid-server-********' : 'SB-Mid-server-********');
             }
         }
 
@@ -288,7 +317,8 @@ class MidtransGatewayAdminController extends Controller
                     $cred->signature_key_tag,
                     $cred->merchant_code,
                     'signature_key',
-                    $cred->key_version ?? 'v1'
+                    $cred->key_version ?? 'v1',
+                    $cred->environment ?? 'sandbox',
                 );
                 $len = strlen($decrypted);
                 $maskedSignatureKey = $len <= 8 ? str_repeat('*', $len) : substr($decrypted, 0, 4).str_repeat('*', max(4, $len - 8)).substr($decrypted, -4);
@@ -320,8 +350,12 @@ class MidtransGatewayAdminController extends Controller
 
     public function updateConfiguration(Request $request): JsonResponse
     {
+        $environment = (string) ($request->input('environment') ?: 'sandbox');
+        $environment = in_array($environment, ['sandbox', 'production'], true) ? $environment : 'sandbox';
+
         $validated = $request->validate([
             'merchant_code' => ['required', 'string', 'max:60'],
+            'environment' => ['nullable', 'string', 'in:sandbox,production'],
             'midtrans_merchant_id' => ['nullable', 'string', 'max:100'],
             'client_key' => ['nullable', 'string', 'max:150'],
             'server_key' => ['nullable', 'string', 'max:255'],
@@ -331,7 +365,7 @@ class MidtransGatewayAdminController extends Controller
 
         $merchantCode = $validated['merchant_code'];
         $cred = MidtransMerchantCredential::query()->firstOrCreate(
-            ['merchant_code' => $merchantCode, 'environment' => 'sandbox'],
+            ['merchant_code' => $merchantCode, 'environment' => $environment],
             ['merchant_name' => $merchantCode === 'udev-central' ? 'UDEV Central Billing' : $merchantCode, 'is_active' => true]
         );
 
@@ -351,7 +385,8 @@ class MidtransGatewayAdminController extends Controller
                 trim($validated['server_key']),
                 $merchantCode,
                 'server_key',
-                'v1'
+                'v1',
+                $environment
             );
             $cred->encrypted_server_key = $encrypted['ciphertext'];
             $cred->server_key_nonce = $encrypted['nonce'];
@@ -365,7 +400,8 @@ class MidtransGatewayAdminController extends Controller
                 trim($validated['signature_secret_key']),
                 $merchantCode,
                 'signature_key',
-                'v1'
+                'v1',
+                $environment
             );
             $cred->encrypted_signature_key = $encryptedSig['ciphertext'];
             $cred->signature_key_nonce = $encryptedSig['nonce'];
@@ -380,6 +416,7 @@ class MidtransGatewayAdminController extends Controller
             status: 'success',
             metadata: [
                 'merchant_code' => $merchantCode,
+                'environment' => $environment,
                 'has_server_key' => ! empty($cred->encrypted_server_key),
                 'has_client_key' => ! empty($cred->client_key),
                 'has_signature_key' => ! empty($cred->encrypted_signature_key),
@@ -391,6 +428,7 @@ class MidtransGatewayAdminController extends Controller
             'message' => 'Konfigurasi API Midtrans berhasil disimpan terenkripsi.',
             'data' => [
                 'merchant_code' => $cred->merchant_code,
+                'environment' => $cred->environment,
                 'midtrans_merchant_id' => $cred->midtrans_merchant_id,
                 'client_key' => $cred->client_key,
                 'has_server_key' => ! empty($cred->encrypted_server_key),
@@ -403,9 +441,12 @@ class MidtransGatewayAdminController extends Controller
     public function deleteConfiguration(Request $request): JsonResponse
     {
         $merchantCode = (string) $request->query('merchant_code', '');
+        $environment = (string) $request->query('environment', 'sandbox');
+        $environment = in_array($environment, ['sandbox', 'production'], true) ? $environment : 'sandbox';
+
         $cred = MidtransMerchantCredential::query()
             ->where('merchant_code', $merchantCode)
-            ->where('environment', 'sandbox')
+            ->where('environment', $environment)
             ->firstOrFail();
 
         $cred->update([
@@ -423,7 +464,8 @@ class MidtransGatewayAdminController extends Controller
         $this->auditService->record(
             merchantCode: $merchantCode,
             action: 'configuration.deleted',
-            status: 'success'
+            status: 'success',
+            metadata: ['environment' => $environment]
         );
 
         return response()->json([
@@ -434,20 +476,24 @@ class MidtransGatewayAdminController extends Controller
 
     public function testConnection(Request $request): JsonResponse
     {
+        $environment = (string) ($request->input('environment') ?: $request->query('environment', 'sandbox'));
+        $environment = in_array($environment, ['sandbox', 'production'], true) ? $environment : 'sandbox';
+
         $validated = $request->validate([
             'merchant_code' => ['required', 'string'],
+            'environment' => ['nullable', 'string', 'in:sandbox,production'],
         ]);
 
         $merchantCode = $validated['merchant_code'];
         $cred = MidtransMerchantCredential::query()
             ->where('merchant_code', $merchantCode)
-            ->where('environment', 'sandbox')
+            ->where('environment', $environment)
             ->firstOrFail();
 
         if (empty($cred->encrypted_server_key)) {
             return response()->json([
                 'status' => 'failed',
-                'message' => 'Server Key Midtrans belum dikonfigurasi untuk merchant ini.',
+                'message' => 'Server Key Midtrans belum dikonfigurasi untuk merchant ini pada environment '.ucfirst($environment).'.',
             ], Response::HTTP_UNPROCESSABLE_ENTITY);
         }
 
@@ -458,7 +504,8 @@ class MidtransGatewayAdminController extends Controller
                 $cred->server_key_tag,
                 $cred->merchant_code,
                 'server_key',
-                $cred->key_version ?? 'v1'
+                $cred->key_version ?? 'v1',
+                $environment
             );
         } catch (\Throwable $e) {
             return response()->json([
@@ -467,7 +514,7 @@ class MidtransGatewayAdminController extends Controller
             ], Response::HTTP_INTERNAL_SERVER_ERROR);
         }
 
-        $result = $this->gatewayClient->testConnection($merchantCode, $serverKey, 'sandbox');
+        $result = $this->gatewayClient->testConnection($merchantCode, $serverKey, $environment);
 
         $cred->update([
             'last_tested_at' => now(),
@@ -482,7 +529,11 @@ class MidtransGatewayAdminController extends Controller
             status: $result['status'],
             responseCode: (string) $result['http_status'],
             latencyMs: $result['latency_ms'] ?? null,
-            metadata: ['is_connected' => $result['is_connected'], 'http_status' => $result['http_status']]
+            metadata: [
+                'environment' => $environment,
+                'is_connected' => $result['is_connected'],
+                'http_status' => $result['http_status'],
+            ]
         );
 
         return response()->json($result);
@@ -636,25 +687,132 @@ class MidtransGatewayAdminController extends Controller
         return response()->json($audits);
     }
 
+    public function getEnvironment(Request $request): JsonResponse
+    {
+        $setting = $this->environmentService->getSetting();
+        $readiness = $this->environmentService->evaluateProductionReadiness();
+
+        $readinessData = array_merge($readiness, [
+            'is_ready_for_production' => $readiness['is_ready'],
+        ]);
+
+        return response()->json([
+            'status' => 'success',
+            'data' => [
+                'active_environment' => $setting->active_environment,
+                'is_production' => $setting->isProduction(),
+                'is_sandbox' => $setting->isSandbox(),
+                'is_production_ready' => $readiness['is_ready'],
+                'readiness' => $readinessData,
+                'production_readiness' => $readinessData,
+                'production_settings' => [
+                    'activated_at' => $setting->production_activated_at?->format('Y-m-d H:i:s'),
+                    'activated_by_name' => $setting->productionActivatedBy?->name,
+                    'notes' => $setting->activation_notes,
+                ],
+                'production_activated_at' => $setting->production_activated_at?->format('Y-m-d H:i:s'),
+                'production_activated_by' => $setting->productionActivatedBy?->name,
+                'last_switched_at' => $setting->last_switched_at?->format('Y-m-d H:i:s'),
+                'last_switched_by' => $setting->lastSwitchedBy?->name,
+                'activation_notes' => $setting->activation_notes,
+            ],
+        ]);
+    }
+
+    public function activateProduction(Request $request): JsonResponse
+    {
+        $phrase = (string) ($request->input('confirmation_phrase') ?? $request->input('confirmation', ''));
+        if ($phrase === '') {
+            return response()->json([
+                'status' => 'failed',
+                'message' => 'The confirmation phrase field is required.',
+                'errors' => [
+                    'confirmation' => ['The confirmation field is required.'],
+                    'confirmation_phrase' => ['The confirmation phrase field is required.'],
+                ],
+            ], Response::HTTP_UNPROCESSABLE_ENTITY);
+        }
+
+        $validated = $request->validate([
+            'notes' => ['nullable', 'string', 'max:500'],
+        ]);
+
+        try {
+            $setting = $this->environmentService->activateProduction(
+                adminUser: $request->user(),
+                confirmationPhrase: $phrase,
+                notes: $validated['notes'] ?? null,
+            );
+        } catch (\Illuminate\Validation\ValidationException $e) {
+            $readiness = $this->environmentService->evaluateProductionReadiness();
+            return response()->json([
+                'status' => 'failed',
+                'message' => $e->getMessage(),
+                'errors' => $e->errors(),
+                'readiness' => array_merge($readiness, [
+                    'is_ready_for_production' => $readiness['is_ready'],
+                ]),
+            ], Response::HTTP_UNPROCESSABLE_ENTITY);
+        }
+
+        return response()->json([
+            'status' => 'success',
+            'message' => 'Environment Midtrans Production berhasil diaktifkan.',
+            'data' => [
+                'active_environment' => $setting->active_environment,
+                'activated_by_id' => $setting->production_activated_by,
+                'production_activated_at' => $setting->production_activated_at?->format('Y-m-d H:i:s'),
+                'production_activated_by' => $setting->productionActivatedBy?->name,
+                'last_switched_at' => $setting->last_switched_at?->format('Y-m-d H:i:s'),
+            ],
+        ]);
+    }
+
+    public function switchSandbox(Request $request): JsonResponse
+    {
+        $validated = $request->validate([
+            'notes' => ['nullable', 'string', 'max:500'],
+        ]);
+
+        $setting = $this->environmentService->switchToSandbox(
+            adminUser: $request->user(),
+            notes: $validated['notes'] ?? null,
+        );
+
+        return response()->json([
+            'status' => 'success',
+            'message' => 'Environment Midtrans berhasil dikembalikan ke Sandbox.',
+            'data' => [
+                'active_environment' => $setting->active_environment,
+                'last_switched_at' => $setting->last_switched_at?->format('Y-m-d H:i:s'),
+                'last_switched_by' => $setting->lastSwitchedBy?->name,
+            ],
+        ]);
+    }
+
     public function dashboardSummary(Request $request): JsonResponse
     {
-        $totalMerchants = MidtransMerchantCredential::query()->where('environment', 'sandbox')->count();
-        $activeMerchants = MidtransMerchantCredential::query()->where('environment', 'sandbox')->where('is_active', true)->count();
-        $configuredMerchants = MidtransMerchantCredential::query()->where('environment', 'sandbox')->whereNotNull('encrypted_server_key')->count();
+        $env = (string) $request->query('environment', '');
+        $setting = $this->environmentService->getSetting();
+        $targetEnv = in_array($env, ['sandbox', 'production'], true) ? $env : 'sandbox';
+
+        $totalMerchants = MidtransMerchantCredential::query()->where('environment', $targetEnv)->count();
+        $activeMerchants = MidtransMerchantCredential::query()->where('environment', $targetEnv)->where('is_active', true)->count();
+        $configuredMerchants = MidtransMerchantCredential::query()->where('environment', $targetEnv)->whereNotNull('encrypted_server_key')->count();
 
         $totalMappings = ApplicationPaymentGateway::query()
             ->where('provider', 'midtrans')
-            ->where('environment', 'sandbox')
+            ->where('environment', $targetEnv)
             ->count();
         $activeMappings = ApplicationPaymentGateway::query()
             ->where('provider', 'midtrans')
-            ->where('environment', 'sandbox')
+            ->where('environment', $targetEnv)
             ->where('is_active', true)
             ->count();
 
         $billingAttemptsQuery = PaymentAttempt::query()
             ->whereRaw('LOWER(provider) = ?', ['midtrans'])
-            ->where('gateway_environment', 'sandbox');
+            ->where('gateway_environment', $targetEnv);
 
         $totalBillingTransactions = $billingAttemptsQuery->count();
         $successfulBillingTransactions = (clone $billingAttemptsQuery)->whereIn('status', ['succeeded', 'paid'])->count();
@@ -664,6 +822,7 @@ class MidtransGatewayAdminController extends Controller
             ->count();
 
         $latestTest = MidtransMerchantCredential::query()
+            ->where('environment', $targetEnv)
             ->whereNotNull('last_tested_at')
             ->orderByDesc('last_tested_at')
             ->first();
@@ -673,8 +832,15 @@ class MidtransGatewayAdminController extends Controller
             $apiStatus = $latestTest->last_test_status === 'success' ? 'online' : 'error';
         }
 
+        $readiness = $this->environmentService->evaluateProductionReadiness();
+
         return response()->json([
             'data' => [
+                'active_environment' => $setting->active_environment,
+                'environment' => $targetEnv,
+                'is_production' => $setting->isProduction(),
+                'is_sandbox' => $setting->isSandbox(),
+                'is_production_ready' => $readiness['is_ready'],
                 'total_merchants' => $totalMerchants,
                 'active_merchants' => $activeMerchants,
                 'configured_merchants' => $configuredMerchants,

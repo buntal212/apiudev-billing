@@ -51,19 +51,29 @@ class MidtransWebhookController extends Controller
             ->first();
 
         $merchantCode = $attempt?->gateway_merchant_code;
+        $environment = $attempt?->gateway_environment
+            ?: app(\App\Services\MidtransEnvironmentService::class)->getActiveEnvironment();
 
         $credential = null;
         if ($merchantCode !== null && $merchantCode !== '') {
             $credential = MidtransMerchantCredential::query()
                 ->where('merchant_code', $merchantCode)
-                ->where('environment', 'sandbox')
+                ->where('environment', $environment)
                 ->first();
         }
 
         if ($credential === null) {
             $credential = MidtransMerchantCredential::query()
-                ->where('environment', 'sandbox')
+                ->where('environment', $environment)
                 ->where('is_active', true)
+                ->first();
+        }
+
+        // Fallback: if not found in target environment, check sandbox
+        if ($credential === null && $environment !== 'sandbox') {
+            $credential = MidtransMerchantCredential::query()
+                ->where('merchant_code', $merchantCode)
+                ->where('environment', 'sandbox')
                 ->first();
         }
 

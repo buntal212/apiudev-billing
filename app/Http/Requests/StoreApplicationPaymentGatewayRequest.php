@@ -32,8 +32,10 @@ class StoreApplicationPaymentGatewayRequest extends ApiFormRequest
             'is_active' => ['required', 'boolean'],
         ];
 
-        if (in_array($this->input('provider'), ['doku', 'midtrans'], true)) {
+        if ($this->input('provider') === 'doku') {
             $rules['environment'] = ['required', 'in:sandbox'];
+        } elseif ($this->input('provider') === 'midtrans') {
+            $rules['environment'] = ['required', 'in:sandbox,production'];
         }
 
         return $rules;

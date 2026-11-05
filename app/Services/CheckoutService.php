@@ -195,30 +195,33 @@ class CheckoutService
                 $merchantReference = $lockedInvoice->invoice_number.'-A'.$attemptNumber;
 
                 if ($resolvedProvider === 'midtrans') {
+                    $activeEnvironment = app(\App\Services\MidtransEnvironmentService::class)->getActiveEnvironment();
                     $appId = $lockedInvoice->plan?->application_id ?? $lockedInvoice->customer?->application_id;
                     $mapping = ApplicationPaymentGateway::query()
                         ->where('application_id', $appId)
                         ->where('provider', 'midtrans')
-                        ->where('environment', 'sandbox')
+                        ->where('environment', $activeEnvironment)
                         ->where('is_active', true)
                         ->first();
 
                     if ($mapping === null) {
+                        $envLabel = ucfirst($activeEnvironment);
                         throw ValidationException::withMessages([
-                            'invoice' => ['Aplikasi invoice belum memiliki mapping merchant Midtrans Sandbox yang aktif.'],
+                            'invoice' => ["Aplikasi invoice belum memiliki mapping merchant Midtrans {$envLabel} yang aktif."],
                         ]);
                     }
 
                     $recipientMerchantCode = $mapping->gateway_merchant_code;
                     $credential = \App\Models\MidtransMerchantCredential::query()
                         ->where('merchant_code', $recipientMerchantCode)
-                        ->where('environment', 'sandbox')
+                        ->where('environment', $activeEnvironment)
                         ->where('is_active', true)
                         ->first();
 
                     if ($credential === null || empty($credential->encrypted_server_key)) {
+                        $envLabel = ucfirst($activeEnvironment);
                         throw ValidationException::withMessages([
-                            'invoice' => ['Merchant Midtrans penerima belum dikonfigurasi atau tidak aktif.'],
+                            'invoice' => ["Merchant Midtrans {$envLabel} penerima belum dikonfigurasi atau tidak aktif."],
                         ]);
                     }
 
@@ -236,7 +239,7 @@ class CheckoutService
                         'provider' => 'midtrans',
                         'merchant_reference' => $merchantReference,
                         'gateway_merchant_code' => $recipientMerchantCode,
-                        'gateway_environment' => 'sandbox',
+                        'gateway_environment' => $activeEnvironment,
                         'amount' => $attemptAmount,
                         'currency' => $lockedInvoice->currency,
                         'status' => PaymentAttempt::StatusInitiated,
@@ -250,6 +253,16 @@ class CheckoutService
                             'payment_method' => $paymentMethod,
                             'bank' => $bank,
                             'gateway_provider' => 'midtrans',
+                            'gateway_environment' => $activeEnvironment,
+                            'gateway_merchant_code' => $recipientMerchantCode,
+                            'gross_amount' => $attemptAmount,
+                            'environment_snapshot' => [
+                                'environment' => $activeEnvironment,
+                                'merchant_code' => $recipientMerchantCode,
+                                'amount' => $attemptAmount,
+                                'nominal' => $attemptAmount,
+                                'captured_at' => now()->toIso8601String(),
+                            ],
                             'fee_breakdown' => $feeSnapshot,
                         ],
                     ]);
@@ -571,15 +584,16 @@ class CheckoutService
     private function dispatchMidtrans(CheckoutOutboxMessage $claimed): void
     {
         $attempt = $claimed->paymentAttempt;
+        $attemptEnv = $attempt->gateway_environment ?: 'sandbox';
 
         // 1. Resolve merchant credentials
         $credential = \App\Models\MidtransMerchantCredential::query()
             ->where('merchant_code', $attempt->gateway_merchant_code)
-            ->where('environment', 'sandbox')
+            ->where('environment', $attemptEnv)
             ->first();
 
         if ($credential === null || empty($credential->encrypted_server_key)) {
-            $this->logMidtransDispatchError('merchant_not_configured', 'Kredensial merchant Midtrans Sandbox belum dikonfigurasi.', $attempt, $claimed);
+            $this->logMidtransDispatchError('merchant_not_configured', 'Kredensial merchant Midtrans '.ucfirst($attemptEnv).' belum dikonfigurasi.', $attempt, $claimed);
             $this->markDispatchFailure($claimed, false, 'merchant_not_configured');
 
             return;
@@ -632,7 +646,7 @@ class CheckoutService
                 merchantCode: (string) $attempt->gateway_merchant_code,
                 serverKey: $serverKey,
                 orderId: (string) $attempt->merchant_reference,
-                environment: 'sandbox',
+                environment: $attemptEnv,
             );
 
             if (($existingStatus['status'] ?? '') === 'success' && ! empty($existingStatus['data']['transaction_id'])) {
@@ -759,7 +773,7 @@ class CheckoutService
                 merchantCode: $attempt->gateway_merchant_code,
                 serverKey: $serverKey,
                 chargeDetails: $chargeDetails,
-                environment: 'sandbox',
+                environment: $attemptEnv,
             );
         } catch (ConnectionException $e) {
             // Status at gateway is uncertain: DO NOT automatically retry!
@@ -840,7 +854,8 @@ class CheckoutService
                 $qrUrl = $checkoutUrl;
             }
             if ($qrUrl === null && ! empty($transactionId)) {
-                $qrUrl = "https://api.sandbox.midtrans.com/v2/qris/{$transactionId}/qr-code";
+                $isProd = ($claimed->paymentAttempt->gateway_environment === 'production');
+                $qrUrl = "https://api.".($isProd ? '' : 'sandbox.')."midtrans.com/v2/qris/{$transactionId}/qr-code";
             }
             if ($checkoutUrl === null && $qrUrl !== null) {
                 $checkoutUrl = $qrUrl;
@@ -902,7 +917,7 @@ class CheckoutService
                 'expiry_time' => $checkoutExpiresAt->toIso8601String(),
                 'expires_at' => $checkoutExpiresAt->toIso8601String(),
                 'transaction_id' => $transactionId,
-                'message' => 'Pindai kode QRIS Midtrans Sandbox menggunakan aplikasi e-wallet atau mobile banking.',
+                'message' => 'Pindai kode QRIS Midtrans '.($claimed->paymentAttempt->gateway_environment === 'production' ? 'Production' : 'Sandbox').' menggunakan aplikasi e-wallet atau mobile banking.',
             ];
         } elseif (in_array($paymentType, ['bank_transfer', 'echannel'], true)) {
             $instruction = [
@@ -1004,13 +1019,13 @@ class CheckoutService
 
         $provider = strtolower((string) $attempt->provider);
         if (! in_array($provider, ['dana', 'midtrans'], true)
-            || strtolower((string) $attempt->gateway_environment) !== 'sandbox'
+            || ! in_array(strtolower((string) $attempt->gateway_environment), ['sandbox', 'production'], true)
             || ! is_string($attempt->gateway_merchant_code)
             || $attempt->gateway_merchant_code === ''
             || ! is_string($attempt->merchant_reference)
             || $attempt->merchant_reference === '') {
             throw ValidationException::withMessages([
-                'payment_attempt' => ['Identitas checkout Sandbox tidak valid.'],
+                'payment_attempt' => ['Identitas checkout gateway tidak valid.'],
             ]);
         }
 
@@ -1040,7 +1055,7 @@ class CheckoutService
             $mapping = ApplicationPaymentGateway::query()
                 ->where('application_id', $invoice->plan->application_id)
                 ->where('provider', 'midtrans')
-                ->where('environment', 'sandbox')
+                ->where('environment', $attempt->gateway_environment)
                 ->where('gateway_merchant_code', $attempt->gateway_merchant_code)
                 ->where('is_active', true)
                 ->first();
@@ -1175,9 +1190,10 @@ class CheckoutService
             return;
         }
 
+        $attemptEnv = $attempt->gateway_environment ?: 'sandbox';
         $credential = \App\Models\MidtransMerchantCredential::query()
             ->where('merchant_code', $attempt->gateway_merchant_code)
-            ->where('environment', 'sandbox')
+            ->where('environment', $attemptEnv)
             ->first();
 
         if ($credential === null || empty($credential->encrypted_server_key)) {
@@ -1193,7 +1209,7 @@ class CheckoutService
             merchantCode: (string) $attempt->gateway_merchant_code,
             serverKey: $serverKey,
             orderId: (string) $attempt->merchant_reference,
-            environment: 'sandbox',
+            environment: $attemptEnv,
         );
 
         if (($statusResult['status'] ?? '') === 'success' && ! empty($statusResult['data']['transaction_id'])) {
@@ -1255,7 +1271,8 @@ class CheckoutService
                 return;
             }
 
-            $qrUrl = $data['qr_url'] ?? "https://api.sandbox.midtrans.com/v2/qris/{$txId}/qr-code";
+            $isProdAttempt = ($attempt->gateway_environment === 'production');
+            $qrUrl = $data['qr_url'] ?? "https://api.".($isProdAttempt ? '' : 'sandbox.')."midtrans.com/v2/qris/{$txId}/qr-code";
             $qrString = $data['qr_string'] ?? null;
             $checkoutUrl = $data['checkout_url'] ?? $qrUrl;
             $rawExpiry = $data['expiry_time'] ?? $data['expires_at'] ?? ($data['raw_response']['expiry_time'] ?? null);
@@ -1278,7 +1295,7 @@ class CheckoutService
                     'checkout_url' => $checkoutUrl,
                     'expiry_time' => $parsedExpiry?->toIso8601String() ?? $attempt->checkout_expires_at?->toIso8601String(),
                     'expires_at' => $parsedExpiry?->toIso8601String() ?? $attempt->checkout_expires_at?->toIso8601String(),
-                    'message' => 'Pindai kode QRIS Midtrans Sandbox menggunakan aplikasi e-wallet atau mobile banking.',
+                    'message' => 'Pindai kode QRIS Midtrans '.($isProdAttempt ? 'Production' : 'Sandbox').' menggunakan aplikasi e-wallet atau mobile banking.',
                 ];
             }
 
@@ -1296,7 +1313,7 @@ class CheckoutService
             $attempt->update([
                 'status' => PaymentAttempt::StatusFailed,
                 'failure_code' => 'midtrans_order_not_found',
-                'failure_message' => 'Transaksi tidak ditemukan di Midtrans Sandbox.',
+                'failure_message' => 'Transaksi tidak ditemukan di Midtrans '.($attempt->gateway_environment === 'production' ? 'Production' : 'Sandbox').'.',
                 'completed_at' => now(),
             ]);
         }
@@ -1304,9 +1321,10 @@ class CheckoutService
 
     private function verifyAndSyncMidtransStatusBeforeRetry(PaymentAttempt $attempt): void
     {
+        $attemptEnv = $attempt->gateway_environment ?: 'sandbox';
         $credential = MidtransMerchantCredential::query()
             ->where('merchant_code', $attempt->gateway_merchant_code)
-            ->where('environment', 'sandbox')
+            ->where('environment', $attemptEnv)
             ->first();
 
         if ($credential === null || empty($credential->encrypted_server_key)) {
@@ -1322,7 +1340,7 @@ class CheckoutService
             merchantCode: (string) $attempt->gateway_merchant_code,
             serverKey: $serverKey,
             orderId: (string) $attempt->merchant_reference,
-            environment: 'sandbox',
+            environment: $attemptEnv,
         );
 
         if (($statusResult['status'] ?? '') === 'success' && ! empty($statusResult['data']['transaction_id'])) {

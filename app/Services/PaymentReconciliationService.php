@@ -74,7 +74,7 @@ class PaymentReconciliationService
         $now = now()->toImmutable();
         $baseQuery = fn (): Builder => PaymentAttempt::query()
             ->whereIn(DB::raw('LOWER(provider)'), ['dana', 'midtrans'])
-            ->where('gateway_environment', 'sandbox')
+            ->whereIn('gateway_environment', ['sandbox', 'production'])
             ->where(function (Builder $query): void {
                 $query->whereNotNull('gateway_payment_id')
                     ->orWhereNotNull('merchant_reference');
@@ -449,9 +449,10 @@ class PaymentReconciliationService
 
     private function reconcileMidtrans(PaymentAttempt $attempt, PaymentReconciliationRun $run): ReconciliationResult
     {
+        $environment = $attempt->gateway_environment ?: 'sandbox';
         $credential = \App\Models\MidtransMerchantCredential::query()
             ->where('merchant_code', $attempt->gateway_merchant_code)
-            ->where('environment', 'sandbox')
+            ->where('environment', $environment)
             ->first();
 
         if ($credential === null || empty($credential->encrypted_server_key)) {
@@ -466,7 +467,7 @@ class PaymentReconciliationService
             (string) $attempt->gateway_merchant_code,
             $serverKey,
             (string) $attempt->merchant_reference,
-            'sandbox',
+            $environment,
         );
 
         if (($statusResult['status'] ?? '') !== 'success') {
@@ -618,7 +619,7 @@ class PaymentReconciliationService
             $txId = $raw['transaction_id'] ?? $attempt->gateway_payment_id;
 
             if ($paymentType === 'qris' && ! empty($txId)) {
-                $recoveredQrUrl = "https://api.sandbox.midtrans.com/v2/qris/{$txId}/qr-code";
+                $recoveredQrUrl = "https://api.".($attempt->gateway_environment === 'production' ? '' : 'sandbox.')."midtrans.com/v2/qris/{$txId}/qr-code";
                 $updated = false;
                 if (empty($metadata['qr_url'])) {
                     $metadata['qr_url'] = $recoveredQrUrl;
@@ -666,7 +667,7 @@ class PaymentReconciliationService
             || (is_string($attempt->merchant_reference) && $attempt->merchant_reference !== '');
 
         return in_array(strtolower((string) $attempt->provider), ['dana', 'midtrans'], true)
-            && $attempt->gateway_environment === 'sandbox'
+            && in_array($attempt->gateway_environment, ['sandbox', 'production'], true)
             && $hasIdentifier
             && in_array($attempt->status, [PaymentAttempt::StatusInitiated, PaymentAttempt::StatusPending], true);
     }

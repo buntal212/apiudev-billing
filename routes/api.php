@@ -188,6 +188,9 @@ Route::prefix('v1/admin')
             Route::get('audits', [DokuGatewayAdminController::class, 'indexAudits'])->name('audits');
         });
         Route::prefix('midtrans-gateway')->name('midtrans-gateway.')->group(function (): void {
+            Route::get('environment', [MidtransGatewayAdminController::class, 'getEnvironment'])->name('environment');
+            Route::post('environment/activate-production', [MidtransGatewayAdminController::class, 'activateProduction'])->name('environment.activate-production');
+            Route::post('environment/switch-sandbox', [MidtransGatewayAdminController::class, 'switchSandbox'])->name('environment.switch-sandbox');
             Route::get('merchants', [MidtransGatewayAdminController::class, 'indexMerchants'])->name('merchants');
             Route::post('merchants', [MidtransGatewayAdminController::class, 'storeMerchant'])->name('merchants.store');
             Route::get('merchants/{merchantCode}', [MidtransGatewayAdminController::class, 'showMerchant'])->name('merchants.show');

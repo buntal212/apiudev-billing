@@ -213,7 +213,7 @@ class InvoiceSettlementService
                 || $attempt->invoice_id !== $lockedInvoice->getKey()
                 || $attempt->status !== PaymentAttempt::StatusSucceeded
                 || ! in_array(strtolower((string) $attempt->provider), ['dana', 'midtrans'], true)
-                || strtolower((string) $attempt->gateway_environment) !== 'sandbox'
+                || ! in_array(strtolower((string) $attempt->gateway_environment), ['sandbox', 'production'], true)
                 || $attempt->gateway_payment_id === null
                 || $attempt->merchant_reference === null
                 || $this->amountMinor($allocation->getRawOriginal('amount')) !== $this->amountMinor($lockedInvoice->getRawOriginal('amount'))
@@ -277,8 +277,12 @@ class InvoiceSettlementService
     ): void {
         $this->assertVerificationMatchesAttempt($attempt, $invoice, $verification);
 
-        if (in_array($verification->provider, ['dana', 'midtrans'], true) && $verification->environment !== 'sandbox') {
-            $this->reject('gateway_environment_not_allowed', 'Settlement '.strtoupper($verification->provider).' hanya diizinkan pada Sandbox.');
+        if ($verification->provider === 'dana' && $verification->environment !== 'sandbox') {
+            $this->reject('gateway_environment_not_allowed', 'Settlement DANA hanya diizinkan pada Sandbox.');
+        }
+
+        if ($verification->provider === 'midtrans' && ! in_array($verification->environment, ['sandbox', 'production'], true)) {
+            $this->reject('gateway_environment_not_allowed', 'Settlement MIDTRANS hanya diizinkan pada Sandbox atau Production.');
         }
 
         $customer = $invoice->customer;

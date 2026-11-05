@@ -25,9 +25,8 @@ class MidtransGatewayProvisioningClient
      */
     public function testConnection(string $merchantCode, string $serverKey, string $environment = 'sandbox'): array
     {
-        if ($environment !== 'sandbox') {
-            throw new RuntimeException('Operasi uji koneksi Midtrans hanya diizinkan untuk lingkungan Sandbox.');
-        }
+        $environment = strtolower(trim($environment)) === 'production' ? 'production' : 'sandbox';
+        $envLabel = ucfirst($environment);
 
         $gatewayUrl = rtrim((string) config('services.midtrans_gateway.gateway_service_url', 'http://127.0.0.1:8003'), '/');
         $serviceToken = (string) config('services.midtrans_gateway.service_token');
@@ -40,7 +39,7 @@ class MidtransGatewayProvisioningClient
                     ->connectTimeout((int) config('services.midtrans_gateway.connect_timeout', 3))
                     ->withToken($serviceToken)
                     ->acceptJson()
-                    ->post("{$gatewayUrl}/api/v1/internal/merchants/{$merchantCode}/test-connection");
+                    ->post("{$gatewayUrl}/api/v1/internal/merchants/{$merchantCode}/test-connection?environment={$environment}");
 
                 if ($response->successful()) {
                     return $response->json();
@@ -50,8 +49,10 @@ class MidtransGatewayProvisioningClient
             }
         }
 
-        // 2. Direct probe against Midtrans Sandbox Core API
-        $midtransBaseUrl = rtrim((string) config('services.midtrans_gateway.sandbox_base_url', 'https://api.sandbox.midtrans.com/v2'), '/');
+        // 2. Direct probe against Midtrans Core API (read-only probe; does not create a transaction)
+        $midtransBaseUrl = $environment === 'production'
+            ? rtrim((string) config('services.midtrans_gateway.production_base_url', 'https://api.midtrans.com/v2'), '/')
+            : rtrim((string) config('services.midtrans_gateway.sandbox_base_url', 'https://api.sandbox.midtrans.com/v2'), '/');
         $testOrderId = 'probe-'.Str::random(8);
 
         try {
@@ -72,9 +73,10 @@ class MidtransGatewayProvisioningClient
                 'is_connected' => $isAuthValid,
                 'http_status' => $statusCode,
                 'latency_ms' => $latencyMs,
+                'environment' => $environment,
                 'message' => $isAuthValid
-                    ? 'Koneksi ke Midtrans Core API Sandbox berhasil. Kredensial valid.'
-                    : ($response->json()['status_message'] ?? 'Otentikasi ke Midtrans Sandbox gagal. Periksa Server Key Anda.'),
+                    ? "Koneksi ke Midtrans Core API {$envLabel} berhasil. Kredensial valid."
+                    : ($response->json()['status_message'] ?? "Otentikasi ke Midtrans {$envLabel} gagal. Periksa Server Key Anda."),
                 'tested_at' => now()->format('Y-m-d H:i:s'),
             ];
         } catch (ConnectionException $e) {
@@ -85,7 +87,8 @@ class MidtransGatewayProvisioningClient
                 'is_connected' => false,
                 'http_status' => 504,
                 'latency_ms' => $latencyMs,
-                'message' => 'Gagal menghubungi server Midtrans Sandbox: '.$e->getMessage(),
+                'environment' => $environment,
+                'message' => "Gagal menghubungi server Midtrans {$envLabel}: ".$e->getMessage(),
                 'tested_at' => now()->format('Y-m-d H:i:s'),
             ];
         }
@@ -119,7 +122,9 @@ class MidtransGatewayProvisioningClient
         }
 
         // Direct Core API call
-        $midtransBaseUrl = rtrim((string) config('services.midtrans_gateway.sandbox_base_url', 'https://api.sandbox.midtrans.com/v2'), '/');
+        $midtransBaseUrl = $environment === 'production'
+            ? rtrim((string) config('services.midtrans_gateway.production_base_url', 'https://api.midtrans.com/v2'), '/')
+            : rtrim((string) config('services.midtrans_gateway.sandbox_base_url', 'https://api.sandbox.midtrans.com/v2'), '/');
         $orderId = $chargeDetails['order_id'] ?? ('MIDTRANS-TEST-'.now()->format('YmdHis').'-'.Str::random(4));
         $amount = (int) ($chargeDetails['amount'] ?? 10000);
         $paymentType = $chargeDetails['payment_type'] ?? 'qris';
@@ -281,7 +286,9 @@ class MidtransGatewayProvisioningClient
             }
         }
 
-        $midtransBaseUrl = rtrim((string) config('services.midtrans_gateway.sandbox_base_url', 'https://api.sandbox.midtrans.com/v2'), '/');
+        $midtransBaseUrl = $environment === 'production'
+            ? rtrim((string) config('services.midtrans_gateway.production_base_url', 'https://api.midtrans.com/v2'), '/')
+            : rtrim((string) config('services.midtrans_gateway.sandbox_base_url', 'https://api.sandbox.midtrans.com/v2'), '/');
 
         try {
             $response = Http::withBasicAuth(trim($serverKey), '')

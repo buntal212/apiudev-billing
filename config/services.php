@@ -91,6 +91,7 @@ return [
         'connect_timeout' => (int) env('MIDTRANS_GATEWAY_CONNECT_TIMEOUT', 5),
         'secret_store_key' => env('MIDTRANS_SECRET_STORE_KEY'),
         'sandbox_base_url' => env('MIDTRANS_SANDBOX_BASE_URL', 'https://api.sandbox.midtrans.com/v2'),
+        'production_base_url' => env('MIDTRANS_PRODUCTION_BASE_URL', 'https://api.midtrans.com/v2'),
     ],
 
 ];

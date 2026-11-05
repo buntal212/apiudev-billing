@@ -110,20 +110,20 @@ class ApplicationPaymentGatewayController extends Controller
         if ($attributes['provider'] === 'dana') {
             $merchantCatalog->ensureUsable($attributes['gateway_merchant_code'], $attributes['environment']);
         } elseif ($attributes['provider'] === 'midtrans') {
-            if ($attributes['environment'] !== 'sandbox') {
+            if (! in_array($attributes['environment'], ['sandbox', 'production'], true)) {
                 throw ValidationException::withMessages([
-                    'environment' => ['Midtrans Gateway hanya mendukung environment sandbox.'],
+                    'environment' => ['Midtrans Gateway hanya mendukung environment sandbox atau production.'],
                 ]);
             }
 
             $exists = MidtransMerchantCredential::query()
                 ->where('merchant_code', $attributes['gateway_merchant_code'])
-                ->where('environment', 'sandbox')
+                ->where('environment', $attributes['environment'])
                 ->exists();
 
             if (! $exists && ! in_array($attributes['gateway_merchant_code'], ['udev-central', 'larissama'], true)) {
                 throw ValidationException::withMessages([
-                    'gateway_merchant_code' => ['Merchant Midtrans tidak ditemukan pada sandbox.'],
+                    'gateway_merchant_code' => ['Merchant Midtrans tidak ditemukan pada environment '.$attributes['environment'].'.'],
                 ]);
             }
         } else {
@@ -168,21 +168,21 @@ class ApplicationPaymentGatewayController extends Controller
                 $merchantCatalog->ensureUsable($merchantCode, $environment);
             }
         } elseif ($paymentGateway->provider === 'midtrans') {
-            if ($environment !== 'sandbox') {
+            if (! in_array($environment, ['sandbox', 'production'], true)) {
                 throw ValidationException::withMessages([
-                    'environment' => ['Midtrans Gateway hanya mendukung environment sandbox.'],
+                    'environment' => ['Midtrans Gateway hanya mendukung environment sandbox atau production.'],
                 ]);
             }
 
-            if (array_key_exists('gateway_merchant_code', $attributes)) {
+            if (array_key_exists('gateway_merchant_code', $attributes) || array_key_exists('environment', $attributes)) {
                 $exists = MidtransMerchantCredential::query()
                     ->where('merchant_code', $merchantCode)
-                    ->where('environment', 'sandbox')
+                    ->where('environment', $environment)
                     ->exists();
 
                 if (! $exists && ! in_array($merchantCode, ['udev-central', 'larissama'], true)) {
                     throw ValidationException::withMessages([
-                        'gateway_merchant_code' => ['Merchant Midtrans tidak ditemukan pada sandbox.'],
+                        'gateway_merchant_code' => ['Merchant Midtrans tidak ditemukan pada environment '.$environment.'.'],
                     ]);
                 }
             }

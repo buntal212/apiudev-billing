@@ -18,11 +18,16 @@ class MidtransSecretStore
      *
      * @return array{ciphertext: string, nonce: string, tag: string, key_version: string}
      */
-    public function encryptSecret(string $plaintext, string $merchantCode, string $secretType = 'server_key', string $keyVersion = 'v1'): array
-    {
+    public function encryptSecret(
+        string $plaintext,
+        string $merchantCode,
+        string $secretType = 'server_key',
+        string $keyVersion = 'v1',
+        string $environment = 'sandbox',
+    ): array {
         $key = $this->deriveEncryptionKey($keyVersion);
         $nonce = random_bytes(self::NonceLength);
-        $aad = $this->additionalAuthenticatedData($merchantCode, $secretType, $keyVersion);
+        $aad = $this->additionalAuthenticatedData($merchantCode, $secretType, $keyVersion, $environment);
 
         $tag = '';
         $ciphertext = openssl_encrypt(
@@ -47,7 +52,8 @@ class MidtransSecretStore
             base64_encode($tag),
             $merchantCode,
             $secretType,
-            $keyVersion
+            $keyVersion,
+            $environment
         );
 
         if ($decrypted !== $plaintext) {
@@ -64,6 +70,7 @@ class MidtransSecretStore
 
     /**
      * Decrypt encrypted secret payload.
+     * Supports both environment-specific AAD and legacy sandbox AAD for seamless backward compatibility.
      */
     public function decryptSecret(
         string $base64Ciphertext,
@@ -71,7 +78,8 @@ class MidtransSecretStore
         string $base64Tag,
         string $merchantCode,
         string $secretType = 'server_key',
-        string $keyVersion = 'v1'
+        string $keyVersion = 'v1',
+        string $environment = 'sandbox',
     ): string {
         $ciphertext = base64_decode($base64Ciphertext, true);
         $nonce = base64_decode($base64Nonce, true);
@@ -82,7 +90,7 @@ class MidtransSecretStore
         }
 
         $key = $this->deriveEncryptionKey($keyVersion);
-        $aad = $this->additionalAuthenticatedData($merchantCode, $secretType, $keyVersion);
+        $aad = $this->additionalAuthenticatedData($merchantCode, $secretType, $keyVersion, $environment);
 
         $plaintext = openssl_decrypt(
             $ciphertext,
@@ -94,6 +102,20 @@ class MidtransSecretStore
             $aad
         );
 
+        // Fallback to legacy sandbox AAD if decryption failed and environment was not sandbox
+        if ($plaintext === false && $environment !== 'sandbox') {
+            $legacyAad = $this->additionalAuthenticatedData($merchantCode, $secretType, $keyVersion, 'sandbox');
+            $plaintext = openssl_decrypt(
+                $ciphertext,
+                self::Cipher,
+                $key,
+                OPENSSL_RAW_DATA,
+                $nonce,
+                $tag,
+                $legacyAad
+            );
+        }
+
         if ($plaintext === false) {
             throw new RuntimeException("Dekripsi {$secretType} Midtrans gagal. Authentication tag tidak cocok.");
         }
@@ -101,9 +123,15 @@ class MidtransSecretStore
         return $plaintext;
     }
 
-    private function additionalAuthenticatedData(string $merchantCode, string $secretType, string $keyVersion): string
-    {
-        return "midtrans-sandbox|merchant:{$merchantCode}|type:{$secretType}|v:{$keyVersion}";
+    private function additionalAuthenticatedData(
+        string $merchantCode,
+        string $secretType,
+        string $keyVersion,
+        string $environment = 'sandbox',
+    ): string {
+        $env = strtolower(trim($environment)) === 'production' ? 'production' : 'sandbox';
+
+        return "midtrans-{$env}|merchant:{$merchantCode}|type:{$secretType}|v:{$keyVersion}";
     }
 
     private function deriveEncryptionKey(string $keyVersion): string
