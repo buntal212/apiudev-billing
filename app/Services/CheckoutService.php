@@ -549,7 +549,7 @@ class CheckoutService
             return strtolower($provider);
         }
 
-        if (in_array($paymentMethod, ['gopay', 'bank_transfer', 'va_bca', 'va_bni', 'va_permata', 'va_mandiri', 'echannel'], true)) {
+        if (in_array($paymentMethod, ['gopay', 'bank_transfer', 'va_bca', 'va_bni', 'va_bri', 'va_permata', 'va_mandiri', 'echannel'], true)) {
             return 'midtrans';
         }
 
@@ -559,22 +559,36 @@ class CheckoutService
 
         $appId = $invoice->plan?->application_id ?? $invoice->customer?->application_id;
         if ($appId !== null) {
+            $activeEnvironment = app(\App\Services\MidtransEnvironmentService::class)->getActiveEnvironment();
+
             $midtransMapping = ApplicationPaymentGateway::query()
                 ->where('application_id', $appId)
                 ->where('provider', 'midtrans')
-                ->where('environment', 'sandbox')
+                ->where('environment', $activeEnvironment)
                 ->where('is_active', true)
                 ->first();
+
+            if ($midtransMapping !== null) {
+                return 'midtrans';
+            }
 
             $danaMapping = ApplicationPaymentGateway::query()
                 ->where('application_id', $appId)
                 ->where('provider', 'dana')
-                ->where('environment', 'sandbox')
+                ->where('environment', $activeEnvironment)
                 ->where('is_active', true)
                 ->first();
 
-            if ($midtransMapping !== null && $danaMapping === null) {
-                return 'midtrans';
+            if ($danaMapping === null) {
+                $danaMapping = ApplicationPaymentGateway::query()
+                    ->where('application_id', $appId)
+                    ->where('provider', 'dana')
+                    ->where('is_active', true)
+                    ->first();
+            }
+
+            if ($danaMapping !== null) {
+                return 'dana';
             }
         }
 

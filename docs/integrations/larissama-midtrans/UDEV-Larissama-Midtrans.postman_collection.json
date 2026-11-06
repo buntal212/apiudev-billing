@@ -1,0 +1,619 @@
+{
+  "info": {
+    "_postman_id": "c1f7a048-b328-40b9-8e41-0164c8d5a7e1",
+    "name": "UDEV Centralized Billing - Larissama (Midtrans)",
+    "description": "Koleksi resmi Postman untuk integrasi sistem penagihan Larissama ke UDEV Centralized Billing menggunakan payment gateway Midtrans.\n\nAlur transaksi:\n1. Get Plans -> 2. Sync Customer -> 3. Invoice Preview -> 4. Create Invoice -> 5. Checkout Midtrans (QRIS/VA/GoPay) -> 6. Get Invoice Detail -> 7. Get Subscription -> 8. Get Transactions.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "auth": {
+    "type": "bearer",
+    "bearer": [
+      {
+        "key": "token",
+        "value": "{{integration_token}}",
+        "type": "string"
+      }
+    ]
+  },
+  "event": [
+    {
+      "listen": "prerequest",
+      "script": {
+        "type": "text/javascript",
+        "exec": [
+          "pm.request.headers.add({ key: 'Accept', value: 'application/json' });",
+          "pm.request.headers.add({ key: 'Content-Type', value: 'application/json' });"
+        ]
+      }
+    }
+  ],
+  "item": [
+    {
+      "name": "1. Katalog Paket Langganan",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test(\"Status code is 200\", function () { pm.response.to.have.status(200); });",
+              "var jsonData = pm.response.json();",
+              "if (jsonData.data && jsonData.data.length > 0) {",
+              "    pm.environment.set(\"plan_code\", jsonData.data[0].code);",
+              "    console.log(\"Saved plan_code: \" + jsonData.data[0].code);",
+              "}"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{base_url}}/{{integration_prefix}}/subscription-plans?per_page=100",
+          "host": [
+            "{{base_url}}"
+          ],
+          "path": [
+            "{{integration_prefix}}",
+            "subscription-plans"
+          ],
+          "query": [
+            {
+              "key": "per_page",
+              "value": "100"
+            }
+          ]
+        },
+        "description": "Mengambil katalog paket langganan aktif milik aplikasi Larissama."
+      },
+      "response": []
+    },
+    {
+      "name": "2. Sinkronisasi Profil Warung Pelanggan",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test(\"Status code is 200 or 201\", function () {",
+              "    pm.expect(pm.response.code).to.be.oneOf([200, 201]);",
+              "});",
+              "var jsonData = pm.response.json();",
+              "if (jsonData.data && jsonData.data.external_customer_id) {",
+              "    pm.environment.set(\"customer_id\", jsonData.data.external_customer_id);",
+              "}"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "header": [],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"external_customer_id\": \"{{customer_id}}\",\n  \"name\": \"Warung Berkah Nusantara\",\n  \"owner_name\": \"Budi Santoso\",\n  \"email\": \"budi.santoso@warungberkah.test\",\n  \"phone\": \"081234567890\",\n  \"status\": \"active\"\n}"
+        },
+        "url": {
+          "raw": "{{base_url}}/{{integration_prefix}}/customers",
+          "host": [
+            "{{base_url}}"
+          ],
+          "path": [
+            "{{integration_prefix}}",
+            "customers"
+          ]
+        },
+        "description": "Mendaftarkan ID eksternal warung ke sistem UDEV."
+      },
+      "response": []
+    },
+    {
+      "name": "3. Validasi Kode Referral",
+      "request": {
+        "method": "POST",
+        "header": [],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"referral_code\": \"MITRA-JAKARTA\"\n}"
+        },
+        "url": {
+          "raw": "{{base_url}}/{{integration_prefix}}/referrals/validate",
+          "host": [
+            "{{base_url}}"
+          ],
+          "path": [
+            "{{integration_prefix}}",
+            "referrals",
+            "validate"
+          ]
+        },
+        "description": "Memeriksa status aktif dan besaran diskon kode referral mitra."
+      },
+      "response": []
+    },
+    {
+      "name": "4. Kunci Kode Referral pada Warung",
+      "request": {
+        "method": "POST",
+        "header": [],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"referral_code\": \"MITRA-JAKARTA\"\n}"
+        },
+        "url": {
+          "raw": "{{base_url}}/{{integration_prefix}}/customers/{{customer_id}}/referral",
+          "host": [
+            "{{base_url}}"
+          ],
+          "path": [
+            "{{integration_prefix}}",
+            "customers",
+            "{{customer_id}}",
+            "referral"
+          ]
+        },
+        "description": "Mengunci tarif diskon referral secara permanen saat warung baru mendaftar."
+      },
+      "response": []
+    },
+    {
+      "name": "5. Invoice Preview (Simulasi Harga & Durasi)",
+      "request": {
+        "method": "POST",
+        "header": [],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"subscription_plan_code\": \"{{plan_code}}\",\n  \"period_count\": 3\n}"
+        },
+        "url": {
+          "raw": "{{base_url}}/{{integration_prefix}}/customers/{{customer_id}}/invoice-preview",
+          "host": [
+            "{{base_url}}"
+          ],
+          "path": [
+            "{{integration_prefix}}",
+            "customers",
+            "{{customer_id}}",
+            "invoice-preview"
+          ]
+        },
+        "description": "Simulasi perhitungan harga, diskon referral, dan durasi sebelum menerbitkan invoice."
+      },
+      "response": []
+    },
+    {
+      "name": "6. Terbitkan Invoice Pending",
+      "event": [
+        {
+          "listen": "prerequest",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "var due = new Date();",
+              "due.setDate(due.getDate() + 2);",
+              "pm.variables.set(\"due_at_timestamp\", due.toISOString());",
+              "pm.variables.set(\"dynamic_inv_idemp\", \"inv-\" + pm.environment.get(\"customer_id\") + \"-\" + Date.now());"
+            ]
+          }
+        },
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test(\"Status code is 201\", function () { pm.response.to.have.status(201); });",
+              "var jsonData = pm.response.json();",
+              "if (jsonData.data && jsonData.data.invoice_number) {",
+              "    pm.environment.set(\"invoice_number\", jsonData.data.invoice_number);",
+              "    console.log(\"Saved invoice_number: \" + jsonData.data.invoice_number);",
+              "}"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Idempotency-Key",
+            "value": "{{dynamic_inv_idemp}}",
+            "type": "text"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"subscription_plan_code\": \"{{plan_code}}\",\n  \"due_at\": \"{{due_at_timestamp}}\",\n  \"period_count\": 1,\n  \"idempotency_key\": \"{{dynamic_inv_idemp}}\"\n}"
+        },
+        "url": {
+          "raw": "{{base_url}}/{{integration_prefix}}/customers/{{customer_id}}/invoices",
+          "host": [
+            "{{base_url}}"
+          ],
+          "path": [
+            "{{integration_prefix}}",
+            "customers",
+            "{{customer_id}}",
+            "invoices"
+          ]
+        },
+        "description": "Menerbitkan invoice penagihan resmi berstatus pending di UDEV."
+      },
+      "response": []
+    },
+    {
+      "name": "7. Checkout Midtrans - QRIS",
+      "event": [
+        {
+          "listen": "prerequest",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.variables.set(\"dynamic_chk_idemp\", \"chk-\" + pm.environment.get(\"invoice_number\") + \"-qris-\" + Date.now());"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Idempotency-Key",
+            "value": "{{dynamic_chk_idemp}}",
+            "type": "text"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"provider\": \"midtrans\",\n  \"payment_method\": \"qris\",\n  \"idempotency_key\": \"{{dynamic_chk_idemp}}\"\n}"
+        },
+        "url": {
+          "raw": "{{base_url}}/{{integration_prefix}}/invoices/{{invoice_number}}/checkout",
+          "host": [
+            "{{base_url}}"
+          ],
+          "path": [
+            "{{integration_prefix}}",
+            "invoices",
+            "{{invoice_number}}",
+            "checkout"
+          ]
+        },
+        "description": "Meminta sesi checkout QRIS Midtrans (Menghasilkan qr_content dan checkout_url)."
+      },
+      "response": []
+    },
+    {
+      "name": "8. Checkout Midtrans - BCA Virtual Account",
+      "event": [
+        {
+          "listen": "prerequest",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.variables.set(\"dynamic_chk_idemp\", \"chk-\" + pm.environment.get(\"invoice_number\") + \"-bca-\" + Date.now());"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Idempotency-Key",
+            "value": "{{dynamic_chk_idemp}}",
+            "type": "text"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"provider\": \"midtrans\",\n  \"payment_method\": \"va_bca\",\n  \"idempotency_key\": \"{{dynamic_chk_idemp}}\"\n}"
+        },
+        "url": {
+          "raw": "{{base_url}}/{{integration_prefix}}/invoices/{{invoice_number}}/checkout",
+          "host": [
+            "{{base_url}}"
+          ],
+          "path": [
+            "{{integration_prefix}}",
+            "invoices",
+            "{{invoice_number}}",
+            "checkout"
+          ]
+        },
+        "description": "Meminta sesi pembayaran BCA Virtual Account (Menghasilkan nomor VA BCA)."
+      },
+      "response": []
+    },
+    {
+      "name": "9. Checkout Midtrans - BNI Virtual Account",
+      "event": [
+        {
+          "listen": "prerequest",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.variables.set(\"dynamic_chk_idemp\", \"chk-\" + pm.environment.get(\"invoice_number\") + \"-bni-\" + Date.now());"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Idempotency-Key",
+            "value": "{{dynamic_chk_idemp}}",
+            "type": "text"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"provider\": \"midtrans\",\n  \"payment_method\": \"va_bni\",\n  \"idempotency_key\": \"{{dynamic_chk_idemp}}\"\n}"
+        },
+        "url": {
+          "raw": "{{base_url}}/{{integration_prefix}}/invoices/{{invoice_number}}/checkout",
+          "host": [
+            "{{base_url}}"
+          ],
+          "path": [
+            "{{integration_prefix}}",
+            "invoices",
+            "{{invoice_number}}",
+            "checkout"
+          ]
+        },
+        "description": "Meminta sesi pembayaran BNI Virtual Account."
+      },
+      "response": []
+    },
+    {
+      "name": "10. Checkout Midtrans - BRI Virtual Account",
+      "event": [
+        {
+          "listen": "prerequest",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.variables.set(\"dynamic_chk_idemp\", \"chk-\" + pm.environment.get(\"invoice_number\") + \"-bri-\" + Date.now());"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Idempotency-Key",
+            "value": "{{dynamic_chk_idemp}}",
+            "type": "text"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"provider\": \"midtrans\",\n  \"payment_method\": \"va_bri\",\n  \"idempotency_key\": \"{{dynamic_chk_idemp}}\"\n}"
+        },
+        "url": {
+          "raw": "{{base_url}}/{{integration_prefix}}/invoices/{{invoice_number}}/checkout",
+          "host": [
+            "{{base_url}}"
+          ],
+          "path": [
+            "{{integration_prefix}}",
+            "invoices",
+            "{{invoice_number}}",
+            "checkout"
+          ]
+        },
+        "description": "Meminta sesi pembayaran BRI Virtual Account (BRIVA)."
+      },
+      "response": []
+    },
+    {
+      "name": "11. Checkout Midtrans - Permata Virtual Account",
+      "event": [
+        {
+          "listen": "prerequest",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.variables.set(\"dynamic_chk_idemp\", \"chk-\" + pm.environment.get(\"invoice_number\") + \"-permata-\" + Date.now());"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Idempotency-Key",
+            "value": "{{dynamic_chk_idemp}}",
+            "type": "text"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"provider\": \"midtrans\",\n  \"payment_method\": \"va_permata\",\n  \"idempotency_key\": \"{{dynamic_chk_idemp}}\"\n}"
+        },
+        "url": {
+          "raw": "{{base_url}}/{{integration_prefix}}/invoices/{{invoice_number}}/checkout",
+          "host": [
+            "{{base_url}}"
+          ],
+          "path": [
+            "{{integration_prefix}}",
+            "invoices",
+            "{{invoice_number}}",
+            "checkout"
+          ]
+        },
+        "description": "Meminta sesi pembayaran Permata Virtual Account."
+      },
+      "response": []
+    },
+    {
+      "name": "12. Checkout Midtrans - Mandiri Bill Payment",
+      "event": [
+        {
+          "listen": "prerequest",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.variables.set(\"dynamic_chk_idemp\", \"chk-\" + pm.environment.get(\"invoice_number\") + \"-mandiri-\" + Date.now());"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Idempotency-Key",
+            "value": "{{dynamic_chk_idemp}}",
+            "type": "text"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"provider\": \"midtrans\",\n  \"payment_method\": \"va_mandiri\",\n  \"idempotency_key\": \"{{dynamic_chk_idemp}}\"\n}"
+        },
+        "url": {
+          "raw": "{{base_url}}/{{integration_prefix}}/invoices/{{invoice_number}}/checkout",
+          "host": [
+            "{{base_url}}"
+          ],
+          "path": [
+            "{{integration_prefix}}",
+            "invoices",
+            "{{invoice_number}}",
+            "checkout"
+          ]
+        },
+        "description": "Meminta sesi Mandiri Bill Payment (Menghasilkan biller_code dan bill_key)."
+      },
+      "response": []
+    },
+    {
+      "name": "13. Checkout Midtrans - GoPay",
+      "event": [
+        {
+          "listen": "prerequest",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.variables.set(\"dynamic_chk_idemp\", \"chk-\" + pm.environment.get(\"invoice_number\") + \"-gopay-\" + Date.now());"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Idempotency-Key",
+            "value": "{{dynamic_chk_idemp}}",
+            "type": "text"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"provider\": \"midtrans\",\n  \"payment_method\": \"gopay\",\n  \"idempotency_key\": \"{{dynamic_chk_idemp}}\"\n}"
+        },
+        "url": {
+          "raw": "{{base_url}}/{{integration_prefix}}/invoices/{{invoice_number}}/checkout",
+          "host": [
+            "{{base_url}}"
+          ],
+          "path": [
+            "{{integration_prefix}}",
+            "invoices",
+            "{{invoice_number}}",
+            "checkout"
+          ]
+        },
+        "description": "Meminta sesi checkout GoPay (Menghasilkan checkout_url deeplink)."
+      },
+      "response": []
+    },
+    {
+      "name": "14. Cek Status Invoice (Polling / Rekonsiliasi)",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{base_url}}/{{integration_prefix}}/invoices/{{invoice_number}}?reconcile=true",
+          "host": [
+            "{{base_url}}"
+          ],
+          "path": [
+            "{{integration_prefix}}",
+            "invoices",
+            "{{invoice_number}}"
+          ],
+          "query": [
+            {
+              "key": "reconcile",
+              "value": "true",
+              "description": "Jika true, UDEV akan memverifikasi status langsung ke payment gateway jika masih pending."
+            }
+          ]
+        },
+        "description": "Membaca status terkini faktur penagihan, status pembayaran, dan masa aktif subscription."
+      },
+      "response": []
+    },
+    {
+      "name": "15. Cek Status Subscription Resmi Pelanggan",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{base_url}}/{{integration_prefix}}/customers/{{customer_id}}/subscription",
+          "host": [
+            "{{base_url}}"
+          ],
+          "path": [
+            "{{integration_prefix}}",
+            "customers",
+            "{{customer_id}}",
+            "subscription"
+          ]
+        },
+        "description": "Membaca masa aktif langganan resmi warung (starts_at dan expires_at) untuk sinkronisasi lokal."
+      },
+      "response": []
+    },
+    {
+      "name": "16. Riwayat Transaksi Penagihan Pelanggan",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{base_url}}/{{integration_prefix}}/customers/{{customer_id}}/transactions?page=1&per_page=15",
+          "host": [
+            "{{base_url}}"
+          ],
+          "path": [
+            "{{integration_prefix}}",
+            "customers",
+            "{{customer_id}}",
+            "transactions"
+          ],
+          "query": [
+            {
+              "key": "page",
+              "value": "1"
+            },
+            {
+              "key": "per_page",
+              "value": "15"
+            }
+          ]
+        },
+        "description": "Mengambil histori seluruh invoice dan payment attempts warung secara terpaginasi."
+      },
+      "response": []
+    }
+  ]
+}

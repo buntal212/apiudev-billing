@@ -16,6 +16,7 @@ use App\Services\ApplicationIntegrationAuditService;
 use App\Services\CheckoutService;
 use App\Services\IntegrationCustomerService;
 use App\Services\InvoiceService;
+use App\Services\MidtransEnvironmentService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Http\Resources\Json\AnonymousResourceCollection;
@@ -28,6 +29,7 @@ class IntegrationBillingController extends Controller
         string $externalId,
         IntegrationCustomerService $customers,
         ApplicationIntegrationAuditService $audits,
+        MidtransEnvironmentService $midtransEnvironmentService,
     ): JsonResponse {
         [$application, $token] = $this->context($request);
         $customer = $this->customerOrFail($customers, $application, $externalId);
@@ -57,10 +59,14 @@ class IntegrationBillingController extends Controller
             ],
         );
 
+        $activeEnvironment = $midtransEnvironmentService->getActiveEnvironment();
+
         $availableGateways = \App\Models\ApplicationPaymentGateway::query()
             ->where('application_id', $application->getKey())
-            ->where('environment', 'sandbox')
+            ->where('environment', $activeEnvironment)
             ->where('is_active', true)
+            ->orderByRaw("CASE WHEN provider = 'midtrans' THEN 0 ELSE 1 END")
+            ->orderBy('id')
             ->get(['provider', 'gateway_merchant_code'])
             ->map(fn ($g): array => [
                 'provider' => $g->provider,
@@ -182,7 +188,20 @@ class IntegrationBillingController extends Controller
         $bank = $request->validated('bank');
         $paymentMethod = $request->validated('payment_method');
         if (empty($paymentMethod)) {
-            $paymentMethod = ($provider === 'midtrans') ? 'qris' : 'dana_wallet';
+            if ($provider !== null) {
+                $paymentMethod = (strtolower($provider) === 'midtrans') ? 'qris' : 'dana_wallet';
+            } else {
+                $activeEnv = app(MidtransEnvironmentService::class)->getActiveEnvironment();
+                $hasMidtrans = \App\Models\ApplicationPaymentGateway::query()
+                    ->where('application_id', $application->getKey())
+                    ->where('provider', 'midtrans')
+                    ->where('environment', $activeEnv)
+                    ->where('is_active', true)
+                    ->exists();
+
+                $paymentMethod = $hasMidtrans ? 'qris' : 'dana_wallet';
+                $provider = $hasMidtrans ? 'midtrans' : 'dana';
+            }
         }
 
         $attempt = $checkout->startCheckout(

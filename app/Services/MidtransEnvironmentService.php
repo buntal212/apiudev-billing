@@ -19,14 +19,23 @@ class MidtransEnvironmentService
 
     public function getSetting(): MidtransEnvironmentSetting
     {
-        /** @var MidtransEnvironmentSetting */
-        return MidtransEnvironmentSetting::query()->firstOrCreate(
-            ['gateway' => 'midtrans'],
-            [
-                'active_environment' => MidtransEnvironmentSetting::EnvironmentSandbox,
-                'is_production_ready' => false,
-            ]
-        );
+        try {
+            /** @var MidtransEnvironmentSetting */
+            return MidtransEnvironmentSetting::query()->firstOrCreate(
+                ['gateway' => 'midtrans'],
+                [
+                    'active_environment' => MidtransEnvironmentSetting::EnvironmentSandbox,
+                    'is_production_ready' => false,
+                ]
+            );
+        } catch (\Throwable) {
+            $setting = new MidtransEnvironmentSetting();
+            $setting->gateway = 'midtrans';
+            $setting->active_environment = (string) config('services.midtrans_gateway.environment', MidtransEnvironmentSetting::EnvironmentSandbox);
+            $setting->is_production_ready = false;
+
+            return $setting;
+        }
     }
 
     public function getActiveEnvironment(): string

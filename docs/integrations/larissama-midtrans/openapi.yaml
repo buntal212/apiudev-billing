@@ -1,0 +1,1067 @@
+openapi: 3.1.0
+info:
+  title: UDEV Centralized Billing - Larissama Integration API
+  version: 1.0.0
+  description: |
+    Spesifikasi resmi kontrak API integrasi mesin-ke-mesin antara aplikasi **Larissama** dan **UDEV Centralized Billing Platform** menggunakan payment gateway **Midtrans**.
+    
+    API ini mengelola siklus penagihan, pembuatan invoice, inisiasi checkout pembayaran (QRIS, Virtual Account, GoPay), polling status, perpanjangan masa aktif langganan warung, dan penguncian diskon referral mitra.
+servers:
+  - url: https://apiudev.udumbara.my.id/api/v1/integrations
+    description: Production Server (Kanonis)
+  - url: https://staging-apiudev.udumbara.my.id/api/v1/integrations
+    description: Sandbox / Staging Server
+  - url: http://127.0.0.1:8000/api/v1/integrations
+    description: Local Development Server
+
+security:
+  - BearerAuth: []
+
+paths:
+  /subscription-plans:
+    get:
+      summary: Ambil Katalog Paket Langganan Aktif
+      operationId: getSubscriptionPlans
+      description: Mengambil seluruh paket langganan berstatus aktif yang dikonfigurasikan khusus untuk aplikasi Larissama.
+      parameters:
+        - name: page
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            default: 1
+          description: Nomor halaman paginasi.
+        - name: per_page
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 15
+          description: Jumlah item per halaman. Disarankan 100 untuk memuat seluruh katalog.
+      responses:
+        '200':
+          description: Katalog paket berhasil diambil.
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - data
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/SubscriptionPlan'
+                  links:
+                    $ref: '#/components/schemas/PaginationLinks'
+                  meta:
+                    $ref: '#/components/schemas/PaginationMeta'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '403':
+          $ref: '#/components/responses/ForbiddenError'
+
+  /customers:
+    post:
+      summary: Sinkronisasi Profil Warung Pelanggan (Upsert)
+      operationId: upsertCustomer
+      description: Mendaftarkan profil warung baru ke UDEV atau memperbarui data profil yang sudah ada berdasarkan ID eksternal yang stabil.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - external_customer_id
+                - name
+                - owner_name
+                - email
+                - phone
+              properties:
+                external_customer_id:
+                  type: string
+                  maxLength: 100
+                  example: "WARUNG-001"
+                  description: ID unik warung di Larissama (misal ID database warung).
+                name:
+                  type: string
+                  maxLength: 255
+                  example: "Warung Berkah Nusantara"
+                  description: Nama usaha warung.
+                owner_name:
+                  type: string
+                  maxLength: 255
+                  example: "Budi Santoso"
+                  description: Nama lengkap pemilik warung.
+                email:
+                  type: string
+                  format: email
+                  maxLength: 255
+                  example: "budi.santoso@warungberkah.test"
+                  description: Alamat email pemilik akun warung.
+                phone:
+                  type: string
+                  maxLength: 30
+                  example: "081234567890"
+                  description: Nomor telepon atau WhatsApp aktif warung.
+                status:
+                  type: string
+                  enum: [active, suspended, inactive]
+                  default: active
+                  description: Status akun pelanggan.
+      responses:
+        '201':
+          description: Pelanggan baru berhasil didaftarkan di UDEV.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: '#/components/schemas/CustomerProfile'
+                  sync:
+                    type: object
+                    properties:
+                      status:
+                        type: string
+                        example: "accepted"
+                  request_id:
+                    type: string
+                    example: "req_672bc19a3b04c"
+        '200':
+          description: Profil pelanggan yang sudah ada berhasil diperbarui.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: '#/components/schemas/CustomerProfile'
+                  sync:
+                    type: object
+                    properties:
+                      status:
+                        type: string
+                        example: "accepted"
+                  request_id:
+                    type: string
+                    example: "req_672bc19a3b04c"
+        '422':
+          $ref: '#/components/responses/ValidationError'
+
+  /customers/{externalId}:
+    get:
+      summary: Ambil Detail Pelanggan Warung
+      operationId: getCustomerDetail
+      parameters:
+        - name: externalId
+          in: path
+          required: true
+          schema:
+            type: string
+          description: ID unik eksternal warung.
+      responses:
+        '200':
+          description: Detail pelanggan berhasil diambil.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: '#/components/schemas/CustomerProfile'
+                  request_id:
+                    type: string
+        '404':
+          $ref: '#/components/responses/NotFoundError'
+
+  /customers/{externalId}/invoice-preview:
+    post:
+      summary: Simulasi Perhitungan Harga & Durasi Invoice
+      operationId: previewInvoice
+      description: Menghitung nominal tagihan, durasi hari aktif, diskon referral terkunci, dan daftar payment gateway tanpa membuat invoice di database.
+      parameters:
+        - name: externalId
+          in: path
+          required: true
+          schema:
+            type: string
+          description: ID eksternal warung.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - subscription_plan_code
+              properties:
+                subscription_plan_code:
+                  type: string
+                  maxLength: 100
+                  example: "BASIC-WARUNG"
+                  description: Kode paket langganan.
+                period_count:
+                  type: integer
+                  minimum: 1
+                  maximum: 12
+                  default: 1
+                  example: 3
+                  description: Jumlah bulan yang dipilih (1 periode = 30 hari kalender).
+      responses:
+        '200':
+          description: Simulasi rincian harga dan durasi berhasil dihitung.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: '#/components/schemas/InvoicePreviewData'
+                  request_id:
+                    type: string
+        '404':
+          $ref: '#/components/responses/NotFoundError'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+
+  /customers/{externalId}/invoices:
+    post:
+      summary: Terbitkan Invoice Penagihan Resmi
+      operationId: createInvoice
+      description: Menerbitkan invoice penagihan pending dengan kunci idempotensi unik.
+      parameters:
+        - name: externalId
+          in: path
+          required: true
+          schema:
+            type: string
+          description: ID eksternal warung.
+        - name: Idempotency-Key
+          in: header
+          required: false
+          schema:
+            type: string
+            maxLength: 100
+          description: Kunci idempotensi untuk mencegah duplikasi penerbitan invoice.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - subscription_plan_code
+                - due_at
+                - idempotency_key
+              properties:
+                subscription_plan_code:
+                  type: string
+                  maxLength: 100
+                  example: "BASIC-WARUNG"
+                due_at:
+                  type: string
+                  format: date-time
+                  example: "2026-11-08T23:59:59Z"
+                  description: Waktu jatuh tempo pembayaran (wajib di masa depan).
+                period_count:
+                  type: integer
+                  minimum: 1
+                  maximum: 12
+                  default: 1
+                  example: 1
+                idempotency_key:
+                  type: string
+                  maxLength: 100
+                  pattern: '^[A-Za-z0-9][A-Za-z0-9._-]*$'
+                  example: "inv-warung-001-20261106-01"
+      responses:
+        '201':
+          description: Invoice pending berhasil diterbitkan.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: '#/components/schemas/InvoiceDetail'
+                  request_id:
+                    type: string
+        '422':
+          $ref: '#/components/responses/ValidationError'
+
+  /invoices/{invoiceNumber}/checkout:
+    post:
+      summary: Inisiasi Sesi Checkout Pembayaran Midtrans
+      operationId: startCheckout
+      description: Menginisiasi sesi pembayaran ke payment gateway Midtrans untuk menghasilkan kode QRIS, Nomor Virtual Account, atau URL Deeplink GoPay.
+      parameters:
+        - name: invoiceNumber
+          in: path
+          required: true
+          schema:
+            type: string
+          example: "INV-202611-0001"
+        - name: Idempotency-Key
+          in: header
+          required: false
+          schema:
+            type: string
+            maxLength: 64
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - idempotency_key
+              properties:
+                provider:
+                  type: string
+                  enum: [midtrans, dana]
+                  default: midtrans
+                  description: Payment gateway yang dituju. Sangat disarankan selalu menyertakan "midtrans".
+                payment_method:
+                  type: string
+                  enum:
+                    - qris
+                    - va_bca
+                    - va_bni
+                    - va_bri
+                    - va_permata
+                    - va_mandiri
+                    - echannel
+                    - gopay
+                    - bank_transfer
+                  default: qris
+                  example: "va_bca"
+                  description: Metode pembayaran yang dipilih.
+                bank:
+                  type: string
+                  enum: [bca, bni, bri, permata, mandiri, echannel]
+                  description: Pilihan bank spesifik (opsional jika nama bank sudah tercantum di payment_method).
+                idempotency_key:
+                  type: string
+                  maxLength: 64
+                  pattern: '^[A-Za-z0-9][A-Za-z0-9._-]*$'
+                  example: "chk-warung-001-attempt-01"
+      responses:
+        '200':
+          description: Sesi pembayaran siap (Instruksi bayar tersedia).
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: '#/components/schemas/InvoiceDetail'
+                  request_id:
+                    type: string
+        '202':
+          description: Permintaan checkout sedang diproses (Processing).
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: '#/components/schemas/InvoiceDetail'
+                  request_id:
+                    type: string
+        '404':
+          $ref: '#/components/responses/NotFoundError'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+
+  /invoices/{invoiceNumber}:
+    get:
+      summary: Ambil Detail & Status Invoice Terkini
+      operationId: getInvoiceDetail
+      description: Membaca status faktur penagihan, status pembayaran Midtrans, dan status subscription jika sudah lunas.
+      parameters:
+        - name: invoiceNumber
+          in: path
+          required: true
+          schema:
+            type: string
+          example: "INV-202611-0001"
+        - name: reconcile
+          in: query
+          required: false
+          schema:
+            type: boolean
+            default: false
+          description: Jika true, memaksa UDEV melakukan rekonsiliasi status ke Midtrans secara instan.
+      responses:
+        '200':
+          description: Data invoice berhasil diambil.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: '#/components/schemas/InvoiceDetail'
+                  request_id:
+                    type: string
+        '404':
+          $ref: '#/components/responses/NotFoundError'
+
+  /customers/{externalId}/subscription:
+    get:
+      summary: Ambil Status Langganan Resmi Warung
+      operationId: getCustomerSubscription
+      description: Mengambil status paket berjalan, tanggal mulai, tanggal berakhir, dan data referral terkunci warung.
+      parameters:
+        - name: externalId
+          in: path
+          required: true
+          schema:
+            type: string
+          example: "WARUNG-001"
+      responses:
+        '200':
+          description: Data subscription berhasil diambil.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+                    properties:
+                      customer_external_id:
+                        type: string
+                        example: "WARUNG-001"
+                      subscription:
+                        $ref: '#/components/schemas/CustomerSubscriptionStatus'
+                      referral:
+                        $ref: '#/components/schemas/CustomerReferralLocked'
+                  request_id:
+                    type: string
+
+  /customers/{externalId}/transactions:
+    get:
+      summary: Ambil Riwayat Transaksi Penagihan Pelanggan
+      operationId: getCustomerTransactions
+      parameters:
+        - name: externalId
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: page
+          in: query
+          required: false
+          schema:
+            type: integer
+            default: 1
+        - name: per_page
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 15
+      responses:
+        '200':
+          description: Riwayat invoice penagihan berhasil diambil.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/InvoiceDetail'
+                  links:
+                    $ref: '#/components/schemas/PaginationLinks'
+                  meta:
+                    $ref: '#/components/schemas/PaginationMeta'
+
+  /referrals/validate:
+    post:
+      summary: Validasi Kode Referral Mitra
+      operationId: validateReferralCode
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - referral_code
+              properties:
+                referral_code:
+                  type: string
+                  example: "MITRA-JAKARTA"
+      responses:
+        '200':
+          description: Hasil validasi kode referral.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+                    properties:
+                      is_valid:
+                        type: boolean
+                        example: true
+                      code:
+                        type: string
+                        example: "MITRA-JAKARTA"
+                      type:
+                        type: string
+                        enum: [umum, khusus]
+                        example: "khusus"
+                      base_price:
+                        type: string
+                        example: "175000.00"
+                      discount_amount:
+                        type: string
+                        example: "75000.00"
+                      customer_price:
+                        type: string
+                        example: "100000.00"
+                  request_id:
+                    type: string
+
+  /customers/{externalId}/referral:
+    post:
+      summary: Kunci Kode Referral pada Warung Pelanggan
+      operationId: attachCustomerReferral
+      description: Mengunci kode referral mitra secara permanen pada warung saat pendaftaran akun pertama kali.
+      parameters:
+        - name: externalId
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - referral_code
+              properties:
+                referral_code:
+                  type: string
+                  example: "MITRA-JAKARTA"
+      responses:
+        '201':
+          description: Kode referral berhasil dikunci pada warung.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+                    properties:
+                      customer_external_id:
+                        type: string
+                        example: "WARUNG-001"
+                      referral:
+                        $ref: '#/components/schemas/CustomerReferralLocked'
+                  request_id:
+                    type: string
+        '409':
+          description: Pelanggan sudah memiliki kode referral yang terkunci sebelumnya.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: Token
+
+  schemas:
+    SubscriptionPlan:
+      type: object
+      required:
+        - id
+        - code
+        - name
+        - price
+        - currency
+        - duration_days
+        - is_active
+      properties:
+        id:
+          type: integer
+          example: 1
+        code:
+          type: string
+          example: "BASIC-WARUNG"
+        name:
+          type: string
+          example: "Paket Warung Mandiri"
+        description:
+          type: string
+          nullable: true
+          example: "Akses penuh sistem kasir, inventori, dan laporan cloud."
+        price:
+          type: string
+          example: "175000.00"
+        currency:
+          type: string
+          example: "IDR"
+        duration_days:
+          type: integer
+          example: 30
+        is_active:
+          type: boolean
+          example: true
+
+    CustomerProfile:
+      type: object
+      properties:
+        id:
+          type: integer
+          example: 142
+        application_id:
+          type: integer
+          example: 1
+        external_customer_id:
+          type: string
+          example: "WARUNG-001"
+        name:
+          type: string
+          example: "Warung Berkah Nusantara"
+        owner_name:
+          type: string
+          example: "Budi Santoso"
+        email:
+          type: string
+          example: "budi.santoso@warungberkah.test"
+        phone_number:
+          type: string
+          example: "081234567890"
+        is_active:
+          type: boolean
+          example: true
+        source:
+          type: string
+          example: "integration"
+        sync_status:
+          type: string
+          example: "synced"
+
+    InvoicePreviewData:
+      type: object
+      properties:
+        customer_external_id:
+          type: string
+          example: "WARUNG-001"
+        plan:
+          type: object
+          properties:
+            code:
+              type: string
+              example: "BASIC-WARUNG"
+            name:
+              type: string
+              example: "Paket Warung Mandiri"
+            duration_days:
+              type: integer
+              example: 90
+            period_count:
+              type: integer
+              example: 3
+        pricing:
+          type: object
+          properties:
+            unit_price:
+              type: string
+              example: "175000.00"
+            period_count:
+              type: integer
+              example: 3
+            normal_price:
+              type: string
+              example: "525000.00"
+            referral_code:
+              type: string
+              nullable: true
+              example: "MITRA-JAKARTA"
+            referral_type:
+              type: string
+              nullable: true
+              example: "khusus"
+            discount_amount:
+              type: string
+              example: "225000.00"
+            final_price:
+              type: string
+              example: "300000.00"
+            currency:
+              type: string
+              example: "IDR"
+        available_gateways:
+          type: array
+          items:
+            type: object
+            properties:
+              provider:
+                type: string
+                example: "midtrans"
+              merchant_code:
+                type: string
+                example: "larissama"
+
+    InvoiceDetail:
+      type: object
+      properties:
+        invoice_number:
+          type: string
+          example: "INV-202611-0001"
+        status:
+          type: string
+          enum: [pending, paid, cancelled, expired, failed]
+          example: "pending"
+        period_count:
+          type: integer
+          example: 1
+        issued_at:
+          type: string
+          format: date-time
+          example: "2026-11-06T10:30:00.000000Z"
+        due_at:
+          type: string
+          format: date-time
+          example: "2026-11-08T23:59:59.000000Z"
+        paid_at:
+          type: string
+          format: date-time
+          nullable: true
+        plan:
+          type: object
+          properties:
+            code:
+              type: string
+              example: "BASIC-WARUNG"
+            name:
+              type: string
+              example: "Paket Warung Mandiri"
+            duration_days:
+              type: integer
+              example: 30
+            period_count:
+              type: integer
+              example: 1
+        pricing:
+          type: object
+          properties:
+            normal_price:
+              type: string
+              example: "175000.00"
+            referral_code:
+              type: string
+              nullable: true
+              example: "MITRA-JAKARTA"
+            referral_type:
+              type: string
+              nullable: true
+              example: "khusus"
+            discount_amount:
+              type: string
+              example: "75000.00"
+            final_price:
+              type: string
+              example: "100000.00"
+            currency:
+              type: string
+              example: "IDR"
+        payment:
+          type: object
+          nullable: true
+          properties:
+            status:
+              type: string
+              enum: [initiated, pending, succeeded, failed, cancelled, expired]
+              example: "pending"
+            provider:
+              type: string
+              enum: [midtrans, dana]
+              example: "midtrans"
+            payment_method:
+              type: string
+              example: "va_bca"
+            bank:
+              type: string
+              nullable: true
+              example: "bca"
+            amount:
+              type: string
+              example: "100000.00"
+            subtotal_amount:
+              type: number
+              example: 100000.0
+            admin_fee:
+              type: number
+              example: 0.0
+            checkout_status:
+              type: string
+              enum: [ready, processing, failed]
+              example: "ready"
+            checkout_url:
+              type: string
+              nullable: true
+            qr_content:
+              type: string
+              nullable: true
+            payment_code:
+              type: string
+              nullable: true
+              example: "100889977112233"
+            payment_instruction:
+              type: object
+              nullable: true
+              properties:
+                type:
+                  type: string
+                  enum: [qris_mpm, virtual_account, gopay]
+                  example: "virtual_account"
+                bank:
+                  type: string
+                  example: "BCA"
+                payment_code:
+                  type: string
+                  example: "100889977112233"
+                bill_key:
+                  type: string
+                  nullable: true
+                biller_code:
+                  type: string
+                  nullable: true
+                expiry_time:
+                  type: string
+                  format: date-time
+                transaction_id:
+                  type: string
+                message:
+                  type: string
+            checkout_expires_at:
+              type: string
+              format: date-time
+            transaction_id:
+              type: string
+              example: "INV-202611-0001-A1"
+            completed_at:
+              type: string
+              format: date-time
+              nullable: true
+            failure_code:
+              type: string
+              nullable: true
+        payment_history:
+          type: array
+          items:
+            type: object
+            properties:
+              attempt_number:
+                type: integer
+                example: 1
+              provider:
+                type: string
+                example: "midtrans"
+              status:
+                type: string
+                example: "pending"
+              payment_method:
+                type: string
+                example: "va_bca"
+              amount:
+                type: string
+                example: "100000.00"
+              currency:
+                type: string
+                example: "IDR"
+        subscription:
+          $ref: '#/components/schemas/CustomerSubscriptionStatus'
+        tracking:
+          type: object
+          properties:
+            settlement_id:
+              type: integer
+              nullable: true
+            settlement_status:
+              type: string
+              nullable: true
+            settlement_error_code:
+              type: string
+              nullable: true
+            settled_at:
+              type: string
+              format: date-time
+              nullable: true
+
+    CustomerSubscriptionStatus:
+      type: object
+      nullable: true
+      properties:
+        status:
+          type: string
+          enum: [active, expired, cancelled]
+          example: "active"
+        plan_code:
+          type: string
+          example: "BASIC-WARUNG"
+        starts_at:
+          type: string
+          format: date-time
+          example: "2026-11-06T10:40:15.000000Z"
+        expires_at:
+          type: string
+          format: date-time
+          example: "2026-12-06T10:40:15.000000Z"
+        period_events:
+          type: array
+          items:
+            type: object
+            properties:
+              event_type:
+                type: string
+                example: "activation"
+              previous_expires_at:
+                type: string
+                nullable: true
+              new_expires_at:
+                type: string
+              transaction_id:
+                type: string
+              processed_at:
+                type: string
+
+    CustomerReferralLocked:
+      type: object
+      nullable: true
+      properties:
+        code:
+          type: string
+          example: "MITRA-JAKARTA"
+        type:
+          type: string
+          enum: [umum, khusus]
+          example: "khusus"
+        base_price:
+          type: string
+          example: "175000.00"
+        discount_amount:
+          type: string
+          example: "75000.00"
+        customer_price:
+          type: string
+          example: "100000.00"
+        locked_at:
+          type: string
+          format: date-time
+          example: "2026-11-06T10:45:00.000000Z"
+
+    PaginationLinks:
+      type: object
+      properties:
+        first:
+          type: string
+          nullable: true
+        last:
+          type: string
+          nullable: true
+        prev:
+          type: string
+          nullable: true
+        next:
+          type: string
+          nullable: true
+
+    PaginationMeta:
+      type: object
+      properties:
+        current_page:
+          type: integer
+        from:
+          type: integer
+          nullable: true
+        last_page:
+          type: integer
+        per_page:
+          type: integer
+        to:
+          type: integer
+          nullable: true
+        total:
+          type: integer
+
+    ErrorResponse:
+      type: object
+      required:
+        - message
+      properties:
+        message:
+          type: string
+          example: "Pesan penjelasan kegagalan."
+        error_code:
+          type: string
+          example: "referral_already_locked"
+        errors:
+          type: object
+          additionalProperties:
+            type: array
+            items:
+              type: string
+
+  responses:
+    UnauthorizedError:
+      description: Token otentikasi Bearer tidak valid, kadaluwarsa, atau dicabut.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            message: "Token integrasi tidak valid."
+
+    ForbiddenError:
+      description: Token tidak memiliki izin Global Token atau aplikasi dinonaktifkan.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            error_code: "global_token_required"
+            message: "Global API Token aplikasi diperlukan."
+
+    NotFoundError:
+      description: Sumber daya (pelanggan, paket, atau invoice) tidak ditemukan.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            message: "Invoice tidak ditemukan pada aplikasi ini."
+
+    ValidationError:
+      description: Data input gagal melewati validasi Form Request.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            message: "Data yang dikirim belum valid. Periksa kembali isian Anda."
+            errors:
+              due_at:
+                - "Tanggal jatuh tempo harus setelah waktu penerbitan invoice."
