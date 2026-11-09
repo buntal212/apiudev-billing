@@ -6,7 +6,6 @@ use Carbon\CarbonImmutable;
 use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Str;
-use RuntimeException;
 
 class MidtransGatewayProvisioningClient
 {
@@ -167,6 +166,12 @@ class MidtransGatewayProvisioningClient
                 'enable_callback' => true,
                 'callback_url' => 'https://udev.udumbara.my.id/payment-result',
             ];
+        } elseif ($paymentType === 'cstore' || $paymentType === 'indomaret') {
+            $payload['payment_type'] = 'cstore';
+            $payload['cstore'] = [
+                'store' => 'indomaret',
+                'message' => 'UDEV Sandbox',
+            ];
         }
 
         $response = Http::withBasicAuth(trim($serverKey), '')
@@ -207,7 +212,7 @@ class MidtransGatewayProvisioningClient
         }
 
         if ($paymentType === 'qris' && empty($qrUrl) && ! empty($body['transaction_id'])) {
-            $qrUrl = "https://api.".($environment === 'production' ? '' : 'sandbox.')."midtrans.com/v2/qris/{$body['transaction_id']}/qr-code";
+            $qrUrl = 'https://api.'.($environment === 'production' ? '' : 'sandbox.')."midtrans.com/v2/qris/{$body['transaction_id']}/qr-code";
             $checkoutUrl = $checkoutUrl ?: $qrUrl;
         }
 
@@ -243,6 +248,8 @@ class MidtransGatewayProvisioningClient
                 'permata_va_number' => $permataVaNumber,
                 'bill_key' => $billKey,
                 'biller_code' => $billerCode,
+                'payment_code' => $body['payment_code'] ?? null,
+                'store' => $body['store'] ?? (($paymentType === 'cstore' || $paymentType === 'indomaret') ? 'indomaret' : null),
                 'raw_response' => $body,
                 'created_at' => now()->format('Y-m-d H:i:s'),
             ],
@@ -332,7 +339,7 @@ class MidtransGatewayProvisioningClient
                 }
             }
             if (empty($qrUrl) && $paymentType === 'qris' && ! empty($txId)) {
-                $qrUrl = "https://api.".($environment === 'production' ? '' : 'sandbox.')."midtrans.com/v2/qris/{$txId}/qr-code";
+                $qrUrl = 'https://api.'.($environment === 'production' ? '' : 'sandbox.')."midtrans.com/v2/qris/{$txId}/qr-code";
             }
             $qrString = $body['qr_string'] ?? ($body['qr_code'] ?? null);
             $checkoutUrl = $qrUrl;
@@ -353,6 +360,8 @@ class MidtransGatewayProvisioningClient
                     'checkout_url' => $checkoutUrl,
                     'expiry_time' => $body['expiry_time'] ?? null,
                     'expires_at' => self::parseMidtransExpiryToUtc($body['expiry_time'] ?? null)?->toIso8601String(),
+                    'payment_code' => $body['payment_code'] ?? null,
+                    'store' => $body['store'] ?? null,
                     'va_numbers' => $body['va_numbers'] ?? null,
                     'raw_response' => $body,
                 ],

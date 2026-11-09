@@ -30,6 +30,7 @@ Di dalam UDEV Centralized Billing, integrasi Midtrans Core API menangani siklus 
 | **Permata Virtual Account** | `va_permata` / `bank: "permata"` | **TERDUKUNG** | Permata VA aktif di portal Midtrans | `payment_code` (Nomor VA Permata) | 24 Jam |
 | **Mandiri Bill Payment** | `va_mandiri` / `echannel` | **TERDUKUNG** | Mandiri E-Channel aktif di portal Midtrans | `biller_code` (Kode Perusahaan) + `bill_key` (Kode Tagihan) | 24 Jam |
 | **GoPay** | `gopay` | **TERDUKUNG** | GoPay Direct API aktif di portal Midtrans | `checkout_url` (Deeplink GoPay) / Fallback QR | 15 Menit |
+| **Indomaret (CStore)** | `indomaret` / `cstore` | **TERDUKUNG** | Indomaret CStore aktif di portal Midtrans | `payment_code` (Kode Pembayaran Indomaret) | 24 Jam |
 
 ---
 
@@ -290,6 +291,76 @@ Pembayaran langsung melalui aplikasi GoPay / Gojek di smartphone atau scan QR ji
 #### Implementasi Frontend Larissama:
 - Di browser mobile: Tampilkan tombol utama **"Buka Aplikasi GoPay"** yang mengarahkan pelanggan ke `payment.checkout_url`.
 - Di browser desktop: Midtrans akan mengembalikan QR code GoPay yang dapat dipindai langsung dari smartphone.
+
+---
+
+### 3.8. Indomaret (Over-The-Counter / CStore)
+
+Pembayaran tunai atau non-tunai di seluruh gerai Indomaret di Indonesia melalui kasir menggunakan kode pembayaran 10-16 digit.
+
+#### Request Checkout:
+```json
+{
+  "provider": "midtrans",
+  "payment_method": "indomaret",
+  "idempotency_key": "chk-indomaret-inv-001"
+}
+```
+*(Catatan: `payment_method: "cstore"` juga diterima).*
+
+#### Struktur Response `payment`:
+```json
+{
+  "status": "pending",
+  "provider": "midtrans",
+  "payment_method": "indomaret",
+  "bank": null,
+  "amount": "105000.00",
+  "subtotal_amount": 100000,
+  "admin_fee": 5000,
+  "checkout_status": "ready",
+  "payment_code": "1029384756",
+  "payment_instruction": {
+    "type": "cstore",
+    "store": "indomaret",
+    "payment_code": "1029384756",
+    "expiry_time": "2026-11-09T23:59:59.000000Z",
+    "expires_at": "2026-11-09T23:59:59.000000Z",
+    "transaction_id": "midtrans-tx-cstore-001",
+    "message": "Tunjukkan kode pembayaran ke kasir Indomaret sebelum batas waktu berakhir.",
+    "instructions": [
+      "Kunjungi gerai Indomaret terdekat.",
+      "Sampaikan kepada kasir ingin melakukan pembayaran Midtrans / UDEV Invoice.",
+      "Tunjukkan kode pembayaran: 1029384756.",
+      "Bayar sesuai total tagihan invoice dan simpan struk pembayaran."
+    ]
+  },
+  "fee_breakdown": {
+    "package_name": "Paket Langganan",
+    "payment_method": "indomaret",
+    "payment_method_name": "Indomaret",
+    "fee_type": "fixed",
+    "fee_rate": 0,
+    "fee_amount": 5000,
+    "subtotal_amount": 100000,
+    "total_amount": 105000
+  },
+  "checkout_expires_at": "2026-11-09T23:59:59.000000Z",
+  "transaction_id": "INV-202611-0001-A1"
+}
+```
+
+#### Implementasi Frontend Larissama (`depan-larissama`):
+- Tampilkan badge / ikon **Gerai Indomaret**.
+- Tampilkan **Kode Pembayaran** (`payment_code`) dengan ukuran huruf besar dan tombol **"Salin Kode Bayar"**.
+- Tampilkan rincian biaya: **Subtotal Tagihan**, **Biaya Admin (Rp5.000)** terpisah, dan **Total Pembayaran**.
+- Tampilkan daftar langkah-langkah pembayaran di kasir:
+  1. Datang ke kasir gerai Indomaret terdekat.
+  2. Sampaikan ingin membayar transaksi Midtrans / UDEV Invoice.
+  3. Berikan kode pembayaran kepada kasir.
+  4. Kasir memverifikasi nama merchant dan nominal total tagihan.
+  5. Selesaikan pembayaran dan simpan struk fisik Indomaret sebagai bukti sah.
+- Pasang polling status setiap 3-5 detik ke endpoint status invoice UDEV.
 
 ---
 

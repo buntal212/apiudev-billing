@@ -3,12 +3,15 @@
 namespace App\Http\Controllers\Api\V1;
 
 use App\Http\Controllers\Controller;
+use App\Models\CheckoutOutboxMessage;
 use App\Models\MidtransMerchantCredential;
 use App\Models\PaymentAttempt;
 use App\Services\InvoiceSettlementService;
 use App\Services\MidtransAuditService;
+use App\Services\MidtransEnvironmentService;
 use App\Services\MidtransSecretStore;
 use App\Services\PaymentAttemptService;
+use App\Services\ReferralCommissionService;
 use App\Services\VerifiedGatewayPayment;
 use Carbon\CarbonImmutable;
 use Illuminate\Http\JsonResponse;
@@ -52,7 +55,7 @@ class MidtransWebhookController extends Controller
 
         $merchantCode = $attempt?->gateway_merchant_code;
         $environment = $attempt?->gateway_environment
-            ?: app(\App\Services\MidtransEnvironmentService::class)->getActiveEnvironment();
+            ?: app(MidtransEnvironmentService::class)->getActiveEnvironment();
 
         $credential = null;
         if ($merchantCode !== null && $merchantCode !== '') {
@@ -238,9 +241,9 @@ class MidtransWebhookController extends Controller
                     $updatedAttempt->update(['gateway_payment_id' => $transactionId]);
                 }
 
-                if ($updatedAttempt->checkoutOutbox !== null && $updatedAttempt->checkoutOutbox->status !== \App\Models\CheckoutOutboxMessage::StatusCompleted) {
+                if ($updatedAttempt->checkoutOutbox !== null && $updatedAttempt->checkoutOutbox->status !== CheckoutOutboxMessage::StatusCompleted) {
                     $updatedAttempt->checkoutOutbox->update([
-                        'status' => \App\Models\CheckoutOutboxMessage::StatusFailed,
+                        'status' => CheckoutOutboxMessage::StatusFailed,
                         'locked_at' => null,
                         'available_at' => null,
                         'error_code' => 'transaction_'.$transactionStatus,
@@ -262,6 +265,56 @@ class MidtransWebhookController extends Controller
             return response()->json([
                 'status' => 'OK',
                 'message' => 'Status pembayaran terminal berhasil diperbarui.',
+                'order_id' => $orderId,
+                'transaction_status' => $transactionStatus,
+            ]);
+        }
+
+        if (in_array($transactionStatus, ['refund', 'partial_refund', 'chargeback', 'partial_chargeback'], true)) {
+            $metadata = is_array($attempt->metadata) ? $attempt->metadata : [];
+            $metadata['reversal'] = [
+                'provider' => 'midtrans',
+                'transaction_status' => $transactionStatus,
+                'transaction_id' => $transactionId,
+                'reversed_at' => now()->toISOString(),
+                'payload' => $payload,
+            ];
+
+            $attempt->update([
+                'metadata' => $metadata,
+                'failure_code' => 'midtrans_'.$transactionStatus,
+                'failure_message' => (string) ($payload['status_message'] ?? 'Transaksi Midtrans mengalami pembalikan pembayaran (reversal/refund).'),
+            ]);
+
+            if ($attempt->invoice !== null) {
+                try {
+                    $referralService = app(ReferralCommissionService::class);
+                    $referralService->reverseCommission(
+                        $attempt->invoice,
+                        "Midtrans webhook reversal: {$transactionStatus}",
+                        null,
+                        $request->ip()
+                    );
+                } catch (\Throwable) {
+                    // Safe idempotency if no referral commission or already reversed
+                }
+            }
+
+            $this->auditService->record(
+                action: 'webhook.reversal',
+                status: 'processed',
+                merchantCode: $attempt->gateway_merchant_code,
+                metadata: [
+                    'order_id' => $orderId,
+                    'transaction_status' => $transactionStatus,
+                    'transaction_id' => $transactionId,
+                    'invoice_id' => $attempt->invoice_id,
+                ]
+            );
+
+            return response()->json([
+                'status' => 'OK',
+                'message' => 'Pembalikan pembayaran (reversal/refund) berhasil diproses.',
                 'order_id' => $orderId,
                 'transaction_status' => $transactionStatus,
             ]);

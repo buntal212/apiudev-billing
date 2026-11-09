@@ -76,6 +76,11 @@ class PaymentAttempt extends Model
         return $this->hasOne(PaymentReconciliationRun::class)->latestOfMany('id');
     }
 
+    public function getAdminFeeAttribute(): float
+    {
+        return (float) ($this->metadata['fee_breakdown']['fee_amount'] ?? 0.0);
+    }
+
     /**
      * @return array<string, string>
      */

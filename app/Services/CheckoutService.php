@@ -19,7 +19,9 @@ use Symfony\Component\HttpFoundation\Response;
 class CheckoutService
 {
     private MidtransGatewayProvisioningClient $midtransClient;
+
     private MidtransSecretStore $midtransSecretStore;
+
     private MidtransFeeService $midtransFeeService;
 
     public function __construct(
@@ -195,7 +197,7 @@ class CheckoutService
                 $merchantReference = $lockedInvoice->invoice_number.'-A'.$attemptNumber;
 
                 if ($resolvedProvider === 'midtrans') {
-                    $activeEnvironment = app(\App\Services\MidtransEnvironmentService::class)->getActiveEnvironment();
+                    $activeEnvironment = app(MidtransEnvironmentService::class)->getActiveEnvironment();
                     $appId = $lockedInvoice->plan?->application_id ?? $lockedInvoice->customer?->application_id;
                     $mapping = ApplicationPaymentGateway::query()
                         ->where('application_id', $appId)
@@ -212,7 +214,7 @@ class CheckoutService
                     }
 
                     $recipientMerchantCode = $mapping->gateway_merchant_code;
-                    $credential = \App\Models\MidtransMerchantCredential::query()
+                    $credential = MidtransMerchantCredential::query()
                         ->where('merchant_code', $recipientMerchantCode)
                         ->where('environment', $activeEnvironment)
                         ->where('is_active', true)
@@ -549,7 +551,7 @@ class CheckoutService
             return strtolower($provider);
         }
 
-        if (in_array($paymentMethod, ['gopay', 'bank_transfer', 'va_bca', 'va_bni', 'va_bri', 'va_permata', 'va_mandiri', 'echannel'], true)) {
+        if (in_array($paymentMethod, ['gopay', 'bank_transfer', 'va_bca', 'va_bni', 'va_bri', 'va_permata', 'va_mandiri', 'echannel', 'indomaret', 'cstore'], true)) {
             return 'midtrans';
         }
 
@@ -559,7 +561,7 @@ class CheckoutService
 
         $appId = $invoice->plan?->application_id ?? $invoice->customer?->application_id;
         if ($appId !== null) {
-            $activeEnvironment = app(\App\Services\MidtransEnvironmentService::class)->getActiveEnvironment();
+            $activeEnvironment = app(MidtransEnvironmentService::class)->getActiveEnvironment();
 
             $midtransMapping = ApplicationPaymentGateway::query()
                 ->where('application_id', $appId)
@@ -601,7 +603,7 @@ class CheckoutService
         $attemptEnv = $attempt->gateway_environment ?: 'sandbox';
 
         // 1. Resolve merchant credentials
-        $credential = \App\Models\MidtransMerchantCredential::query()
+        $credential = MidtransMerchantCredential::query()
             ->where('merchant_code', $attempt->gateway_merchant_code)
             ->where('environment', $attemptEnv)
             ->first();
@@ -650,6 +652,9 @@ class CheckoutService
         } elseif ($method === 'echannel') {
             $paymentType = 'echannel';
             $bank = 'mandiri';
+        } elseif ($method === 'indomaret' || $method === 'cstore') {
+            $paymentType = 'cstore';
+            $bank = null;
         }
 
         $amountMinor = $this->amountMinor((string) $attempt->getRawOriginal('amount'));
@@ -725,7 +730,7 @@ class CheckoutService
                     $this->markDispatchFailure($claimed, false, 'database_storage_failed');
 
                     return;
-                } catch (ValidationException | RuntimeException $e) {
+                } catch (ValidationException|RuntimeException $e) {
                     $this->logMidtransDispatchException('payment_instruction_invalid', $e, $attempt, $claimed);
                     $this->markDispatchFailure($claimed, false, 'payment_instruction_invalid');
 
@@ -759,6 +764,13 @@ class CheckoutService
                 'customer_name' => $attempt->invoice->customer?->name ?? 'Pelanggan UDEV',
                 'customer_email' => $attempt->invoice->customer?->email ?? 'sandbox@udumbara.my.id',
             ];
+
+            if ($paymentType === 'cstore') {
+                $chargeDetails['cstore'] = [
+                    'store' => 'indomaret',
+                    'message' => 'UDEV Invoice',
+                ];
+            }
 
             $feeBreakdown = $attempt->metadata['fee_breakdown'] ?? null;
             if (is_array($feeBreakdown)) {
@@ -821,7 +833,7 @@ class CheckoutService
             $this->markDispatchFailure($claimed, false, 'database_storage_failed');
 
             return;
-        } catch (ValidationException | RuntimeException $e) {
+        } catch (ValidationException|RuntimeException $e) {
             $this->logMidtransDispatchException('payment_instruction_invalid', $e, $attempt, $claimed);
             $this->markDispatchFailure($claimed, false, 'payment_instruction_invalid');
 
@@ -869,7 +881,7 @@ class CheckoutService
             }
             if ($qrUrl === null && ! empty($transactionId)) {
                 $isProd = ($claimed->paymentAttempt->gateway_environment === 'production');
-                $qrUrl = "https://api.".($isProd ? '' : 'sandbox.')."midtrans.com/v2/qris/{$transactionId}/qr-code";
+                $qrUrl = 'https://api.'.($isProd ? '' : 'sandbox.')."midtrans.com/v2/qris/{$transactionId}/qr-code";
             }
             if ($checkoutUrl === null && $qrUrl !== null) {
                 $checkoutUrl = $qrUrl;
@@ -894,6 +906,11 @@ class CheckoutService
         if ($paymentCode === null && ! empty($qrString)) {
             $paymentCode = $qrString;
         }
+        if ($paymentCode === null && ! empty($gatewayData['payment_code'])) {
+            $paymentCode = $gatewayData['payment_code'];
+        } elseif ($paymentCode === null && ! empty($rawResponse['payment_code'])) {
+            $paymentCode = $rawResponse['payment_code'];
+        }
 
         // Validate completeness of instructions before marking checkout completed
         if ($paymentType === 'qris') {
@@ -907,6 +924,10 @@ class CheckoutService
         } elseif ($paymentType === 'gopay') {
             if (empty($checkoutUrl)) {
                 throw new RuntimeException('Tautan pembayaran GoPay Midtrans tidak lengkap dari gateway.');
+            }
+        } elseif ($paymentType === 'cstore') {
+            if (empty($paymentCode)) {
+                throw new RuntimeException('Instruksi pembayaran Indomaret tidak lengkap dari gateway.');
             }
         }
 
@@ -954,6 +975,22 @@ class CheckoutService
                 'transaction_id' => $transactionId,
                 'message' => 'Lanjutkan pembayaran di aplikasi GoPay.',
             ];
+        } elseif ($paymentType === 'cstore') {
+            $instruction = [
+                'type' => 'cstore',
+                'store' => 'indomaret',
+                'payment_code' => $paymentCode,
+                'expiry_time' => $checkoutExpiresAt->toIso8601String(),
+                'expires_at' => $checkoutExpiresAt->toIso8601String(),
+                'transaction_id' => $transactionId,
+                'message' => 'Tunjukkan kode pembayaran ke kasir Indomaret sebelum batas waktu berakhir.',
+                'instructions' => [
+                    'Kunjungi gerai Indomaret terdekat.',
+                    'Sampaikan kepada kasir ingin melakukan pembayaran Midtrans / UDEV Invoice.',
+                    'Tunjukkan kode pembayaran: '.$paymentCode,
+                    'Bayar sesuai total tagihan invoice dan simpan struk pembayaran.',
+                ],
+            ];
         }
 
         DB::transaction(function () use (
@@ -996,6 +1033,9 @@ class CheckoutService
             }
             if ($bank !== null) {
                 $currentMetadata['bank'] = $bank;
+            }
+            if ($paymentType === 'cstore') {
+                $currentMetadata['store'] = 'indomaret';
             }
             $currentMetadata['payment_type'] = $paymentType;
 
@@ -1205,7 +1245,7 @@ class CheckoutService
         }
 
         $attemptEnv = $attempt->gateway_environment ?: 'sandbox';
-        $credential = \App\Models\MidtransMerchantCredential::query()
+        $credential = MidtransMerchantCredential::query()
             ->where('merchant_code', $attempt->gateway_merchant_code)
             ->where('environment', $attemptEnv)
             ->first();
@@ -1286,7 +1326,7 @@ class CheckoutService
             }
 
             $isProdAttempt = ($attempt->gateway_environment === 'production');
-            $qrUrl = $data['qr_url'] ?? "https://api.".($isProdAttempt ? '' : 'sandbox.')."midtrans.com/v2/qris/{$txId}/qr-code";
+            $qrUrl = $data['qr_url'] ?? 'https://api.'.($isProdAttempt ? '' : 'sandbox.')."midtrans.com/v2/qris/{$txId}/qr-code";
             $qrString = $data['qr_string'] ?? null;
             $checkoutUrl = $data['checkout_url'] ?? $qrUrl;
             $rawExpiry = $data['expiry_time'] ?? $data['expires_at'] ?? ($data['raw_response']['expiry_time'] ?? null);
@@ -1301,16 +1341,38 @@ class CheckoutService
                 $metadata['expiry_time'] = $parsedExpiry->toIso8601String();
                 $metadata['expires_at'] = $parsedExpiry->toIso8601String();
             }
+            $paymentCode = $data['payment_code'] ?? ($data['raw_response']['payment_code'] ?? null);
+            if ($paymentCode !== null) {
+                $metadata['payment_code'] = $paymentCode;
+            }
             if (empty($metadata['payment_instruction'])) {
-                $metadata['payment_instruction'] = [
-                    'type' => 'qris_mpm',
-                    'qr_content' => $qrString,
-                    'qr_url' => $qrUrl,
-                    'checkout_url' => $checkoutUrl,
-                    'expiry_time' => $parsedExpiry?->toIso8601String() ?? $attempt->checkout_expires_at?->toIso8601String(),
-                    'expires_at' => $parsedExpiry?->toIso8601String() ?? $attempt->checkout_expires_at?->toIso8601String(),
-                    'message' => 'Pindai kode QRIS Midtrans '.($isProdAttempt ? 'Production' : 'Sandbox').' menggunakan aplikasi e-wallet atau mobile banking.',
-                ];
+                if (($metadata['payment_method'] ?? null) === 'indomaret' || ($metadata['payment_method'] ?? null) === 'cstore' || ($data['payment_type'] ?? null) === 'cstore') {
+                    $metadata['payment_instruction'] = [
+                        'type' => 'cstore',
+                        'store' => 'indomaret',
+                        'payment_code' => $paymentCode,
+                        'expiry_time' => $parsedExpiry?->toIso8601String() ?? $attempt->checkout_expires_at?->toIso8601String(),
+                        'expires_at' => $parsedExpiry?->toIso8601String() ?? $attempt->checkout_expires_at?->toIso8601String(),
+                        'transaction_id' => $txId,
+                        'message' => 'Tunjukkan kode pembayaran ke kasir Indomaret sebelum batas waktu berakhir.',
+                        'instructions' => [
+                            'Kunjungi gerai Indomaret terdekat.',
+                            'Sampaikan kepada kasir ingin melakukan pembayaran Midtrans / UDEV Invoice.',
+                            'Tunjukkan kode pembayaran: '.$paymentCode,
+                            'Bayar sesuai total tagihan invoice dan simpan struk pembayaran.',
+                        ],
+                    ];
+                } else {
+                    $metadata['payment_instruction'] = [
+                        'type' => 'qris_mpm',
+                        'qr_content' => $qrString,
+                        'qr_url' => $qrUrl,
+                        'checkout_url' => $checkoutUrl,
+                        'expiry_time' => $parsedExpiry?->toIso8601String() ?? $attempt->checkout_expires_at?->toIso8601String(),
+                        'expires_at' => $parsedExpiry?->toIso8601String() ?? $attempt->checkout_expires_at?->toIso8601String(),
+                        'message' => 'Pindai kode QRIS Midtrans '.($isProdAttempt ? 'Production' : 'Sandbox').' menggunakan aplikasi e-wallet atau mobile banking.',
+                    ];
+                }
             }
 
             $updatePayload = [

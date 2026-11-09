@@ -129,6 +129,7 @@ Route::prefix('v1/admin')
                 Route::post('{merchantId}/sandbox-tester/uat/create-order-missing-timestamp', [DanaGatewayMerchantProvisioningController::class, 'testCreateOrderMissingTimestamp'])->whereNumber('merchantId');
                 Route::post('{merchantId}/sandbox-tester/uat/create-order-invalid-amount-format', [DanaGatewayMerchantProvisioningController::class, 'testCreateOrderInvalidAmountFormat'])->whereNumber('merchantId');
                 Route::post('{merchantId}/sandbox-tester/uat/create-order-inconsistent-request', [DanaGatewayMerchantProvisioningController::class, 'testCreateOrderInconsistentRequest'])->whereNumber('merchantId');
+                Route::post('{merchantId}/sandbox-tester/uat/create-order-invalid-signature', [DanaGatewayMerchantProvisioningController::class, 'testCreateOrderInvalidSignature'])->whereNumber('merchantId');
                 Route::post('{merchantId}/sandbox-tester/uat/ipg-create-order-success', [DanaGatewayMerchantProvisioningController::class, 'testIpgCreateOrderSuccess'])->whereNumber('merchantId');
                 Route::post('{merchantId}/sandbox-tester/uat/ipg-create-order-missing-timestamp', [DanaGatewayMerchantProvisioningController::class, 'testIpgCreateOrderMissingTimestamp'])->whereNumber('merchantId');
                 Route::post('{merchantId}/sandbox-tester/uat/ipg-create-order-general-error', [DanaGatewayMerchantProvisioningController::class, 'testIpgCreateOrderGeneralError'])->whereNumber('merchantId');

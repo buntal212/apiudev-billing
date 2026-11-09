@@ -9,15 +9,15 @@ use App\Models\MidtransMerchantCredential;
 use App\Models\MidtransPaymentMethodFee;
 use App\Models\PaymentAttempt;
 use App\Services\MidtransAuditService;
+use App\Services\MidtransEnvironmentService;
 use App\Services\MidtransFeeService;
 use App\Services\MidtransGatewayProvisioningClient;
 use App\Services\MidtransSecretStore;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
-use Symfony\Component\HttpFoundation\Response;
-
-use App\Services\MidtransEnvironmentService;
 use Illuminate\Validation\Rule;
+use Illuminate\Validation\ValidationException;
+use Symfony\Component\HttpFoundation\Response;
 
 class MidtransGatewayAdminController extends Controller
 {
@@ -545,7 +545,7 @@ class MidtransGatewayAdminController extends Controller
             'merchant_code' => ['required', 'string'],
             'order_id' => ['nullable', 'string', 'max:100'],
             'amount' => ['required', 'numeric', 'min:1000'],
-            'payment_type' => ['nullable', 'string', 'in:qris,bank_transfer,echannel,gopay'],
+            'payment_type' => ['nullable', 'string', 'in:qris,bank_transfer,echannel,gopay,cstore,indomaret'],
             'bank' => ['nullable', 'string', 'in:bca,bni,bri,permata,mandiri'],
         ]);
 
@@ -743,8 +743,9 @@ class MidtransGatewayAdminController extends Controller
                 confirmationPhrase: $phrase,
                 notes: $validated['notes'] ?? null,
             );
-        } catch (\Illuminate\Validation\ValidationException $e) {
+        } catch (ValidationException $e) {
             $readiness = $this->environmentService->evaluateProductionReadiness();
+
             return response()->json([
                 'status' => 'failed',
                 'message' => $e->getMessage(),

@@ -8,14 +8,19 @@ use App\Models\ApplicationPaymentGateway;
 use App\Models\CheckoutOutboxMessage;
 use App\Models\Invoice;
 use App\Models\MidtransMerchantCredential;
+use App\Models\MidtransPaymentMethodFee;
 use App\Models\PaymentAllocation;
 use App\Models\PaymentAttempt;
+use App\Models\PaymentReconciliationRun;
 use App\Models\SettlementEvent;
 use App\Models\Subscription;
 use App\Models\SubscriptionPlan;
 use App\Models\User;
+use App\Services\CheckoutService;
+use App\Services\MidtransGatewayProvisioningClient;
 use App\Services\MidtransSecretStore;
 use Carbon\CarbonImmutable;
+use Illuminate\Database\QueryException;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Http\Client\Request;
@@ -29,6 +34,7 @@ class MidtransInvoiceCheckoutAndSettlementTest extends TestCase
     use RefreshDatabase;
 
     private const string TestServerKey = 'SB-Mid-server-TESTKEY1234567890';
+
     private const string MerchantCode = 'larissama';
 
     protected function setUp(): void
@@ -691,10 +697,10 @@ class MidtransInvoiceCheckoutAndSettlementTest extends TestCase
         ]);
 
         // Create a run stuck in processing 20 seconds ago
-        $staleRun = \App\Models\PaymentReconciliationRun::query()->create([
+        $staleRun = PaymentReconciliationRun::query()->create([
             'payment_attempt_id' => $attempt->id,
             'attempt_number' => 1,
-            'status' => \App\Models\PaymentReconciliationRun::StatusProcessing,
+            'status' => PaymentReconciliationRun::StatusProcessing,
             'idempotency_key' => 'reconciliation:try:stale-01',
             'started_at' => now()->subSeconds(20),
         ]);
@@ -718,14 +724,14 @@ class MidtransInvoiceCheckoutAndSettlementTest extends TestCase
         $res->assertOk();
 
         // The stale run should have been marked failed due to timeout
-        $this->assertSame(\App\Models\PaymentReconciliationRun::StatusFailed, $staleRun->fresh()->status);
+        $this->assertSame(PaymentReconciliationRun::StatusFailed, $staleRun->fresh()->status);
         $this->assertSame('reconciliation_stale_timeout', $staleRun->fresh()->error_code);
 
         // A new run should have been created and succeeded in pending check
         $latestRun = $attempt->latestReconciliationRun()->first();
         $this->assertNotNull($latestRun);
         $this->assertSame(2, $latestRun->attempt_number);
-        $this->assertSame(\App\Models\PaymentReconciliationRun::StatusPending, $latestRun->status);
+        $this->assertSame(PaymentReconciliationRun::StatusPending, $latestRun->status);
     }
 
     public function test_midtrans_idempotent_settlement_prevents_duplicate_subscription_extension(): void
@@ -1246,9 +1252,9 @@ class MidtransInvoiceCheckoutAndSettlementTest extends TestCase
         PaymentAttempt::updating(function (PaymentAttempt $model) use ($sensitiveQr, $sensitiveEmail, $sensitivePhone, $sensitiveCiphertext): void {
             if ($model->isDirty('gateway_payment_id')) {
                 $pdoException = new \PDOException("SQLSTATE[22001]: String data, right truncated: 1406 Data too long for column 'gateway_payment_id' at row 1");
-                throw new \Illuminate\Database\QueryException(
+                throw new QueryException(
                     'mysql',
-                    "update `payment_attempts` set `gateway_payment_id` = ?, `checkout_url` = ?, `email` = ?, `phone` = ?, `qr` = ? where `id` = ?",
+                    'update `payment_attempts` set `gateway_payment_id` = ?, `checkout_url` = ?, `email` = ?, `phone` = ?, `qr` = ? where `id` = ?',
                     [
                         '43e33f67-a2ef-4786-9a25-a131750699cf',
                         $sensitiveCiphertext,
@@ -1297,7 +1303,7 @@ class MidtransInvoiceCheckoutAndSettlementTest extends TestCase
 
     public function test_checkout_service_sanitize_log_text_redacts_all_sensitive_patterns(): void
     {
-        $checkoutService = app(\App\Services\CheckoutService::class);
+        $checkoutService = app(CheckoutService::class);
         $method = new \ReflectionMethod($checkoutService, 'sanitizeLogText');
 
         $input = "Error: (Connection: mysql, SQL: select * from users where token = 'SB-Mid-server-abc123' and client = 'SB-Mid-client-xyz789' and auth = 'Authorization: Bearer mytoken123456789' and email = 'user@example.com' and phone = '081234567890' and qr = '00020101021226590014ID.LINKAJA.WWW' and cipher = 'eyJpdiI6Inh4eCIsInZhbHVlIjoiMTIzNCJ9' [bindings: [1, 2]])";
@@ -1338,7 +1344,7 @@ class MidtransInvoiceCheckoutAndSettlementTest extends TestCase
             ], 200),
         ]);
 
-        $client = app(\App\Services\MidtransGatewayProvisioningClient::class);
+        $client = app(MidtransGatewayProvisioningClient::class);
         $result = $client->querySandboxStatus('larissama', self::TestServerKey, $orderId, 'sandbox');
 
         $this->assertSame('success', $result['status']);
@@ -1390,7 +1396,7 @@ class MidtransInvoiceCheckoutAndSettlementTest extends TestCase
             ], 200),
         ]);
 
-        $checkoutService = app(\App\Services\CheckoutService::class);
+        $checkoutService = app(CheckoutService::class);
         $method = new \ReflectionMethod($checkoutService, 'dispatch');
         $method->invoke($checkoutService, $outbox->id);
 
@@ -1926,5 +1932,279 @@ class MidtransInvoiceCheckoutAndSettlementTest extends TestCase
         // Assert no new attempt was created
         $this->assertSame(1, PaymentAttempt::query()->where('invoice_id', $invoice->id)->count());
         $this->assertSame(Invoice::StatusPending, $invoice->fresh()->status);
+    }
+
+    public function test_invoice_checkout_with_indomaret_cstore_creates_pending_attempt_with_payment_code(): void
+    {
+        [$invoice, $credential] = $this->setupInvoiceWithMidtrans();
+
+        MidtransPaymentMethodFee::query()->create([
+            'merchant_code' => 'udev-central',
+            'payment_method' => 'indomaret',
+            'payment_method_name' => 'Indomaret',
+            'fee_type' => 'fixed',
+            'fee_rate' => 0.0,
+            'fixed_amount' => 5000.00,
+            'is_active' => true,
+        ]);
+
+        Http::fake([
+            'https://api.sandbox.midtrans.com/v2/charge' => Http::response([
+                'status_code' => '201',
+                'status_message' => 'Indomaret transaction is created',
+                'transaction_id' => 'midtrans-tx-cstore-001',
+                'order_id' => $invoice->invoice_number.'-A1',
+                'gross_amount' => '55000.00',
+                'payment_type' => 'cstore',
+                'transaction_status' => 'pending',
+                'payment_code' => '1029384756',
+                'store' => 'indomaret',
+                'expiry_time' => '2026-11-09 23:59:59',
+            ], 201),
+        ]);
+
+        $admin = User::factory()->create(['is_admin' => true]);
+        Sanctum::actingAs($admin, ['admin:access']);
+
+        $response = $this->postJson("/api/v1/admin/invoices/{$invoice->id}/checkout", [
+            'payment_method' => 'indomaret',
+        ], ['Idempotency-Key' => 'idemp-midtrans-indomaret-001']);
+
+        $response->assertOk()
+            ->assertJsonPath('data.invoice_id', $invoice->id)
+            ->assertJsonPath('data.gateway_payment_id', 'midtrans-tx-cstore-001')
+            ->assertJsonPath('data.payment_method', 'indomaret')
+            ->assertJsonPath('data.payment_code', '1029384756')
+            ->assertJsonPath('data.checkout_status', 'ready')
+            ->assertJsonPath('data.status', PaymentAttempt::StatusPending)
+            ->assertJsonPath('data.payment_instruction.store', 'indomaret')
+            ->assertJsonPath('data.payment_instruction.payment_code', '1029384756');
+
+        $attempt = PaymentAttempt::query()->where('invoice_id', $invoice->id)->firstOrFail();
+        $this->assertSame('midtrans', $attempt->provider);
+        $this->assertSame(self::MerchantCode, $attempt->gateway_merchant_code);
+        $this->assertSame('1029384756', $attempt->metadata['payment_code']);
+        $this->assertSame('indomaret', $attempt->metadata['store']);
+        $this->assertSame('cstore', $attempt->metadata['payment_instruction']['type']);
+        $this->assertNotEmpty($attempt->metadata['payment_instruction']['instructions']);
+
+        // Assert fee separation: subtotal = 50,000, fee = 5,000, total = 55,000
+        $this->assertEquals(55000.00, (float) $attempt->amount);
+        $this->assertEquals(5000.00, (float) $attempt->admin_fee);
+        $this->assertSame(Invoice::StatusPending, $invoice->fresh()->status);
+    }
+
+    public function test_indomaret_webhook_settlement_marks_invoice_paid_and_is_idempotent(): void
+    {
+        [$invoice, $credential] = $this->setupInvoiceWithMidtrans();
+
+        $attempt = PaymentAttempt::query()->create([
+            'invoice_id' => $invoice->id,
+            'attempt_number' => 1,
+            'provider' => 'midtrans',
+            'merchant_reference' => $invoice->invoice_number.'-A1',
+            'gateway_merchant_code' => self::MerchantCode,
+            'gateway_environment' => 'sandbox',
+            'amount' => '55000.00',
+            'admin_fee' => '5000.00',
+            'currency' => 'IDR',
+            'status' => PaymentAttempt::StatusPending,
+            'gateway_payment_id' => 'midtrans-cstore-tx-101',
+            'idempotency_key' => 'checkout:'.$invoice->id.':cstore',
+            'requested_at' => now(),
+            'metadata' => [
+                'order_id' => $invoice->invoice_number.'-A1',
+                'payment_method' => 'indomaret',
+                'payment_code' => '1029384756',
+                'store' => 'indomaret',
+                'fee_breakdown' => [
+                    'fee_amount' => '5000.00',
+                    'subtotal_amount' => '50000.00',
+                ],
+            ],
+        ]);
+
+        $orderId = $attempt->merchant_reference;
+        $statusCode = '200';
+        $grossAmount = '55000.00';
+        $signature = hash('sha512', $orderId.$statusCode.$grossAmount.self::TestServerKey);
+
+        $payload = [
+            'order_id' => $orderId,
+            'status_code' => $statusCode,
+            'gross_amount' => $grossAmount,
+            'signature_key' => $signature,
+            'transaction_status' => 'settlement',
+            'fraud_status' => 'accept',
+            'transaction_id' => 'midtrans-cstore-tx-101',
+            'payment_type' => 'cstore',
+            'settlement_time' => now()->format('Y-m-d H:i:s'),
+        ];
+
+        // 1. Initial Webhook Settlement
+        $response = $this->postJson('/api/v1/payment-gateways/midtrans/webhook', $payload);
+        $response->assertOk()
+            ->assertJsonPath('status', 'OK')
+            ->assertJsonPath('transaction_status', 'settlement');
+
+        $this->assertSame(PaymentAttempt::StatusSucceeded, $attempt->fresh()->status);
+        $this->assertSame(Invoice::StatusPaid, $invoice->fresh()->status);
+        $this->assertNotNull($invoice->fresh()->paid_at);
+        $this->assertSame(1, SettlementEvent::query()->where('payment_attempt_id', $attempt->id)->count());
+        $this->assertSame(1, PaymentAllocation::query()->where('invoice_id', $invoice->id)->count());
+
+        // 2. Duplicate Webhook (Idempotency check)
+        $dupResponse = $this->postJson('/api/v1/payment-gateways/midtrans/webhook', $payload);
+        $dupResponse->assertOk()
+            ->assertJsonPath('status', 'OK');
+
+        $this->assertSame(PaymentAttempt::StatusSucceeded, $attempt->fresh()->status);
+        $this->assertSame(Invoice::StatusPaid, $invoice->fresh()->status);
+        $this->assertSame(1, SettlementEvent::query()->where('payment_attempt_id', $attempt->id)->count());
+        $this->assertSame(1, PaymentAllocation::query()->where('invoice_id', $invoice->id)->count());
+    }
+
+    public function test_indomaret_webhook_expire_and_deny_handled_safely(): void
+    {
+        [$invoice, $credential] = $this->setupInvoiceWithMidtrans();
+
+        $attempt = PaymentAttempt::query()->create([
+            'invoice_id' => $invoice->id,
+            'attempt_number' => 1,
+            'provider' => 'midtrans',
+            'merchant_reference' => $invoice->invoice_number.'-A1',
+            'gateway_merchant_code' => self::MerchantCode,
+            'gateway_environment' => 'sandbox',
+            'amount' => '55000.00',
+            'admin_fee' => '5000.00',
+            'currency' => 'IDR',
+            'status' => PaymentAttempt::StatusPending,
+            'gateway_payment_id' => 'midtrans-cstore-tx-102',
+            'idempotency_key' => 'checkout:'.$invoice->id.':cstore-expire',
+            'requested_at' => now(),
+            'metadata' => [
+                'order_id' => $invoice->invoice_number.'-A1',
+                'payment_method' => 'indomaret',
+                'payment_code' => '1029384756',
+            ],
+        ]);
+
+        $orderId = $attempt->merchant_reference;
+        $statusCode = '200';
+        $grossAmount = '55000.00';
+        $signature = hash('sha512', $orderId.$statusCode.$grossAmount.self::TestServerKey);
+
+        // Test expire
+        $expirePayload = [
+            'order_id' => $orderId,
+            'status_code' => $statusCode,
+            'gross_amount' => $grossAmount,
+            'signature_key' => $signature,
+            'transaction_status' => 'expire',
+            'status_message' => 'Indomaret transaction expired',
+            'transaction_id' => 'midtrans-cstore-tx-102',
+            'payment_type' => 'cstore',
+        ];
+
+        $response = $this->postJson('/api/v1/payment-gateways/midtrans/webhook', $expirePayload);
+        $response->assertOk()
+            ->assertJsonPath('status', 'OK')
+            ->assertJsonPath('transaction_status', 'expire');
+
+        $this->assertSame(PaymentAttempt::StatusExpired, $attempt->fresh()->status);
+        $this->assertSame(Invoice::StatusPending, $invoice->fresh()->status);
+
+        // Test deny on new attempt
+        $attemptDeny = PaymentAttempt::query()->create([
+            'invoice_id' => $invoice->id,
+            'attempt_number' => 2,
+            'provider' => 'midtrans',
+            'merchant_reference' => $invoice->invoice_number.'-A2',
+            'gateway_merchant_code' => self::MerchantCode,
+            'gateway_environment' => 'sandbox',
+            'amount' => '55000.00',
+            'currency' => 'IDR',
+            'status' => PaymentAttempt::StatusPending,
+            'gateway_payment_id' => 'midtrans-cstore-tx-103',
+            'idempotency_key' => 'checkout:'.$invoice->id.':cstore-deny',
+            'requested_at' => now(),
+            'metadata' => ['payment_method' => 'indomaret'],
+        ]);
+
+        $orderIdDeny = $attemptDeny->merchant_reference;
+        $sigDeny = hash('sha512', $orderIdDeny.$statusCode.$grossAmount.self::TestServerKey);
+
+        $denyPayload = [
+            'order_id' => $orderIdDeny,
+            'status_code' => $statusCode,
+            'gross_amount' => $grossAmount,
+            'signature_key' => $sigDeny,
+            'transaction_status' => 'deny',
+            'status_message' => 'Indomaret transaction denied',
+            'transaction_id' => 'midtrans-cstore-tx-103',
+            'payment_type' => 'cstore',
+        ];
+
+        $responseDeny = $this->postJson('/api/v1/payment-gateways/midtrans/webhook', $denyPayload);
+        $responseDeny->assertOk()
+            ->assertJsonPath('status', 'OK')
+            ->assertJsonPath('transaction_status', 'deny');
+
+        $this->assertSame(PaymentAttempt::StatusFailed, $attemptDeny->fresh()->status);
+        $this->assertSame(Invoice::StatusPending, $invoice->fresh()->status);
+    }
+
+    public function test_indomaret_webhook_payment_reversal_handled_safely(): void
+    {
+        [$invoice, $credential] = $this->setupInvoiceWithMidtrans();
+
+        $attempt = PaymentAttempt::query()->create([
+            'invoice_id' => $invoice->id,
+            'attempt_number' => 1,
+            'provider' => 'midtrans',
+            'merchant_reference' => $invoice->invoice_number.'-A1',
+            'gateway_merchant_code' => self::MerchantCode,
+            'gateway_environment' => 'sandbox',
+            'amount' => '55000.00',
+            'admin_fee' => '5000.00',
+            'currency' => 'IDR',
+            'status' => PaymentAttempt::StatusSucceeded,
+            'gateway_payment_id' => 'midtrans-cstore-tx-104',
+            'idempotency_key' => 'checkout:'.$invoice->id.':cstore-reversal',
+            'requested_at' => now(),
+            'paid_at' => now(),
+            'metadata' => [
+                'order_id' => $invoice->invoice_number.'-A1',
+                'payment_method' => 'indomaret',
+                'payment_code' => '1029384756',
+            ],
+        ]);
+        $invoice->update(['status' => Invoice::StatusPaid, 'paid_at' => now()]);
+
+        $orderId = $attempt->merchant_reference;
+        $statusCode = '200';
+        $grossAmount = '55000.00';
+        $signature = hash('sha512', $orderId.$statusCode.$grossAmount.self::TestServerKey);
+
+        $refundPayload = [
+            'order_id' => $orderId,
+            'status_code' => $statusCode,
+            'gross_amount' => $grossAmount,
+            'signature_key' => $signature,
+            'transaction_status' => 'refund',
+            'status_message' => 'Indomaret payment refunded',
+            'transaction_id' => 'midtrans-cstore-tx-104',
+            'payment_type' => 'cstore',
+        ];
+
+        $response = $this->postJson('/api/v1/payment-gateways/midtrans/webhook', $refundPayload);
+        $response->assertOk()
+            ->assertJsonPath('status', 'OK')
+            ->assertJsonPath('transaction_status', 'refund');
+
+        $attempt->refresh();
+        $this->assertArrayHasKey('reversal', $attempt->metadata);
+        $this->assertSame('refund', $attempt->metadata['reversal']['transaction_status']);
+        $this->assertSame('midtrans_refund', $attempt->failure_code);
     }
 }

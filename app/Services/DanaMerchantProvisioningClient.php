@@ -169,6 +169,15 @@ class DanaMerchantProvisioningClient
     }
 
     /** @return array<string, mixed> */
+    public function testCreateOrderInvalidSignature(int $merchantId): array
+    {
+        $response = $this->send(fn (PendingRequest $request): Response => $request
+            ->post("/api/v1/internal/merchants/{$merchantId}/sandbox-tester/uat/create-order-invalid-signature"));
+
+        return $this->sandboxCreateOrderInvalidSignatureUat($this->decodeSuccessfulResponse($response)['data'] ?? null);
+    }
+
+    /** @return array<string, mixed> */
     public function testIpgCreateOrderSuccess(int $merchantId): array
     {
         $response = $this->send(fn (PendingRequest $request): Response => $request
@@ -835,6 +844,36 @@ class DanaMerchantProvisioningClient
             || (! is_null($secondRequest['response_code'] ?? null) && ! is_string($secondRequest['response_code']))
             || (! is_null($secondRequest['response_message'] ?? null) && ! is_string($secondRequest['response_message']))
             || ! is_array($received)) {
+            throw new DanaMerchantProvisioningException('Respons UAT Create Order Sandbox tidak valid.', 502, false);
+        }
+
+        return $result;
+    }
+
+    /** @return array<string, mixed> */
+    private function sandboxCreateOrderInvalidSignatureUat(mixed $result): array
+    {
+        $uat = is_array($result) ? ($result['uat'] ?? null) : null;
+        $expected = is_array($uat) ? ($uat['expected'] ?? null) : null;
+        $received = is_array($uat) ? ($uat['received'] ?? null) : null;
+        $request = is_array($uat) ? ($uat['request'] ?? null) : null;
+
+        if (! is_array($result)
+            || ! is_string($result['merchant_code'] ?? null)
+            || ($result['environment'] ?? null) !== 'sandbox'
+            || ! is_array($uat)
+            || ($uat['scenario'] ?? null) !== 'create_order_invalid_signature'
+            || ! is_bool($uat['passed'] ?? null)
+            || ! is_array($expected)
+            || ($expected['response_code'] ?? null) !== '4015400'
+            || ! is_string($expected['response_message'] ?? null)
+            || ! is_array($received)
+            || ! is_int($received['http_status'] ?? null)
+            || (! is_null($received['response_code'] ?? null) && ! is_string($received['response_code']))
+            || ! is_string($received['response_message'] ?? null)
+            || (! is_null($received['request_id'] ?? null) && ! is_string($received['request_id']))
+            || ! is_array($request)
+            || ($request['signature_override'] ?? null) !== 'invalid_signature') {
             throw new DanaMerchantProvisioningException('Respons UAT Create Order Sandbox tidak valid.', 502, false);
         }
 

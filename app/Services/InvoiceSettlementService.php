@@ -327,7 +327,7 @@ class InvoiceSettlementService
             $this->reject('merchant_identity_mismatch', 'Merchant gateway tidak cocok dengan payment attempt.');
         }
 
-        $feeAmount = (float) ($attempt->metadata['fee_breakdown']['fee_amount'] ?? 0.0);
+        $feeAmount = (float) ($attempt->metadata['fee_breakdown']['fee_amount'] ?? ($attempt->admin_fee ?? 0.0));
         $expectedAttemptAmount = (float) $invoice->getRawOriginal('amount') + $feeAmount;
 
         if (strtoupper((string) $attempt->currency) !== $verification->currency

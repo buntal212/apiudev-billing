@@ -55,6 +55,18 @@ class MidtransFeeService
             'rate' => 2.0000,
             'fixed' => 0.00,
         ],
+        'indomaret' => [
+            'name' => 'Indomaret',
+            'type' => MidtransPaymentMethodFee::TypeFixed,
+            'rate' => 0.0000,
+            'fixed' => 5000.00,
+        ],
+        'cstore' => [
+            'name' => 'Indomaret (CStore)',
+            'type' => MidtransPaymentMethodFee::TypeFixed,
+            'rate' => 0.0000,
+            'fixed' => 5000.00,
+        ],
     ];
 
     /**
@@ -188,6 +200,7 @@ class MidtransFeeService
             'va_permata' => 'Permata Virtual Account',
             'va_mandiri', 'echannel' => 'Mandiri Bill Payment',
             'gopay' => 'GoPay',
+            'indomaret', 'cstore' => 'Indomaret',
             'dana_wallet' => 'DANA Wallet',
             'bank_transfer' => 'Transfer Bank',
             default => strtoupper(str_replace('_', ' ', $paymentMethod)),

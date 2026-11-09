@@ -224,6 +224,21 @@ class DanaGatewayMerchantProvisioningController extends Controller
         return response()->json(['data' => $result])->header('Cache-Control', 'no-store');
     }
 
+    public function testCreateOrderInvalidSignature(int $merchantId, DanaMerchantProvisioningClient $client): JsonResponse
+    {
+        if ($this->sandboxProvisionedMerchant($merchantId) === null) {
+            return $this->merchantNotFound();
+        }
+
+        try {
+            $result = $client->testCreateOrderInvalidSignature($merchantId);
+        } catch (DanaMerchantProvisioningException $exception) {
+            return $this->gatewayError($exception)->header('Cache-Control', 'no-store');
+        }
+
+        return response()->json(['data' => $result])->header('Cache-Control', 'no-store');
+    }
+
     public function testIpgCreateOrderSuccess(int $merchantId, Request $request, DanaMerchantProvisioningClient $client): JsonResponse
     {
         $merchant = $this->sandboxProvisionedMerchant($merchantId);
