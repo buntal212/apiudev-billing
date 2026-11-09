@@ -15,8 +15,8 @@ Semua endpoint integrasi menggunakan base URL API UDEV yang dikonfigurasi pada e
 1. **Isolasi Data Aplikasi**: Semua data pelanggan, paket, invoice, transaksi, dan subscription terisolasi secara ketat berdasarkan aplikasi yang terikat pada Global API Token.
 2. **Kedaulatan Nominal & Durasi**: Larissama **tidak boleh** menentukan nominal Rupiah, currency, durasi hari, atau environment gateway secara sepihak. Seluruh kalkulasi harga dan durasi berasal dari UDEV Billing.
 3. **Konfirmasi Gateway yang Sah (Zero Fake Settlement)**:
-    - Invoice **hanya berubah menjadi `paid`** setelah konfirmasi pembayaran gateway DANA terverifikasi secara kriptografis dan nominal/referensinya cocok.
-    - Endpoint simulasi atau bypass internal **tidak dapat** menandai invoice `paid` atau mengaktifkan subscription.
+   - Invoice **hanya berubah menjadi `paid`** setelah konfirmasi pembayaran gateway DANA terverifikasi secara kriptografis dan nominal/referensinya cocok.
+   - Endpoint simulasi atau bypass internal **tidak dapat** menandai invoice `paid` atau mengaktifkan subscription.
 4. **Idempotensi Penuh**: Setiap request mutasi data (`POST`, `PATCH`) wajib menyertakan header `Idempotency-Key` untuk mencegah invoice ganda, checkout ganda, dan aktivasi ganda akibat network retry.
 
 ---
@@ -66,42 +66,42 @@ Mengambil daftar paket langganan aktif yang tersedia untuk aplikasi Larissama.
 
 ```json
 {
-    "data": [
-        {
-            "id": 10,
-            "code": "BASIC-SALON",
-            "name": "Paket Basic Salon",
-            "description": "Akses manajemen kasir dan reservasi salon.",
-            "price": "100000.00",
-            "currency": "IDR",
-            "duration_days": 30,
-            "is_active": true
-        },
-        {
-            "id": 11,
-            "code": "PRO-SALON",
-            "name": "Paket Pro Salon",
-            "description": "Fitur lengkap multi-cabang, inventori, dan komisi staf.",
-            "price": "250000.00",
-            "currency": "IDR",
-            "duration_days": 30,
-            "is_active": true
-        }
-    ],
-    "links": {
-        "first": "https://api.udev.test/api/v1/integrations/subscription-plans?page=1",
-        "last": "https://api.udev.test/api/v1/integrations/subscription-plans?page=1",
-        "prev": null,
-        "next": null
+  "data": [
+    {
+      "id": 10,
+      "code": "BASIC-SALON",
+      "name": "Paket Basic Salon",
+      "description": "Akses manajemen kasir dan reservasi salon.",
+      "price": "100000.00",
+      "currency": "IDR",
+      "duration_days": 30,
+      "is_active": true
     },
-    "meta": {
-        "current_page": 1,
-        "from": 1,
-        "last_page": 1,
-        "per_page": 15,
-        "to": 2,
-        "total": 2
+    {
+      "id": 11,
+      "code": "PRO-SALON",
+      "name": "Paket Pro Salon",
+      "description": "Fitur lengkap multi-cabang, inventori, dan komisi staf.",
+      "price": "250000.00",
+      "currency": "IDR",
+      "duration_days": 30,
+      "is_active": true
     }
+  ],
+  "links": {
+    "first": "https://api.udev.test/api/v1/integrations/subscription-plans?page=1",
+    "last": "https://api.udev.test/api/v1/integrations/subscription-plans?page=1",
+    "prev": null,
+    "next": null
+  },
+  "meta": {
+    "current_page": 1,
+    "from": 1,
+    "last_page": 1,
+    "per_page": 15,
+    "to": 2,
+    "total": 2
+  }
 }
 ```
 
@@ -119,12 +119,12 @@ Mendaftarkan atau menyinkronkan pelanggan Larissama ke UDEV.
 
 ```json
 {
-    "external_customer_id": "SALON-001",
-    "name": "Salon Cantika BSD",
-    "owner_name": "Siti Rahma",
-    "email": "cantika.bsd@example.test",
-    "phone": "081234567890",
-    "status": "active"
+  "external_customer_id": "SALON-001",
+  "name": "Salon Cantika BSD",
+  "owner_name": "Siti Rahma",
+  "email": "cantika.bsd@example.test",
+  "phone": "081234567890",
+  "status": "active"
 }
 ```
 
@@ -132,20 +132,20 @@ Mendaftarkan atau menyinkronkan pelanggan Larissama ke UDEV.
 
 ```json
 {
-    "data": {
-        "external_customer_id": "SALON-001",
-        "name": "Salon Cantika BSD",
-        "owner_name": "Siti Rahma",
-        "email": "cantika.bsd@example.test",
-        "phone_number": "081234567890",
-        "is_active": true,
-        "source": "integration",
-        "sync_status": "synced"
-    },
-    "sync": {
-        "status": "accepted"
-    },
-    "request_id": "req-01HZY0Z1P8..."
+  "data": {
+    "external_customer_id": "SALON-001",
+    "name": "Salon Cantika BSD",
+    "owner_name": "Siti Rahma",
+    "email": "cantika.bsd@example.test",
+    "phone_number": "081234567890",
+    "is_active": true,
+    "source": "integration",
+    "sync_status": "synced"
+  },
+  "sync": {
+    "status": "accepted"
+  },
+  "request_id": "req-01HZY0Z1P8..."
 }
 ```
 
@@ -161,8 +161,8 @@ Digunakan oleh antarmuka kasir/pemilik Larissama untuk melihat pratinjau kalkula
 
 ```json
 {
-    "subscription_plan_code": "BASIC-SALON",
-    "period_count": 3
+  "subscription_plan_code": "BASIC-SALON",
+  "period_count": 3
 }
 ```
 
@@ -170,25 +170,25 @@ Digunakan oleh antarmuka kasir/pemilik Larissama untuk melihat pratinjau kalkula
 
 ```json
 {
-    "data": {
-        "customer_external_id": "SALON-001",
-        "period_count": 3,
-        "plan": {
-            "code": "BASIC-SALON",
-            "name": "Paket Basic Salon",
-            "duration_days": 90,
-            "period_count": 3
-        },
-        "pricing": {
-            "unit_price": "100000.00",
-            "period_count": 3,
-            "normal_price": "300000.00",
-            "discount": "0.00",
-            "final_price": "300000.00",
-            "currency": "IDR"
-        }
+  "data": {
+    "customer_external_id": "SALON-001",
+    "period_count": 3,
+    "plan": {
+      "code": "BASIC-SALON",
+      "name": "Paket Basic Salon",
+      "duration_days": 90,
+      "period_count": 3
     },
-    "request_id": "req-01HZY11B4..."
+    "pricing": {
+      "unit_price": "100000.00",
+      "period_count": 3,
+      "normal_price": "300000.00",
+      "discount": "0.00",
+      "final_price": "300000.00",
+      "currency": "IDR"
+    }
+  },
+  "request_id": "req-01HZY11B4..."
 }
 ```
 
@@ -208,9 +208,9 @@ Idempotency-Key: laris-inv-SALON-001-20261026-001
 
 ```json
 {
-    "subscription_plan_code": "BASIC-SALON",
-    "period_count": 3,
-    "due_at": "2026-10-27T12:00:00+07:00"
+  "subscription_plan_code": "BASIC-SALON",
+  "period_count": 3,
+  "due_at": "2026-10-27T12:00:00+07:00"
 }
 ```
 
@@ -225,34 +225,34 @@ Idempotency-Key: laris-inv-SALON-001-20261026-001
 
 ```json
 {
-    "data": {
-        "invoice_number": "INV-20261026-SALON01",
-        "status": "pending",
-        "issued_at": "2026-10-26T14:30:00.000000Z",
-        "due_at": "2026-10-27T05:00:00.000000Z",
-        "paid_at": null,
-        "period_count": 3,
-        "duration_days": 90,
-        "plan": {
-            "code": "BASIC-SALON",
-            "name": "Paket Basic Salon",
-            "duration_days": 90,
-            "period_count": 3
-        },
-        "pricing": {
-            "normal_price": "300000.00",
-            "discount": "0.00",
-            "final_price": "300000.00",
-            "currency": "IDR"
-        },
-        "payment": null,
-        "subscription": null,
-        "tracking": {
-            "settlement_id": null,
-            "settlement_status": null
-        }
+  "data": {
+    "invoice_number": "INV-20261026-SALON01",
+    "status": "pending",
+    "issued_at": "2026-10-26T14:30:00.000000Z",
+    "due_at": "2026-10-27T05:00:00.000000Z",
+    "paid_at": null,
+    "period_count": 3,
+    "duration_days": 90,
+    "plan": {
+      "code": "BASIC-SALON",
+      "name": "Paket Basic Salon",
+      "duration_days": 90,
+      "period_count": 3
     },
-    "request_id": "req-01HZY14A7..."
+    "pricing": {
+      "normal_price": "300000.00",
+      "discount": "0.00",
+      "final_price": "300000.00",
+      "currency": "IDR"
+    },
+    "payment": null,
+    "subscription": null,
+    "tracking": {
+      "settlement_id": null,
+      "settlement_status": null
+    }
+  },
+  "request_id": "req-01HZY14A7..."
 }
 ```
 
@@ -274,7 +274,7 @@ Idempotency-Key: laris-chk-INV-20261026-SALON01-01
 
 ```json
 {
-    "payment_method": "qris"
+  "payment_method": "qris"
 }
 ```
 
@@ -283,55 +283,55 @@ _Catatan: `payment_method` bersifat opsional; nilai yang didukung adalah `"qris"
 #### Metode Pembayaran yang Didukung:
 
 1. **`qris` (Default & Rekomendasi Utama)**:
-    - Menghasilkan payload string QRIS standar EMVCo (`qr_content` / `payment_code`) dan objek instruksi pembayaran (`payment_instruction`).
-    - Larissama merender kode QR secara lokal di browser/aplikasi pelanggan (misal menggunakan library `qrcode`).
-    - Pelanggan memindai QR menggunakan aplikasi DANA atau e-wallet/mobile banking mana pun yang mendukung QRIS Sandbox.
-    - Sesi QRIS memiliki batas kedaluwarsa (`checkout_expires_at`).
+   - Menghasilkan payload string QRIS standar EMVCo (`qr_content` / `payment_code`) dan objek instruksi pembayaran (`payment_instruction`).
+   - Larissama merender kode QR secara lokal di browser/aplikasi pelanggan (misal menggunakan library `qrcode`).
+   - Pelanggan memindai QR menggunakan aplikasi DANA atau e-wallet/mobile banking mana pun yang mendukung QRIS Sandbox.
+   - Sesi QRIS memiliki batas kedaluwarsa (`checkout_expires_at`).
 2. **`dana_wallet`**:
-    - Menghasilkan `checkout_url` untuk pengalihan (redirect) browser langsung ke antarmuka web DANA Sandbox.
+   - Menghasilkan `checkout_url` untuk pengalihan (redirect) browser langsung ke antarmuka web DANA Sandbox.
 
 #### Mekanisme Kerja & State Lifecycle:
 
 1. UDEV Billing mencocokkan konfigurasi merchant DANA Sandbox aktif yang dialokasikan untuk Larissama.
 2. Memeriksa sesi pembayaran aktif sebelumnya:
-    - Jika sesi sebelumnya sudah kedaluwarsa (`checkout_expires_at <= now()`), UDEV otomatis menandai attempt lama sebagai `expired` dan membuat sesi baru.
-    - Jika pelanggan mengganti metode pembayaran (misal dari DANA Wallet ke QRIS), attempt lama otomatis dibatalkan (`cancelled`) untuk memberi jalan pada attempt baru.
+   - Jika sesi sebelumnya sudah kedaluwarsa (`checkout_expires_at <= now()`), UDEV otomatis menandai attempt lama sebagai `expired` dan membuat sesi baru.
+   - Jika pelanggan mengganti metode pembayaran (misal dari DANA Wallet ke QRIS), attempt lama otomatis dibatalkan (`cancelled`) untuk memberi jalan pada attempt baru.
 3. Membentuk entitas `PaymentAttempt` dan membuat outbox message secara transactional.
 4. Menghubungi DANA Sandbox Gateway:
-    - Untuk QRIS: Meminta payload QRIS (`NETWORK_PAY` + `NETWORK_PAY_PG_QRIS`) dan menerima data string QRIS di `additionalInfo.paymentCode`.
-    - Untuk DANA Wallet: Meminta sesi checkout dan menerima `checkout_url`.
+   - Untuk QRIS: Meminta payload QRIS (`NETWORK_PAY` + `NETWORK_PAY_PG_QRIS`) dan menerima data string QRIS di `additionalInfo.paymentCode`.
+   - Untuk DANA Wallet: Meminta sesi checkout dan menerima `checkout_url`.
 5. **Status invoice tetap `pending`**. Status invoice **tidak pernah** berubah menjadi `paid` hanya karena sesi checkout berhasil dibuat atau kode QR ditampilkan. Pembayaran hanya sah setelah webhook konfirmasi pembayaran gateway terverifikasi.
 
 #### Contoh Respons QRIS Ready (`200 OK` atau `202 Accepted`):
 
 ```json
 {
-    "data": {
-        "invoice_number": "INV-20261026-SALON01",
-        "status": "pending",
-        "period_count": 3,
-        "duration_days": 90,
-        "payment": {
-            "status": "pending",
-            "provider": "dana",
-            "payment_method": "qris",
-            "checkout_status": "ready",
-            "checkout_url": null,
-            "qr_content": "00020101021226680014ID.DANA.WWW01189360091100220138240215INV20261026SALON015204581253033605802ID5914UDEV BILLING6007JAKARTA61051234062320115INV20261026SALON010708DANA00016304ABCD",
-            "payment_code": "00020101021226680014ID.DANA.WWW01189360091100220138240215INV20261026SALON015204581253033605802ID5914UDEV BILLING6007JAKARTA61051234062320115INV20261026SALON010708DANA00016304ABCD",
-            "payment_instruction": {
-                "instruction_type": "payment_code",
-                "payment_code": "00020101021226680014ID.DANA.WWW01189360091100220138240215INV20261026SALON015204581253033605802ID5914UDEV BILLING6007JAKARTA61051234062320115INV20261026SALON010708DANA00016304ABCD",
-                "expires_at": "2026-10-26T15:00:00.000000Z"
-            },
-            "checkout_expires_at": "2026-10-26T15:00:00.000000Z",
-            "transaction_id": "INV-20261026-SALON01-A1",
-            "completed_at": null,
-            "failure_code": null
-        },
-        "subscription": null
+  "data": {
+    "invoice_number": "INV-20261026-SALON01",
+    "status": "pending",
+    "period_count": 3,
+    "duration_days": 90,
+    "payment": {
+      "status": "pending",
+      "provider": "dana",
+      "payment_method": "qris",
+      "checkout_status": "ready",
+      "checkout_url": null,
+      "qr_content": "00020101021226680014ID.DANA.WWW01189360091100220138240215INV20261026SALON015204581253033605802ID5914UDEV BILLING6007JAKARTA61051234062320115INV20261026SALON010708DANA00016304ABCD",
+      "payment_code": "00020101021226680014ID.DANA.WWW01189360091100220138240215INV20261026SALON015204581253033605802ID5914UDEV BILLING6007JAKARTA61051234062320115INV20261026SALON010708DANA00016304ABCD",
+      "payment_instruction": {
+        "instruction_type": "payment_code",
+        "payment_code": "00020101021226680014ID.DANA.WWW01189360091100220138240215INV20261026SALON015204581253033605802ID5914UDEV BILLING6007JAKARTA61051234062320115INV20261026SALON010708DANA00016304ABCD",
+        "expires_at": "2026-10-26T15:00:00.000000Z"
+      },
+      "checkout_expires_at": "2026-10-26T15:00:00.000000Z",
+      "transaction_id": "INV-20261026-SALON01-A1",
+      "completed_at": null,
+      "failure_code": null
     },
-    "request_id": "req-01HZY17G3..."
+    "subscription": null
+  },
+  "request_id": "req-01HZY17G3..."
 }
 ```
 
@@ -339,28 +339,28 @@ _Catatan: `payment_method` bersifat opsional; nilai yang didukung adalah `"qris"
 
 ```json
 {
-    "data": {
-        "invoice_number": "INV-20261026-SALON01",
-        "status": "pending",
-        "period_count": 3,
-        "duration_days": 90,
-        "payment": {
-            "status": "pending",
-            "provider": "dana",
-            "payment_method": "dana_wallet",
-            "checkout_status": "ready",
-            "checkout_url": "https://sandbox.dana.id/checkout/order-session-uuid-001",
-            "qr_content": null,
-            "payment_code": null,
-            "payment_instruction": null,
-            "checkout_expires_at": "2026-10-26T15:00:00.000000Z",
-            "transaction_id": "INV-20261026-SALON01-A2",
-            "completed_at": null,
-            "failure_code": null
-        },
-        "subscription": null
+  "data": {
+    "invoice_number": "INV-20261026-SALON01",
+    "status": "pending",
+    "period_count": 3,
+    "duration_days": 90,
+    "payment": {
+      "status": "pending",
+      "provider": "dana",
+      "payment_method": "dana_wallet",
+      "checkout_status": "ready",
+      "checkout_url": "https://sandbox.dana.id/checkout/order-session-uuid-001",
+      "qr_content": null,
+      "payment_code": null,
+      "payment_instruction": null,
+      "checkout_expires_at": "2026-10-26T15:00:00.000000Z",
+      "transaction_id": "INV-20261026-SALON01-A2",
+      "completed_at": null,
+      "failure_code": null
     },
-    "request_id": "req-01HZY17G3..."
+    "subscription": null
+  },
+  "request_id": "req-01HZY17G3..."
 }
 ```
 
@@ -390,56 +390,56 @@ Mengambil status terkini dari invoice, status percobaan pembayaran, dan subscrip
 
 ```json
 {
-    "data": {
-        "invoice_number": "INV-20261026-SALON01",
-        "status": "paid",
-        "issued_at": "2026-10-26T14:30:00.000000Z",
-        "due_at": "2026-10-27T05:00:00.000000Z",
-        "paid_at": "2026-10-26T14:35:12.000000Z",
-        "period_count": 3,
-        "duration_days": 90,
-        "plan": {
-            "code": "BASIC-SALON",
-            "name": "Paket Basic Salon",
-            "duration_days": 90,
-            "period_count": 3
-        },
-        "pricing": {
-            "normal_price": "300000.00",
-            "discount": "0.00",
-            "final_price": "300000.00",
-            "currency": "IDR"
-        },
-        "payment": {
-            "status": "succeeded",
-            "provider": "dana",
-            "payment_method": "qris",
-            "checkout_status": "ready",
-            "checkout_url": null,
-            "qr_content": "00020101021226680014ID.DANA.WWW...",
-            "payment_code": "00020101021226680014ID.DANA.WWW...",
-            "payment_instruction": {
-                "instruction_type": "payment_code",
-                "payment_code": "00020101021226680014ID.DANA.WWW...",
-                "expires_at": "2026-10-26T15:00:00.000000Z"
-            },
-            "checkout_expires_at": "2026-10-26T15:00:00.000000Z",
-            "transaction_id": "INV-20261026-SALON01-A1",
-            "completed_at": "2026-10-26T14:35:12.000000Z",
-            "failure_code": null
-        },
-        "subscription": {
-            "status": "active",
-            "plan_code": "BASIC-SALON",
-            "starts_at": "2026-10-26T14:35:12.000000Z",
-            "expires_at": "2027-01-24T14:35:12.000000Z"
-        },
-        "tracking": {
-            "settlement_id": "01HZY18F...",
-            "settlement_status": "completed"
-        }
+  "data": {
+    "invoice_number": "INV-20261026-SALON01",
+    "status": "paid",
+    "issued_at": "2026-10-26T14:30:00.000000Z",
+    "due_at": "2026-10-27T05:00:00.000000Z",
+    "paid_at": "2026-10-26T14:35:12.000000Z",
+    "period_count": 3,
+    "duration_days": 90,
+    "plan": {
+      "code": "BASIC-SALON",
+      "name": "Paket Basic Salon",
+      "duration_days": 90,
+      "period_count": 3
     },
-    "request_id": "req-01HZY18K9..."
+    "pricing": {
+      "normal_price": "300000.00",
+      "discount": "0.00",
+      "final_price": "300000.00",
+      "currency": "IDR"
+    },
+    "payment": {
+      "status": "succeeded",
+      "provider": "dana",
+      "payment_method": "qris",
+      "checkout_status": "ready",
+      "checkout_url": null,
+      "qr_content": "00020101021226680014ID.DANA.WWW...",
+      "payment_code": "00020101021226680014ID.DANA.WWW...",
+      "payment_instruction": {
+        "instruction_type": "payment_code",
+        "payment_code": "00020101021226680014ID.DANA.WWW...",
+        "expires_at": "2026-10-26T15:00:00.000000Z"
+      },
+      "checkout_expires_at": "2026-10-26T15:00:00.000000Z",
+      "transaction_id": "INV-20261026-SALON01-A1",
+      "completed_at": "2026-10-26T14:35:12.000000Z",
+      "failure_code": null
+    },
+    "subscription": {
+      "status": "active",
+      "plan_code": "BASIC-SALON",
+      "starts_at": "2026-10-26T14:35:12.000000Z",
+      "expires_at": "2027-01-24T14:35:12.000000Z"
+    },
+    "tracking": {
+      "settlement_id": "01HZY18F...",
+      "settlement_status": "completed"
+    }
+  },
+  "request_id": "req-01HZY18K9..."
 }
 ```
 
@@ -453,16 +453,16 @@ Mengecek status dan masa aktif langganan pelanggan saat ini.
 
 ```json
 {
-    "data": {
-        "customer_external_id": "SALON-001",
-        "subscription": {
-            "status": "active",
-            "plan_code": "BASIC-SALON",
-            "starts_at": "2026-10-26T14:35:12.000000Z",
-            "expires_at": "2027-01-24T14:35:12.000000Z"
-        }
-    },
-    "request_id": "req-01HZY19X2..."
+  "data": {
+    "customer_external_id": "SALON-001",
+    "subscription": {
+      "status": "active",
+      "plan_code": "BASIC-SALON",
+      "starts_at": "2026-10-26T14:35:12.000000Z",
+      "expires_at": "2027-01-24T14:35:12.000000Z"
+    }
+  },
+  "request_id": "req-01HZY19X2..."
 }
 ```
 
@@ -709,42 +709,42 @@ Route::middleware(['auth:sanctum'])->prefix('v1/subscription')->group(function (
 ### 11.1. Service API Klien: `src/services/larisama-api.js`
 
 ```javascript
-import { api } from "boot/axios";
+import { api } from 'boot/axios'
 
 export const subscriptionService = {
-    getCurrent() {
-        return api.get("/api/v1/subscription/current").then((r) => r.data.data);
-    },
-    preview(planCode, periodCount) {
-        return api
-            .post("/api/v1/subscription/preview", {
-                subscription_plan_code: planCode,
-                period_count: periodCount,
-            })
-            .then((r) => r.data.data);
-    },
-    order(planCode, periodCount, paymentMethod = "qris") {
-        return api
-            .post("/api/v1/subscription/order", {
-                subscription_plan_code: planCode,
-                period_count: periodCount,
-                payment_method: paymentMethod,
-            })
-            .then((r) => r.data.data);
-    },
-    getStatus(invoiceNumber) {
-        return api
-            .get(`/api/v1/subscription/status/${invoiceNumber}`)
-            .then((r) => r.data.data);
-    },
-    retry(invoiceNumber, paymentMethod = "qris") {
-        return api
-            .post(`/api/v1/subscription/retry/${invoiceNumber}`, {
-                payment_method: paymentMethod,
-            })
-            .then((r) => r.data.data);
-    },
-};
+  getCurrent() {
+    return api.get('/api/v1/subscription/current').then(r => r.data.data)
+  },
+  preview(planCode, periodCount) {
+    return api
+      .post('/api/v1/subscription/preview', {
+        subscription_plan_code: planCode,
+        period_count: periodCount
+      })
+      .then(r => r.data.data)
+  },
+  order(planCode, periodCount, paymentMethod = 'qris') {
+    return api
+      .post('/api/v1/subscription/order', {
+        subscription_plan_code: planCode,
+        period_count: periodCount,
+        payment_method: paymentMethod
+      })
+      .then(r => r.data.data)
+  },
+  getStatus(invoiceNumber) {
+    return api
+      .get(`/api/v1/subscription/status/${invoiceNumber}`)
+      .then(r => r.data.data)
+  },
+  retry(invoiceNumber, paymentMethod = 'qris') {
+    return api
+      .post(`/api/v1/subscription/retry/${invoiceNumber}`, {
+        payment_method: paymentMethod
+      })
+      .then(r => r.data.data)
+  }
+}
 ```
 
 ---
@@ -757,26 +757,26 @@ Untuk merender QRIS secara lokal di browser Quasar:
 2. Gunakan `QRCode.toDataURL(payload, options)` untuk mengubah string `qr_content` menjadi gambar format PNG Data URL:
 
 ```javascript
-import QRCode from "qrcode";
+import QRCode from 'qrcode'
 
 async function generateQrImage(qrPayload) {
-    return await QRCode.toDataURL(qrPayload, {
-        width: 280,
-        margin: 2,
-        color: { dark: "#0b1d3a", light: "#ffffff" },
-    });
+  return await QRCode.toDataURL(qrPayload, {
+    width: 280,
+    margin: 2,
+    color: { dark: '#0b1d3a', light: '#ffffff' }
+  })
 }
 ```
 
 3. **Mekanisme Polling & Countdown Timer**:
-    - Saat sesi checkout QRIS dibuka, mulai countdown timer berdurasi sesuai `checkout_expires_at`.
-    - Jalankan interval polling status setiap 3.5 detik ke endpoint status invoice.
-    - Ketika status invoice berubah menjadi `paid`:
-        - Hentikan polling dan countdown timer.
-        - Tampilkan notifikasi sukses dan perbarui tampilan masa aktif warung.
-    - Jika waktu habis sebelum pembayaran selesai (`expired`):
-        - Tampilkan status kedaluwarsa pada dialog.
-        - Sediakan tombol **"Coba lagi / Buat QR Baru"** yang memanggil endpoint `retry` untuk mendapatkan kode QR baru tanpa membuat invoice baru.
+   - Saat sesi checkout QRIS dibuka, mulai countdown timer berdurasi sesuai `checkout_expires_at`.
+   - Jalankan interval polling status setiap 3.5 detik ke endpoint status invoice.
+   - Ketika status invoice berubah menjadi `paid`:
+     - Hentikan polling dan countdown timer.
+     - Tampilkan notifikasi sukses dan perbarui tampilan masa aktif warung.
+   - Jika waktu habis sebelum pembayaran selesai (`expired`):
+     - Tampilkan status kedaluwarsa pada dialog.
+     - Sediakan tombol **"Coba lagi / Buat QR Baru"** yang memanggil endpoint `retry` untuk mendapatkan kode QR baru tanpa membuat invoice baru.
 
 ---
 

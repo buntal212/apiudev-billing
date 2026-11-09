@@ -139,11 +139,11 @@ ditelusuri pada audit aplikasi tanpa menyimpan token atau payload rahasia.
 Semua URL berikut diawali `https://apiudev.udumbara.my.id` dan memakai header
 Bearer pada bagian autentikasi.
 
-| Method | Path | Otorisasi | Perilaku |
-| --- | --- | --- | --- |
-| POST | `/api/v1/integrations/customers` | Bearer token aplikasi valid | Upsert berdasarkan `application_id` dari token + `external_customer_id`; `201` baru, `200` sudah ada. |
-| GET | `/api/v1/integrations/customers/{externalId}` | Bearer token aplikasi valid | Hanya membaca pelanggan aplikasi token. |
-| PATCH | `/api/v1/integrations/customers/{externalId}` | Bearer token aplikasi valid | Update parsial; ID yang belum ada menghasilkan `404`, tidak membuat record. |
+| Method | Path                                          | Otorisasi                   | Perilaku                                                                                              |
+| ------ | --------------------------------------------- | --------------------------- | ----------------------------------------------------------------------------------------------------- |
+| POST   | `/api/v1/integrations/customers`              | Bearer token aplikasi valid | Upsert berdasarkan `application_id` dari token + `external_customer_id`; `201` baru, `200` sudah ada. |
+| GET    | `/api/v1/integrations/customers/{externalId}` | Bearer token aplikasi valid | Hanya membaca pelanggan aplikasi token.                                                               |
+| PATCH  | `/api/v1/integrations/customers/{externalId}` | Bearer token aplikasi valid | Update parsial; ID yang belum ada menghasilkan `404`, tidak membuat record.                           |
 
 Contoh response sukses (field sesuai resource UDEV):
 
@@ -303,13 +303,13 @@ browser tidak pernah menjadi bukti pembayaran.
 Backend Larissama dapat mengambil katalog paket aktif miliknya dari UDEV tanpa
 menulis data billing apa pun.
 
-| Item | Nilai |
-| --- | --- |
-| Base URL | `https://apiudev.udumbara.my.id` |
-| Endpoint | `/api/v1/integrations/subscription-plans` |
-| Metode | `GET` |
+| Item        | Nilai                                       |
+| ----------- | ------------------------------------------- |
+| Base URL    | `https://apiudev.udumbara.my.id`            |
+| Endpoint    | `/api/v1/integrations/subscription-plans`   |
+| Metode      | `GET`                                       |
 | Autentikasi | `Authorization: Bearer {APPLICATION_TOKEN}` |
-| Otorisasi | Bearer token aplikasi valid |
+| Otorisasi   | Bearer token aplikasi valid                 |
 
 Identitas aplikasi selalu ditentukan dari token integrasi yang tervalidasi.
 Jangan mengirim atau mempercayai `application_id` dari request untuk memilih

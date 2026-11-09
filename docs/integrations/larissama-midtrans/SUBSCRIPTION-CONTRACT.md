@@ -1,4 +1,5 @@
 # ATURAN BISNIS & KONTRAK SUBSCRIPTION
+
 ## UDEV CENTRALIZED BILLING ↔ LARISSAMA
 
 ---
@@ -23,6 +24,7 @@ Di dalam ekosistem Udumbara, seluruh masa aktif pelanggan, perhitungan hak akses
 Perhitungan tanggal kedaluwarsa baru saat pembayaran terverifikasi dijalankan oleh `SubscriptionService` di UDEV dengan aturan sebagai berikut:
 
 ### Skenario A: Aktivasi Pertama Kali (First Activation)
+
 Berlaku untuk warung baru yang belum pernah memiliki langganan aktif sebelumnya.
 
 - **Formula**:
@@ -37,6 +39,7 @@ Berlaku untuk warung baru yang belum pernah memiliki langganan aktif sebelumnya.
 ---
 
 ### Skenario B: Perpanjangan Saat Paket Masih Aktif (Active Renewal)
+
 Berlaku jika pemilik warung melakukan perpanjangan sebelum masa aktif sebelumnya habis.
 
 > [!IMPORTANT]
@@ -57,6 +60,7 @@ Berlaku jika pemilik warung melakukan perpanjangan sebelum masa aktif sebelumnya
 ---
 
 ### Skenario C: Perpanjangan Setelah Paket Kedaluwarsa (Expired Renewal)
+
 Berlaku jika warung sudah kedaluwarsa beberapa hari lalu dan baru melakukan pembayaran.
 
 - **Kondisi**: `status == 'expired'` ATAU `expires_at <= verified_paid_at`.
@@ -129,6 +133,7 @@ Untuk memastikan tidak pernah terjadi penambahan hari ganda akibat webhook berul
 ```
 
 #### Contoh Data Subscription yang Dikembalikan:
+
 ```json
 {
   "subscription": {

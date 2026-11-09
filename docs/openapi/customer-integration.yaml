@@ -29,10 +29,18 @@ paths:
       responses:
         '201':
           description: Pelanggan baru dibuat
-          content: { application/json: { schema: { $ref: '#/components/schemas/CustomerResponse' } } }
+          content:
+            {
+              application/json:
+                { schema: { $ref: '#/components/schemas/CustomerResponse' } }
+            }
         '200':
           description: Pelanggan diperbarui
-          content: { application/json: { schema: { $ref: '#/components/schemas/CustomerResponse' } } }
+          content:
+            {
+              application/json:
+                { schema: { $ref: '#/components/schemas/CustomerResponse' } }
+            }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '409': { $ref: '#/components/responses/Conflict' }
@@ -48,7 +56,11 @@ paths:
       responses:
         '200':
           description: Pelanggan ditemukan
-          content: { application/json: { schema: { $ref: '#/components/schemas/CustomerResponse' } } }
+          content:
+            {
+              application/json:
+                { schema: { $ref: '#/components/schemas/CustomerResponse' } }
+            }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { description: Pelanggan tidak ditemukan }
@@ -66,7 +78,11 @@ paths:
       responses:
         '200':
           description: Pelanggan diperbarui
-          content: { application/json: { schema: { $ref: '#/components/schemas/CustomerResponse' } } }
+          content:
+            {
+              application/json:
+                { schema: { $ref: '#/components/schemas/CustomerResponse' } }
+            }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { description: Pelanggan tidak ditemukan }
@@ -132,23 +148,47 @@ components:
       properties:
         message: { type: string }
         error_code: { type: string }
-        errors: { type: object, additionalProperties: { type: array, items: { type: string } } }
+        errors:
+          {
+            type: object,
+            additionalProperties: { type: array, items: { type: string } }
+          }
   responses:
     Unauthorized:
       description: Token tidak valid, dicabut, atau kedaluwarsa
-      content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } }
+      content:
+        {
+          application/json:
+            { schema: { $ref: '#/components/schemas/ErrorResponse' } }
+        }
     Forbidden:
       description: Scope tidak mencukupi
-      content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } }
+      content:
+        {
+          application/json:
+            { schema: { $ref: '#/components/schemas/ErrorResponse' } }
+        }
     Conflict:
       description: Konflik dengan pelanggan manual
-      content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } }
+      content:
+        {
+          application/json:
+            { schema: { $ref: '#/components/schemas/ErrorResponse' } }
+        }
     Validation:
       description: Payload tidak valid atau mengandung field billing
-      content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } }
+      content:
+        {
+          application/json:
+            { schema: { $ref: '#/components/schemas/ErrorResponse' } }
+        }
     RateLimited:
       description: Batas request tercapai; tunggu header Retry-After.
       headers:
         Retry-After:
           schema: { type: integer, minimum: 1 }
-      content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } }
+      content:
+        {
+          application/json:
+            { schema: { $ref: '#/components/schemas/ErrorResponse' } }
+        }

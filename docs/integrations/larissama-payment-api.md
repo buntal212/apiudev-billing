@@ -23,18 +23,18 @@ Token yang bukan `global`, dicabut, kedaluwarsa, atau milik aplikasi nonaktif di
 
 ## Endpoint aktual
 
-| Method | Path | Kegunaan |
-| --- | --- | --- |
-| `GET` | `/subscription-plans` | Katalog paket aktif Larissama. |
-| `POST` | `/customers` | Upsert pelanggan berdasarkan ID eksternal. |
-| `GET` | `/customers/{externalId}` | Baca pelanggan tenant sendiri. |
-| `PATCH` | `/customers/{externalId}` | Update pelanggan yang sudah ada. |
-| `POST` | `/customers/{externalId}/invoice-preview` | Hitung harga/durasi tanpa invoice. |
-| `POST` | `/customers/{externalId}/invoices` | Buat invoice idempoten. |
-| `POST` | `/invoices/{invoiceNumber}/checkout` | Mulai/ulang checkout DANA Sandbox idempoten. |
-| `GET` | `/invoices/{invoiceNumber}` | Status invoice, payment, dan settlement. |
-| `GET` | `/customers/{externalId}/transactions` | Riwayat invoice/transaksi. |
-| `GET` | `/customers/{externalId}/subscription` | Status paket dan masa aktif. |
+| Method  | Path                                      | Kegunaan                                     |
+| ------- | ----------------------------------------- | -------------------------------------------- |
+| `GET`   | `/subscription-plans`                     | Katalog paket aktif Larissama.               |
+| `POST`  | `/customers`                              | Upsert pelanggan berdasarkan ID eksternal.   |
+| `GET`   | `/customers/{externalId}`                 | Baca pelanggan tenant sendiri.               |
+| `PATCH` | `/customers/{externalId}`                 | Update pelanggan yang sudah ada.             |
+| `POST`  | `/customers/{externalId}/invoice-preview` | Hitung harga/durasi tanpa invoice.           |
+| `POST`  | `/customers/{externalId}/invoices`        | Buat invoice idempoten.                      |
+| `POST`  | `/invoices/{invoiceNumber}/checkout`      | Mulai/ulang checkout DANA Sandbox idempoten. |
+| `GET`   | `/invoices/{invoiceNumber}`               | Status invoice, payment, dan settlement.     |
+| `GET`   | `/customers/{externalId}/transactions`    | Riwayat invoice/transaksi.                   |
+| `GET`   | `/customers/{externalId}/subscription`    | Status paket dan masa aktif.                 |
 
 Tidak ada endpoint atau tabel baru yang dibuat untuk alur ini.
 
@@ -44,16 +44,18 @@ Tidak ada endpoint atau tabel baru yang dibuat untuk alur ini.
 
 ```json
 {
-  "data": [{
-    "id": 10,
-    "code": "LARIS-30",
-    "name": "Paket Larissama",
-    "description": "Langganan 30 hari",
-    "price": "10000.00",
-    "currency": "IDR",
-    "duration_days": 30,
-    "is_active": true
-  }]
+  "data": [
+    {
+      "id": 10,
+      "code": "LARIS-30",
+      "name": "Paket Larissama",
+      "description": "Langganan 30 hari",
+      "price": "10000.00",
+      "currency": "IDR",
+      "duration_days": 30,
+      "is_active": true
+    }
+  ]
 }
 ```
 
@@ -111,8 +113,19 @@ POST /customers/SALON-001/invoice-preview
 {
   "data": {
     "customer_external_id": "SALON-001",
-    "plan": { "code": "LARIS-30", "name": "Paket Larissama", "duration_days": 90, "period_count": 3 },
-    "pricing": { "unit_price": "10000.00", "period_count": 3, "normal_price": "30000.00", "final_price": "30000.00", "currency": "IDR" }
+    "plan": {
+      "code": "LARIS-30",
+      "name": "Paket Larissama",
+      "duration_days": 90,
+      "period_count": 3
+    },
+    "pricing": {
+      "unit_price": "10000.00",
+      "period_count": 3,
+      "normal_price": "30000.00",
+      "final_price": "30000.00",
+      "currency": "IDR"
+    }
   },
   "request_id": "..."
 }
@@ -140,7 +153,11 @@ Idempotency-Key: laris-invoice-SALON-001-20261027-01
     "status": "pending",
     "period_count": 3,
     "plan": { "code": "LARIS-30", "duration_days": 90, "period_count": 3 },
-    "pricing": { "normal_price": "30000.00", "final_price": "30000.00", "currency": "IDR" },
+    "pricing": {
+      "normal_price": "30000.00",
+      "final_price": "30000.00",
+      "currency": "IDR"
+    },
     "payment": null,
     "subscription": null,
     "tracking": { "settlement_status": null }
@@ -200,7 +217,10 @@ Gunakan `GET /invoices/{invoiceNumber}` untuk status invoice/settlement, bukan u
     "status": "paid",
     "paid_at": "2026-10-27T12:05:00.000000Z",
     "payment": { "status": "succeeded", "payment_method": "qris" },
-    "tracking": { "settlement_status": "completed", "settled_at": "2026-10-27T12:05:01.000000Z" }
+    "tracking": {
+      "settlement_status": "completed",
+      "settled_at": "2026-10-27T12:05:01.000000Z"
+    }
   }
 }
 ```
@@ -228,15 +248,15 @@ Settlement terverifikasi menambah 30 × `period_count` hari dari `expires_at` ya
 
 ## Status error dan retry
 
-| Status | Arti | Tindakan |
-| --- | --- | --- |
-| `401` | Token tidak valid, dicabut, atau kedaluwarsa. | Hentikan retry dan perbaiki secret. |
-| `403` | Token bukan Global API Token atau aplikasi tidak aktif. | Hentikan retry; periksa konfigurasi. |
-| `404` | Resource tidak ada dalam tenant token. | Jangan mencoba tenant lain. |
-| `409` | Konflik customer/integrasi. | Jangan overwrite otomatis. |
-| `422` | Input, periode, jatuh tempo, atau konfigurasi checkout invalid. | Perbaiki input; jangan retry buta. |
-| `429` | Rate limit. | Hormati `Retry-After` dan backoff. |
-| `5xx`/timeout | Gangguan sementara. | Retry terbatas dengan key idempotensi yang sama. |
+| Status        | Arti                                                            | Tindakan                                         |
+| ------------- | --------------------------------------------------------------- | ------------------------------------------------ |
+| `401`         | Token tidak valid, dicabut, atau kedaluwarsa.                   | Hentikan retry dan perbaiki secret.              |
+| `403`         | Token bukan Global API Token atau aplikasi tidak aktif.         | Hentikan retry; periksa konfigurasi.             |
+| `404`         | Resource tidak ada dalam tenant token.                          | Jangan mencoba tenant lain.                      |
+| `409`         | Konflik customer/integrasi.                                     | Jangan overwrite otomatis.                       |
+| `422`         | Input, periode, jatuh tempo, atau konfigurasi checkout invalid. | Perbaiki input; jangan retry buta.               |
+| `429`         | Rate limit.                                                     | Hormati `Retry-After` dan backoff.               |
+| `5xx`/timeout | Gangguan sementara.                                             | Retry terbatas dengan key idempotensi yang sama. |
 
 Jangan menggunakan key baru saat retry untuk niat pembelian/checkout yang sama. Jangan menganggap redirect browser, pemindaian QR, atau response checkout sebagai bukti pembayaran.
 

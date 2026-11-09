@@ -1,4 +1,5 @@
 # DOKUMENTASI RESMI INTEGRASI SISTEM
+
 # UDEV CENTRALIZED BILLING ↔ LARISSAMA (MIDTRANS)
 
 ---
@@ -8,9 +9,10 @@
 Dokumen ini adalah spesifikasi dan panduan teknis resmi bagi tim pengembang aplikasi **Larissama** untuk mengintegrasikan proses penagihan, pembayaran paket langganan warung, dan perpanjangan masa aktif melalui sistem **UDEV Centralized Billing** dengan menggunakan **Midtrans Payment Gateway** sebagai gateway pembayaran utama.
 
 ### Mengapa Menggunakan UDEV Centralized Billing?
+
 1. **Pusat Rekonsiliasi & Keuangan**: Seluruh transaksi langganan, masa aktif warung, dan pembagian komisi mitra referral dikelola terpusat oleh UDEV.
-2. **Abstraksi Payment Gateway**: Backend Larissama tidak berurusan langsung dengan kredensial rahasia Midtrans (*Server Key*). Larissama cukup berkomunikasi dengan UDEV Billing API menggunakan satu *Global Integration Token*.
-3. **Pemisahan Lingkungan Aman**: Perpindahan antara mode *Sandbox* dan *Production* dikelola di UDEV tanpa mewajibkan perubahan kode atau deployment berulang pada sisi Larissama.
+2. **Abstraksi Payment Gateway**: Backend Larissama tidak berurusan langsung dengan kredensial rahasia Midtrans (_Server Key_). Larissama cukup berkomunikasi dengan UDEV Billing API menggunakan satu _Global Integration Token_.
+3. **Pemisahan Lingkungan Aman**: Perpindahan antara mode _Sandbox_ dan _Production_ dikelola di UDEV tanpa mewajibkan perubahan kode atau deployment berulang pada sisi Larissama.
 
 ---
 
@@ -36,6 +38,7 @@ Arsitektur integrasi menghubungkan tiga lapisan sistem:
 ```
 
 ### Komponen Sistem:
+
 1. **Larissama (`depan-larissama` & `api.larissama`)**:
    - Menampilkan katalog paket langganan ke pemilik warung.
    - Menginisiasi pesanan langganan dan meminta sesi checkout ke UDEV.
@@ -57,18 +60,18 @@ Arsitektur integrasi menghubungkan tiga lapisan sistem:
 
 ## 3. Pembagian Tanggung Jawab (RACI Matrix)
 
-| Area Fungsional | UDEV Centralized Billing | Larissama Backend | Larissama Frontend |
-|---|---|---|---|
-| **Katalog Paket & Durasi** | Menentukan paket, harga dasar, dan durasi resmi (kelipatan 30 hari). | Mengambil katalog via API UDEV dan memvalidasi otorisasi owner. | Menampilkan grid kartu paket langganan. |
-| **Data Pelanggan (Warung)** | Menyimpan customer mapping terisolasi per aplikasi. | Mengirim sinkronisasi warung via `POST /customers`. | Menyediakan profil warung pemilik akun. |
-| **Kalkulasi Biaya & Diskon** | Menghitung harga akhir, diskon referral terkunci, dan tanggal jatuh tempo. | Meminta preview via `POST .../invoice-preview`. | Menampilkan rincian invoice dan slider periode (1–12). |
-| **Penerbitan Invoice** | Menerbitkan nomor invoice resmi, mengunci status `pending`. | Meminta pembuatan invoice via `POST .../invoices`. | Menampilkan informasi invoice pending. |
-| **Kredensial Midtrans** | Menyimpan & mengenkripsi Server Key (AES-256-GCM). Larissama dilarang mengakses Server Key. | Tidak menyimpan kredensial Midtrans. | Tidak memanggil Midtrans secara langsung. |
-| **Inisiasi Checkout** | Menghubungi Midtrans Core API dan mengembalikan instruksi pembayaran. | Meneruskan permintaan checkout via `POST .../checkout`. | Mengirim pilihan metode pembayaran (QRIS / VA / GoPay). |
-| **Tampilan Instruksi Bayar** | Mengembalikan `qr_content`, `payment_code`, `biller_code`, `checkout_url`. | Memformat data instruksi untuk frontend. | Menampilkan QR code, tombol copy VA, countdown timer, dan panduan transfer. |
-| **Verifikasi Pembayaran** | Menerima webhook notifikasi Midtrans, validasi signature SHA512, eksekusi settlement idempoten. | Melakukan polling `GET .../invoices/{num}` atau query status. | Menampilkan status lunas dan tombol selesai. |
-| **Perpanjangan Masa Aktif** | Memperpanjang masa aktif subscription pelanggan (`starts_at`, `expires_at`). | Mengambil data subscription terbaru dan mengupdate `warungs.tanggal_berakhir`. | Menampilkan badge aktif dan sisa hari berlangganan. |
-| **Komisi Referral Mitra** | Menghitung komisi mitra (Rp50.000 pertama, Rp7.500 renewal), audit ledger, payout. | Mengirim kode referral saat pendaftaran warung. | Menampilkan input kode referral saat register warung. |
+| Area Fungsional              | UDEV Centralized Billing                                                                        | Larissama Backend                                                              | Larissama Frontend                                                          |
+| ---------------------------- | ----------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------ | --------------------------------------------------------------------------- |
+| **Katalog Paket & Durasi**   | Menentukan paket, harga dasar, dan durasi resmi (kelipatan 30 hari).                            | Mengambil katalog via API UDEV dan memvalidasi otorisasi owner.                | Menampilkan grid kartu paket langganan.                                     |
+| **Data Pelanggan (Warung)**  | Menyimpan customer mapping terisolasi per aplikasi.                                             | Mengirim sinkronisasi warung via `POST /customers`.                            | Menyediakan profil warung pemilik akun.                                     |
+| **Kalkulasi Biaya & Diskon** | Menghitung harga akhir, diskon referral terkunci, dan tanggal jatuh tempo.                      | Meminta preview via `POST .../invoice-preview`.                                | Menampilkan rincian invoice dan slider periode (1–12).                      |
+| **Penerbitan Invoice**       | Menerbitkan nomor invoice resmi, mengunci status `pending`.                                     | Meminta pembuatan invoice via `POST .../invoices`.                             | Menampilkan informasi invoice pending.                                      |
+| **Kredensial Midtrans**      | Menyimpan & mengenkripsi Server Key (AES-256-GCM). Larissama dilarang mengakses Server Key.     | Tidak menyimpan kredensial Midtrans.                                           | Tidak memanggil Midtrans secara langsung.                                   |
+| **Inisiasi Checkout**        | Menghubungi Midtrans Core API dan mengembalikan instruksi pembayaran.                           | Meneruskan permintaan checkout via `POST .../checkout`.                        | Mengirim pilihan metode pembayaran (QRIS / VA / GoPay).                     |
+| **Tampilan Instruksi Bayar** | Mengembalikan `qr_content`, `payment_code`, `biller_code`, `checkout_url`.                      | Memformat data instruksi untuk frontend.                                       | Menampilkan QR code, tombol copy VA, countdown timer, dan panduan transfer. |
+| **Verifikasi Pembayaran**    | Menerima webhook notifikasi Midtrans, validasi signature SHA512, eksekusi settlement idempoten. | Melakukan polling `GET .../invoices/{num}` atau query status.                  | Menampilkan status lunas dan tombol selesai.                                |
+| **Perpanjangan Masa Aktif**  | Memperpanjang masa aktif subscription pelanggan (`starts_at`, `expires_at`).                    | Mengambil data subscription terbaru dan mengupdate `warungs.tanggal_berakhir`. | Menampilkan badge aktif dan sisa hari berlangganan.                         |
+| **Komisi Referral Mitra**    | Menghitung komisi mitra (Rp50.000 pertama, Rp7.500 renewal), audit ledger, payout.              | Mengirim kode referral saat pendaftaran warung.                                | Menampilkan input kode referral saat register warung.                       |
 
 ---
 
@@ -91,15 +94,15 @@ Arsitektur integrasi menghubungkan tiga lapisan sistem:
 
 UDEV menyediakan pemisahan lingkungan yang ketat antara Sandbox dan Production:
 
-| Parameter | Sandbox (Pengujian) | Production (Operasional Nyata) |
-|---|---|---|
-| **UDEV Base URL** | `https://staging-apiudev.udumbara.my.id` (atau mock dev `https://apiudev.udumbara.my.id`) | `https://apiudev.udumbara.my.id` |
-| **Canonical Prefix** | `/api/v1/integrations` | `/api/v1/integrations` |
-| **Compatibility Prefix** | `/api/v1/integration` | `/api/v1/integration` |
-| **Mitrans Gateway URL** | `https://mitrans.udumbara.my.id` | `https://mitrans.udumbara.my.id` |
-| **Midtrans Core API** | `https://api.sandbox.midtrans.com/v2` | `https://api.midtrans.com/v2` |
-| **Simulator Pembayaran** | Simulator QRIS / VA Midtrans Sandbox | Rekening Bank Riil / E-Wallet Riil |
-| **Nominal Uji Coba** | Bebas / Virtual | Uang Nyata |
+| Parameter                | Sandbox (Pengujian)                                                                       | Production (Operasional Nyata)     |
+| ------------------------ | ----------------------------------------------------------------------------------------- | ---------------------------------- |
+| **UDEV Base URL**        | `https://staging-apiudev.udumbara.my.id` (atau mock dev `https://apiudev.udumbara.my.id`) | `https://apiudev.udumbara.my.id`   |
+| **Canonical Prefix**     | `/api/v1/integrations`                                                                    | `/api/v1/integrations`             |
+| **Compatibility Prefix** | `/api/v1/integration`                                                                     | `/api/v1/integration`              |
+| **Mitrans Gateway URL**  | `https://mitrans.udumbara.my.id`                                                          | `https://mitrans.udumbara.my.id`   |
+| **Midtrans Core API**    | `https://api.sandbox.midtrans.com/v2`                                                     | `https://api.midtrans.com/v2`      |
+| **Simulator Pembayaran** | Simulator QRIS / VA Midtrans Sandbox                                                      | Rekening Bank Riil / E-Wallet Riil |
+| **Nominal Uji Coba**     | Bebas / Virtual                                                                           | Uang Nyata                         |
 
 > [!IMPORTANT]
 > Jangan pernah menggunakan kredensial Sandbox di Production atau sebaliknya. Pengalihan dari Sandbox ke Production di sisi UDEV hanya dapat dilakukan melalui otorisasi khusus Administrator UDEV dengan konfirmasi ganda.
@@ -116,6 +119,7 @@ Accept: application/json
 ```
 
 ### Prinsip Keamanan Token:
+
 - **Server-to-Server Only**: Token ini adalah kredensial tingkat tinggi yang mewakili aplikasi Larissama. Simpan token ini hanya di file `.env` atau secret manager backend `api.larissama`.
 - **Dilarang Keras Bocor ke Frontend**: Jangan pernah menyertakan token ini pada aplikasi Vue/Quasar (`depan-larissama`), script browser, public repository, atau log aplikasi.
 - **Tenant Isolation Otomatis**: UDEV secara otomatis mengidentifikasi ID aplikasi (`application_id = 1`) dari hash token ini. Larissama **dilarang mengirimkan `application_id`** pada request body/parameter.
@@ -153,12 +157,12 @@ Berikut adalah urutan langkah standar dalam memproses transaksi pembayaran langg
 
 ## 8. Penanganan Error & Retry Safety
 
-| Kondisi | Tindakan yang Diperbolehkan | Tindakan yang Dilarang |
-|---|---|---|
-| **HTTP 422 Validation Error** | Perbaiki isian body sesuai pesan error pada field `errors`. | Jangan retry berulang tanpa perbaikan parameter. |
-| **HTTP 429 Rate Limited** | Baca header `Retry-After` dan tunggu durasi detik yang ditentukan sebelum mencoba lagi. | Jangan membanjiri request tanpa jeda backoff. |
+| Kondisi                                               | Tindakan yang Diperbolehkan                                                                                                                                                                                                                           | Tindakan yang Dilarang                                                          |
+| ----------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------- |
+| **HTTP 422 Validation Error**                         | Perbaiki isian body sesuai pesan error pada field `errors`.                                                                                                                                                                                           | Jangan retry berulang tanpa perbaikan parameter.                                |
+| **HTTP 429 Rate Limited**                             | Baca header `Retry-After` dan tunggu durasi detik yang ditentukan sebelum mencoba lagi.                                                                                                                                                               | Jangan membanjiri request tanpa jeda backoff.                                   |
 | **HTTP 502 / 504 / Connection Timeout saat Checkout** | **WAJIB** panggil `GET /invoices/{invoiceNumber}` terlebih dahulu untuk memeriksa apakah payment attempt terbentuk. Jika attempt sudah ada dan ready, gunakan data tersebut. Jika gagal, panggil ulang checkout dengan **Idempotency-Key yang sama**. | **DILARANG** membuat invoice baru sebelum memastikan status invoice sebelumnya. |
-| **Batas Waktu Pembayaran Habis (Expired)** | Panggil checkout ulang pada invoice yang sama atau buat invoice baru jika invoice utama telah expired. | Jangan membiarkan pelanggan mentransfer ke VA yang kedaluwarsa. |
+| **Batas Waktu Pembayaran Habis (Expired)**            | Panggil checkout ulang pada invoice yang sama atau buat invoice baru jika invoice utama telah expired.                                                                                                                                                | Jangan membiarkan pelanggan mentransfer ke VA yang kedaluwarsa.                 |
 
 ---
 

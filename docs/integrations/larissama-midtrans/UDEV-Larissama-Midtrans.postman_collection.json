@@ -51,13 +51,8 @@
         "header": [],
         "url": {
           "raw": "{{base_url}}/{{integration_prefix}}/subscription-plans?per_page=100",
-          "host": [
-            "{{base_url}}"
-          ],
-          "path": [
-            "{{integration_prefix}}",
-            "subscription-plans"
-          ],
+          "host": ["{{base_url}}"],
+          "path": ["{{integration_prefix}}", "subscription-plans"],
           "query": [
             {
               "key": "per_page",
@@ -97,13 +92,8 @@
         },
         "url": {
           "raw": "{{base_url}}/{{integration_prefix}}/customers",
-          "host": [
-            "{{base_url}}"
-          ],
-          "path": [
-            "{{integration_prefix}}",
-            "customers"
-          ]
+          "host": ["{{base_url}}"],
+          "path": ["{{integration_prefix}}", "customers"]
         },
         "description": "Mendaftarkan ID eksternal warung ke sistem UDEV."
       },
@@ -120,14 +110,8 @@
         },
         "url": {
           "raw": "{{base_url}}/{{integration_prefix}}/referrals/validate",
-          "host": [
-            "{{base_url}}"
-          ],
-          "path": [
-            "{{integration_prefix}}",
-            "referrals",
-            "validate"
-          ]
+          "host": ["{{base_url}}"],
+          "path": ["{{integration_prefix}}", "referrals", "validate"]
         },
         "description": "Memeriksa status aktif dan besaran diskon kode referral mitra."
       },
@@ -144,9 +128,7 @@
         },
         "url": {
           "raw": "{{base_url}}/{{integration_prefix}}/customers/{{customer_id}}/referral",
-          "host": [
-            "{{base_url}}"
-          ],
+          "host": ["{{base_url}}"],
           "path": [
             "{{integration_prefix}}",
             "customers",
@@ -169,9 +151,7 @@
         },
         "url": {
           "raw": "{{base_url}}/{{integration_prefix}}/customers/{{customer_id}}/invoice-preview",
-          "host": [
-            "{{base_url}}"
-          ],
+          "host": ["{{base_url}}"],
           "path": [
             "{{integration_prefix}}",
             "customers",
@@ -228,9 +208,7 @@
         },
         "url": {
           "raw": "{{base_url}}/{{integration_prefix}}/customers/{{customer_id}}/invoices",
-          "host": [
-            "{{base_url}}"
-          ],
+          "host": ["{{base_url}}"],
           "path": [
             "{{integration_prefix}}",
             "customers",
@@ -270,9 +248,7 @@
         },
         "url": {
           "raw": "{{base_url}}/{{integration_prefix}}/invoices/{{invoice_number}}/checkout",
-          "host": [
-            "{{base_url}}"
-          ],
+          "host": ["{{base_url}}"],
           "path": [
             "{{integration_prefix}}",
             "invoices",
@@ -312,9 +288,7 @@
         },
         "url": {
           "raw": "{{base_url}}/{{integration_prefix}}/invoices/{{invoice_number}}/checkout",
-          "host": [
-            "{{base_url}}"
-          ],
+          "host": ["{{base_url}}"],
           "path": [
             "{{integration_prefix}}",
             "invoices",
@@ -354,9 +328,7 @@
         },
         "url": {
           "raw": "{{base_url}}/{{integration_prefix}}/invoices/{{invoice_number}}/checkout",
-          "host": [
-            "{{base_url}}"
-          ],
+          "host": ["{{base_url}}"],
           "path": [
             "{{integration_prefix}}",
             "invoices",
@@ -396,9 +368,7 @@
         },
         "url": {
           "raw": "{{base_url}}/{{integration_prefix}}/invoices/{{invoice_number}}/checkout",
-          "host": [
-            "{{base_url}}"
-          ],
+          "host": ["{{base_url}}"],
           "path": [
             "{{integration_prefix}}",
             "invoices",
@@ -438,9 +408,7 @@
         },
         "url": {
           "raw": "{{base_url}}/{{integration_prefix}}/invoices/{{invoice_number}}/checkout",
-          "host": [
-            "{{base_url}}"
-          ],
+          "host": ["{{base_url}}"],
           "path": [
             "{{integration_prefix}}",
             "invoices",
@@ -480,9 +448,7 @@
         },
         "url": {
           "raw": "{{base_url}}/{{integration_prefix}}/invoices/{{invoice_number}}/checkout",
-          "host": [
-            "{{base_url}}"
-          ],
+          "host": ["{{base_url}}"],
           "path": [
             "{{integration_prefix}}",
             "invoices",
@@ -522,9 +488,7 @@
         },
         "url": {
           "raw": "{{base_url}}/{{integration_prefix}}/invoices/{{invoice_number}}/checkout",
-          "host": [
-            "{{base_url}}"
-          ],
+          "host": ["{{base_url}}"],
           "path": [
             "{{integration_prefix}}",
             "invoices",
@@ -543,14 +507,8 @@
         "header": [],
         "url": {
           "raw": "{{base_url}}/{{integration_prefix}}/invoices/{{invoice_number}}?reconcile=true",
-          "host": [
-            "{{base_url}}"
-          ],
-          "path": [
-            "{{integration_prefix}}",
-            "invoices",
-            "{{invoice_number}}"
-          ],
+          "host": ["{{base_url}}"],
+          "path": ["{{integration_prefix}}", "invoices", "{{invoice_number}}"],
           "query": [
             {
               "key": "reconcile",
@@ -570,9 +528,7 @@
         "header": [],
         "url": {
           "raw": "{{base_url}}/{{integration_prefix}}/customers/{{customer_id}}/subscription",
-          "host": [
-            "{{base_url}}"
-          ],
+          "host": ["{{base_url}}"],
           "path": [
             "{{integration_prefix}}",
             "customers",
@@ -591,9 +547,7 @@
         "header": [],
         "url": {
           "raw": "{{base_url}}/{{integration_prefix}}/customers/{{customer_id}}/transactions?page=1&per_page=15",
-          "host": [
-            "{{base_url}}"
-          ],
+          "host": ["{{base_url}}"],
           "path": [
             "{{integration_prefix}}",
             "customers",

@@ -4,7 +4,7 @@ info:
   version: 1.0.0
   description: |
     Spesifikasi resmi kontrak API integrasi mesin-ke-mesin antara aplikasi **Larissama** dan **UDEV Centralized Billing Platform** menggunakan payment gateway **Midtrans**.
-    
+
     API ini mengelola siklus penagihan, pembuatan invoice, inisiasi checkout pembayaran (QRIS, Virtual Account, GoPay), polling status, perpanjangan masa aktif langganan warung, dan penguncian diskon referral mitra.
 servers:
   - url: https://apiudev.udumbara.my.id/api/v1/integrations
@@ -85,28 +85,28 @@ paths:
                 external_customer_id:
                   type: string
                   maxLength: 100
-                  example: "WARUNG-001"
+                  example: 'WARUNG-001'
                   description: ID unik warung di Larissama (misal ID database warung).
                 name:
                   type: string
                   maxLength: 255
-                  example: "Warung Berkah Nusantara"
+                  example: 'Warung Berkah Nusantara'
                   description: Nama usaha warung.
                 owner_name:
                   type: string
                   maxLength: 255
-                  example: "Budi Santoso"
+                  example: 'Budi Santoso'
                   description: Nama lengkap pemilik warung.
                 email:
                   type: string
                   format: email
                   maxLength: 255
-                  example: "budi.santoso@warungberkah.test"
+                  example: 'budi.santoso@warungberkah.test'
                   description: Alamat email pemilik akun warung.
                 phone:
                   type: string
                   maxLength: 30
-                  example: "081234567890"
+                  example: '081234567890'
                   description: Nomor telepon atau WhatsApp aktif warung.
                 status:
                   type: string
@@ -128,10 +128,10 @@ paths:
                     properties:
                       status:
                         type: string
-                        example: "accepted"
+                        example: 'accepted'
                   request_id:
                     type: string
-                    example: "req_672bc19a3b04c"
+                    example: 'req_672bc19a3b04c'
         '200':
           description: Profil pelanggan yang sudah ada berhasil diperbarui.
           content:
@@ -146,10 +146,10 @@ paths:
                     properties:
                       status:
                         type: string
-                        example: "accepted"
+                        example: 'accepted'
                   request_id:
                     type: string
-                    example: "req_672bc19a3b04c"
+                    example: 'req_672bc19a3b04c'
         '422':
           $ref: '#/components/responses/ValidationError'
 
@@ -203,7 +203,7 @@ paths:
                 subscription_plan_code:
                   type: string
                   maxLength: 100
-                  example: "BASIC-WARUNG"
+                  example: 'BASIC-WARUNG'
                   description: Kode paket langganan.
                 period_count:
                   type: integer
@@ -262,11 +262,11 @@ paths:
                 subscription_plan_code:
                   type: string
                   maxLength: 100
-                  example: "BASIC-WARUNG"
+                  example: 'BASIC-WARUNG'
                 due_at:
                   type: string
                   format: date-time
-                  example: "2026-11-08T23:59:59Z"
+                  example: '2026-11-08T23:59:59Z'
                   description: Waktu jatuh tempo pembayaran (wajib di masa depan).
                 period_count:
                   type: integer
@@ -278,7 +278,7 @@ paths:
                   type: string
                   maxLength: 100
                   pattern: '^[A-Za-z0-9][A-Za-z0-9._-]*$'
-                  example: "inv-warung-001-20261106-01"
+                  example: 'inv-warung-001-20261106-01'
       responses:
         '201':
           description: Invoice pending berhasil diterbitkan.
@@ -305,7 +305,7 @@ paths:
           required: true
           schema:
             type: string
-          example: "INV-202611-0001"
+          example: 'INV-202611-0001'
         - name: Idempotency-Key
           in: header
           required: false
@@ -339,7 +339,7 @@ paths:
                     - gopay
                     - bank_transfer
                   default: qris
-                  example: "va_bca"
+                  example: 'va_bca'
                   description: Metode pembayaran yang dipilih.
                 bank:
                   type: string
@@ -349,7 +349,7 @@ paths:
                   type: string
                   maxLength: 64
                   pattern: '^[A-Za-z0-9][A-Za-z0-9._-]*$'
-                  example: "chk-warung-001-attempt-01"
+                  example: 'chk-warung-001-attempt-01'
       responses:
         '200':
           description: Sesi pembayaran siap (Instruksi bayar tersedia).
@@ -389,7 +389,7 @@ paths:
           required: true
           schema:
             type: string
-          example: "INV-202611-0001"
+          example: 'INV-202611-0001'
         - name: reconcile
           in: query
           required: false
@@ -423,7 +423,7 @@ paths:
           required: true
           schema:
             type: string
-          example: "WARUNG-001"
+          example: 'WARUNG-001'
       responses:
         '200':
           description: Data subscription berhasil diambil.
@@ -437,7 +437,7 @@ paths:
                     properties:
                       customer_external_id:
                         type: string
-                        example: "WARUNG-001"
+                        example: 'WARUNG-001'
                       subscription:
                         $ref: '#/components/schemas/CustomerSubscriptionStatus'
                       referral:
@@ -501,7 +501,7 @@ paths:
               properties:
                 referral_code:
                   type: string
-                  example: "MITRA-JAKARTA"
+                  example: 'MITRA-JAKARTA'
       responses:
         '200':
           description: Hasil validasi kode referral.
@@ -518,20 +518,20 @@ paths:
                         example: true
                       code:
                         type: string
-                        example: "MITRA-JAKARTA"
+                        example: 'MITRA-JAKARTA'
                       type:
                         type: string
                         enum: [umum, khusus]
-                        example: "khusus"
+                        example: 'khusus'
                       base_price:
                         type: string
-                        example: "175000.00"
+                        example: '175000.00'
                       discount_amount:
                         type: string
-                        example: "75000.00"
+                        example: '75000.00'
                       customer_price:
                         type: string
-                        example: "100000.00"
+                        example: '100000.00'
                   request_id:
                     type: string
 
@@ -557,7 +557,7 @@ paths:
               properties:
                 referral_code:
                   type: string
-                  example: "MITRA-JAKARTA"
+                  example: 'MITRA-JAKARTA'
       responses:
         '201':
           description: Kode referral berhasil dikunci pada warung.
@@ -571,7 +571,7 @@ paths:
                     properties:
                       customer_external_id:
                         type: string
-                        example: "WARUNG-001"
+                        example: 'WARUNG-001'
                       referral:
                         $ref: '#/components/schemas/CustomerReferralLocked'
                   request_id:
@@ -607,20 +607,20 @@ components:
           example: 1
         code:
           type: string
-          example: "BASIC-WARUNG"
+          example: 'BASIC-WARUNG'
         name:
           type: string
-          example: "Paket Warung Mandiri"
+          example: 'Paket Warung Mandiri'
         description:
           type: string
           nullable: true
-          example: "Akses penuh sistem kasir, inventori, dan laporan cloud."
+          example: 'Akses penuh sistem kasir, inventori, dan laporan cloud.'
         price:
           type: string
-          example: "175000.00"
+          example: '175000.00'
         currency:
           type: string
-          example: "IDR"
+          example: 'IDR'
         duration_days:
           type: integer
           example: 30
@@ -639,44 +639,44 @@ components:
           example: 1
         external_customer_id:
           type: string
-          example: "WARUNG-001"
+          example: 'WARUNG-001'
         name:
           type: string
-          example: "Warung Berkah Nusantara"
+          example: 'Warung Berkah Nusantara'
         owner_name:
           type: string
-          example: "Budi Santoso"
+          example: 'Budi Santoso'
         email:
           type: string
-          example: "budi.santoso@warungberkah.test"
+          example: 'budi.santoso@warungberkah.test'
         phone_number:
           type: string
-          example: "081234567890"
+          example: '081234567890'
         is_active:
           type: boolean
           example: true
         source:
           type: string
-          example: "integration"
+          example: 'integration'
         sync_status:
           type: string
-          example: "synced"
+          example: 'synced'
 
     InvoicePreviewData:
       type: object
       properties:
         customer_external_id:
           type: string
-          example: "WARUNG-001"
+          example: 'WARUNG-001'
         plan:
           type: object
           properties:
             code:
               type: string
-              example: "BASIC-WARUNG"
+              example: 'BASIC-WARUNG'
             name:
               type: string
-              example: "Paket Warung Mandiri"
+              example: 'Paket Warung Mandiri'
             duration_days:
               type: integer
               example: 90
@@ -688,30 +688,30 @@ components:
           properties:
             unit_price:
               type: string
-              example: "175000.00"
+              example: '175000.00'
             period_count:
               type: integer
               example: 3
             normal_price:
               type: string
-              example: "525000.00"
+              example: '525000.00'
             referral_code:
               type: string
               nullable: true
-              example: "MITRA-JAKARTA"
+              example: 'MITRA-JAKARTA'
             referral_type:
               type: string
               nullable: true
-              example: "khusus"
+              example: 'khusus'
             discount_amount:
               type: string
-              example: "225000.00"
+              example: '225000.00'
             final_price:
               type: string
-              example: "300000.00"
+              example: '300000.00'
             currency:
               type: string
-              example: "IDR"
+              example: 'IDR'
         available_gateways:
           type: array
           items:
@@ -719,32 +719,32 @@ components:
             properties:
               provider:
                 type: string
-                example: "midtrans"
+                example: 'midtrans'
               merchant_code:
                 type: string
-                example: "larissama"
+                example: 'larissama'
 
     InvoiceDetail:
       type: object
       properties:
         invoice_number:
           type: string
-          example: "INV-202611-0001"
+          example: 'INV-202611-0001'
         status:
           type: string
           enum: [pending, paid, cancelled, expired, failed]
-          example: "pending"
+          example: 'pending'
         period_count:
           type: integer
           example: 1
         issued_at:
           type: string
           format: date-time
-          example: "2026-11-06T10:30:00.000000Z"
+          example: '2026-11-06T10:30:00.000000Z'
         due_at:
           type: string
           format: date-time
-          example: "2026-11-08T23:59:59.000000Z"
+          example: '2026-11-08T23:59:59.000000Z'
         paid_at:
           type: string
           format: date-time
@@ -754,10 +754,10 @@ components:
           properties:
             code:
               type: string
-              example: "BASIC-WARUNG"
+              example: 'BASIC-WARUNG'
             name:
               type: string
-              example: "Paket Warung Mandiri"
+              example: 'Paket Warung Mandiri'
             duration_days:
               type: integer
               example: 30
@@ -769,24 +769,24 @@ components:
           properties:
             normal_price:
               type: string
-              example: "175000.00"
+              example: '175000.00'
             referral_code:
               type: string
               nullable: true
-              example: "MITRA-JAKARTA"
+              example: 'MITRA-JAKARTA'
             referral_type:
               type: string
               nullable: true
-              example: "khusus"
+              example: 'khusus'
             discount_amount:
               type: string
-              example: "75000.00"
+              example: '75000.00'
             final_price:
               type: string
-              example: "100000.00"
+              example: '100000.00'
             currency:
               type: string
-              example: "IDR"
+              example: 'IDR'
         payment:
           type: object
           nullable: true
@@ -794,21 +794,21 @@ components:
             status:
               type: string
               enum: [initiated, pending, succeeded, failed, cancelled, expired]
-              example: "pending"
+              example: 'pending'
             provider:
               type: string
               enum: [midtrans, dana]
-              example: "midtrans"
+              example: 'midtrans'
             payment_method:
               type: string
-              example: "va_bca"
+              example: 'va_bca'
             bank:
               type: string
               nullable: true
-              example: "bca"
+              example: 'bca'
             amount:
               type: string
-              example: "100000.00"
+              example: '100000.00'
             subtotal_amount:
               type: number
               example: 100000.0
@@ -818,7 +818,7 @@ components:
             checkout_status:
               type: string
               enum: [ready, processing, failed]
-              example: "ready"
+              example: 'ready'
             checkout_url:
               type: string
               nullable: true
@@ -828,7 +828,7 @@ components:
             payment_code:
               type: string
               nullable: true
-              example: "100889977112233"
+              example: '100889977112233'
             payment_instruction:
               type: object
               nullable: true
@@ -836,13 +836,13 @@ components:
                 type:
                   type: string
                   enum: [qris_mpm, virtual_account, gopay]
-                  example: "virtual_account"
+                  example: 'virtual_account'
                 bank:
                   type: string
-                  example: "BCA"
+                  example: 'BCA'
                 payment_code:
                   type: string
-                  example: "100889977112233"
+                  example: '100889977112233'
                 bill_key:
                   type: string
                   nullable: true
@@ -861,7 +861,7 @@ components:
               format: date-time
             transaction_id:
               type: string
-              example: "INV-202611-0001-A1"
+              example: 'INV-202611-0001-A1'
             completed_at:
               type: string
               format: date-time
@@ -879,19 +879,19 @@ components:
                 example: 1
               provider:
                 type: string
-                example: "midtrans"
+                example: 'midtrans'
               status:
                 type: string
-                example: "pending"
+                example: 'pending'
               payment_method:
                 type: string
-                example: "va_bca"
+                example: 'va_bca'
               amount:
                 type: string
-                example: "100000.00"
+                example: '100000.00'
               currency:
                 type: string
-                example: "IDR"
+                example: 'IDR'
         subscription:
           $ref: '#/components/schemas/CustomerSubscriptionStatus'
         tracking:
@@ -918,18 +918,18 @@ components:
         status:
           type: string
           enum: [active, expired, cancelled]
-          example: "active"
+          example: 'active'
         plan_code:
           type: string
-          example: "BASIC-WARUNG"
+          example: 'BASIC-WARUNG'
         starts_at:
           type: string
           format: date-time
-          example: "2026-11-06T10:40:15.000000Z"
+          example: '2026-11-06T10:40:15.000000Z'
         expires_at:
           type: string
           format: date-time
-          example: "2026-12-06T10:40:15.000000Z"
+          example: '2026-12-06T10:40:15.000000Z'
         period_events:
           type: array
           items:
@@ -937,7 +937,7 @@ components:
             properties:
               event_type:
                 type: string
-                example: "activation"
+                example: 'activation'
               previous_expires_at:
                 type: string
                 nullable: true
@@ -954,24 +954,24 @@ components:
       properties:
         code:
           type: string
-          example: "MITRA-JAKARTA"
+          example: 'MITRA-JAKARTA'
         type:
           type: string
           enum: [umum, khusus]
-          example: "khusus"
+          example: 'khusus'
         base_price:
           type: string
-          example: "175000.00"
+          example: '175000.00'
         discount_amount:
           type: string
-          example: "75000.00"
+          example: '75000.00'
         customer_price:
           type: string
-          example: "100000.00"
+          example: '100000.00'
         locked_at:
           type: string
           format: date-time
-          example: "2026-11-06T10:45:00.000000Z"
+          example: '2026-11-06T10:45:00.000000Z'
 
     PaginationLinks:
       type: object
@@ -1014,10 +1014,10 @@ components:
       properties:
         message:
           type: string
-          example: "Pesan penjelasan kegagalan."
+          example: 'Pesan penjelasan kegagalan.'
         error_code:
           type: string
-          example: "referral_already_locked"
+          example: 'referral_already_locked'
         errors:
           type: object
           additionalProperties:
@@ -1033,7 +1033,7 @@ components:
           schema:
             $ref: '#/components/schemas/ErrorResponse'
           example:
-            message: "Token integrasi tidak valid."
+            message: 'Token integrasi tidak valid.'
 
     ForbiddenError:
       description: Token tidak memiliki izin Global Token atau aplikasi dinonaktifkan.
@@ -1042,8 +1042,8 @@ components:
           schema:
             $ref: '#/components/schemas/ErrorResponse'
           example:
-            error_code: "global_token_required"
-            message: "Global API Token aplikasi diperlukan."
+            error_code: 'global_token_required'
+            message: 'Global API Token aplikasi diperlukan.'
 
     NotFoundError:
       description: Sumber daya (pelanggan, paket, atau invoice) tidak ditemukan.
@@ -1052,7 +1052,7 @@ components:
           schema:
             $ref: '#/components/schemas/ErrorResponse'
           example:
-            message: "Invoice tidak ditemukan pada aplikasi ini."
+            message: 'Invoice tidak ditemukan pada aplikasi ini.'
 
     ValidationError:
       description: Data input gagal melewati validasi Form Request.
@@ -1061,7 +1061,7 @@ components:
           schema:
             $ref: '#/components/schemas/ErrorResponse'
           example:
-            message: "Data yang dikirim belum valid. Periksa kembali isian Anda."
+            message: 'Data yang dikirim belum valid. Periksa kembali isian Anda.'
             errors:
               due_at:
-                - "Tanggal jatuh tempo harus setelah waktu penerbitan invoice."
+                - 'Tanggal jatuh tempo harus setelah waktu penerbitan invoice.'

@@ -1,4 +1,5 @@
 # KONTRAK RESMI API UDEV CENTRALIZED BILLING
+
 ## KHUSUS INTEGRASI EKSTERNAL APLIKASI LARISSAMA
 
 ---
@@ -6,6 +7,7 @@
 ## 1. Konvensi Global API
 
 ### Base URL & Prefix Rute
+
 - **Prefix Kanonis**: `/api/v1/integrations` (Standar REST API)
 - **Prefix Kompatibilitas**: `/api/v1/integration` (Alias legacy yang didukung penuh)
 - **Base URL Staging / Mock**: `https://apiudev.udumbara.my.id`
@@ -14,6 +16,7 @@
 Seluruh endpoint di bawah ini dijelaskan menggunakan prefix kanonis `/api/v1/integrations`.
 
 ### Header Wajib Global
+
 Setiap request ke endpoint integrasi wajib menyertakan header berikut:
 
 ```http
@@ -23,6 +26,7 @@ Content-Type: application/json
 ```
 
 ### Format Amplop Respons Standar
+
 Setiap respons sukses dari UDEV dikemas dalam format JSON terstandarisasi:
 
 ```json
@@ -34,13 +38,12 @@ Setiap respons sukses dari UDEV dikemas dalam format JSON terstandarisasi:
 ```
 
 Format respons error:
+
 ```json
 {
   "message": "Deskripsi umum kesalahan.",
   "errors": {
-    "field_name": [
-      "Detail pesan validasi error..."
-    ]
+    "field_name": ["Detail pesan validasi error..."]
   },
   "error_code": "validation_failed",
   "request_id": "req_672bc19a3b04c"
@@ -51,36 +54,38 @@ Format respons error:
 
 ## 2. Ringkasan Endpoint Integrasi
 
-| Method | Endpoint Path | Deskripsi Singkat | Status Kode |
-|---|---|---|---|
-| `GET` | `/subscription-plans` | Ambil katalog paket langganan aktif milik Larissama. | `200 OK` |
-| `POST` | `/customers` | Upsert pendaftaran/sinkronisasi profil warung ke UDEV. | `200 OK` / `201 Created` |
-| `GET` | `/customers/{externalId}` | Ambil profil pelanggan warung berdasarkan ID eksternal. | `200 OK` |
-| `PATCH` | `/customers/{externalId}` | Perbarui data kontak warung yang sudah ada. | `200 OK` |
-| `POST` | `/customers/{externalId}/invoice-preview` | Hitung simulasi harga, durasi, dan diskon referral tanpa membuat invoice. | `200 OK` |
-| `POST` | `/customers/{externalId}/invoices` | Terbitkan invoice penagihan resmi berstatus `pending`. | `201 Created` |
-| `POST` | `/invoices/{invoiceNumber}/checkout` | Mulai sesi checkout pembayaran Midtrans (QRIS/VA/GoPay). | `200 OK` / `202 Accepted` |
-| `GET` | `/invoices/{invoiceNumber}` | Baca status terkini invoice, detail instruksi, dan rekonsiliasi. | `200 OK` |
-| `GET` | `/customers/{externalId}/subscription` | Baca status paket aktif, tanggal mulai, dan kedaluwarsa warung. | `200 OK` |
-| `GET` | `/customers/{externalId}/transactions` | Ambil riwayat penagihan dan histori payment attempts terpaginasi. | `200 OK` |
-| `POST` | `/referrals/validate` | Validasi keberadaan dan status aktif kode referral mitra. | `200 OK` |
-| `POST` | `/customers/{externalId}/referral` | Kunci kode referral pada warung saat pendaftaran pertama. | `201 Created` |
+| Method  | Endpoint Path                             | Deskripsi Singkat                                                         | Status Kode               |
+| ------- | ----------------------------------------- | ------------------------------------------------------------------------- | ------------------------- |
+| `GET`   | `/subscription-plans`                     | Ambil katalog paket langganan aktif milik Larissama.                      | `200 OK`                  |
+| `POST`  | `/customers`                              | Upsert pendaftaran/sinkronisasi profil warung ke UDEV.                    | `200 OK` / `201 Created`  |
+| `GET`   | `/customers/{externalId}`                 | Ambil profil pelanggan warung berdasarkan ID eksternal.                   | `200 OK`                  |
+| `PATCH` | `/customers/{externalId}`                 | Perbarui data kontak warung yang sudah ada.                               | `200 OK`                  |
+| `POST`  | `/customers/{externalId}/invoice-preview` | Hitung simulasi harga, durasi, dan diskon referral tanpa membuat invoice. | `200 OK`                  |
+| `POST`  | `/customers/{externalId}/invoices`        | Terbitkan invoice penagihan resmi berstatus `pending`.                    | `201 Created`             |
+| `POST`  | `/invoices/{invoiceNumber}/checkout`      | Mulai sesi checkout pembayaran Midtrans (QRIS/VA/GoPay).                  | `200 OK` / `202 Accepted` |
+| `GET`   | `/invoices/{invoiceNumber}`               | Baca status terkini invoice, detail instruksi, dan rekonsiliasi.          | `200 OK`                  |
+| `GET`   | `/customers/{externalId}/subscription`    | Baca status paket aktif, tanggal mulai, dan kedaluwarsa warung.           | `200 OK`                  |
+| `GET`   | `/customers/{externalId}/transactions`    | Ambil riwayat penagihan dan histori payment attempts terpaginasi.         | `200 OK`                  |
+| `POST`  | `/referrals/validate`                     | Validasi keberadaan dan status aktif kode referral mitra.                 | `200 OK`                  |
+| `POST`  | `/customers/{externalId}/referral`        | Kunci kode referral pada warung saat pendaftaran pertama.                 | `201 Created`             |
 
 ---
 
 ## 3. Detail Kontrak Endpoint
 
 ### 3.1. Get Subscription Plans
+
 Mengambil daftar paket berlangganan resmi yang dikonfigurasi aktif untuk aplikasi Larissama.
 
 - **HTTP Method**: `GET`
 - **Endpoint Path**: `/api/v1/integrations/subscription-plans`
 - **Otentikasi**: Bearer Token
 - **Query Parameters**:
-  - `page` *(optional, integer, min: 1)*: Halaman data paginasi (default: 1).
-  - `per_page` *(optional, integer, min: 1, max: 100)*: Jumlah item per halaman (default: 15, disarankan 100).
+  - `page` _(optional, integer, min: 1)_: Halaman data paginasi (default: 1).
+  - `per_page` _(optional, integer, min: 1, max: 100)_: Jumlah item per halaman (default: 15, disarankan 100).
 
 #### Contoh Request:
+
 ```http
 GET /api/v1/integrations/subscription-plans?per_page=100 HTTP/1.1
 Host: apiudev.udumbara.my.id
@@ -89,6 +94,7 @@ Accept: application/json
 ```
 
 #### Contoh Success Response (`200 OK`):
+
 ```json
 {
   "data": [
@@ -123,20 +129,22 @@ Accept: application/json
 ---
 
 ### 3.2. Upsert Customer (Sinkronisasi Pelanggan Warung)
+
 Mendaftarkan atau memperbarui data profil warung dari Larissama ke UDEV Centralized Billing.
 
 - **HTTP Method**: `POST`
 - **Endpoint Path**: `/api/v1/integrations/customers`
 - **Otentikasi**: Bearer Token
 - **Request Body Fields**:
-  - `external_customer_id` *(required, string, max: 100)*: ID unik warung di Larissama (contoh: ID integer warung `WARUNG-12` atau UUID).
-  - `name` *(required, string, max: 255)*: Nama usaha/warung.
-  - `owner_name` *(required, string, max: 255)*: Nama lengkap pemilik warung.
-  - `email` *(required, string, email, max: 255)*: Alamat email pemilik akun warung.
-  - `phone` *(required, string, max: 30)*: Nomor telepon/WhatsApp aktif warung.
-  - `status` *(optional, string, in: `active`, `suspended`, `inactive`)*: Status operasional akun (default: `active`).
+  - `external_customer_id` _(required, string, max: 100)_: ID unik warung di Larissama (contoh: ID integer warung `WARUNG-12` atau UUID).
+  - `name` _(required, string, max: 255)_: Nama usaha/warung.
+  - `owner_name` _(required, string, max: 255)_: Nama lengkap pemilik warung.
+  - `email` _(required, string, email, max: 255)_: Alamat email pemilik akun warung.
+  - `phone` _(required, string, max: 30)_: Nomor telepon/WhatsApp aktif warung.
+  - `status` _(optional, string, in: `active`, `suspended`, `inactive`)_: Status operasional akun (default: `active`).
 
 #### Contoh Request:
+
 ```http
 POST /api/v1/integrations/customers HTTP/1.1
 Host: apiudev.udumbara.my.id
@@ -155,6 +163,7 @@ Accept: application/json
 ```
 
 #### Contoh Success Response (`201 Created` / `200 OK`):
+
 ```json
 {
   "data": {
@@ -179,18 +188,20 @@ Accept: application/json
 ---
 
 ### 3.3. Invoice Preview (Simulasi Harga & Durasi)
+
 Menghitung simulasi nominal harga, potongan diskon referral, dan total hari aktif tanpa menerbitkan invoice di database.
 
 - **HTTP Method**: `POST`
 - **Endpoint Path**: `/api/v1/integrations/customers/{externalId}/invoice-preview`
 - **Path Parameter**:
-  - `externalId` *(required, string)*: `external_customer_id` warung yang terdaftar.
+  - `externalId` _(required, string)_: `external_customer_id` warung yang terdaftar.
 - **Request Body Fields**:
-  - `subscription_plan_code` *(required, string, max: 100)*: Kode paket (contoh: `BASIC-WARUNG`).
-  - `period_count` *(optional, integer, min: 1, max: 12)*: Jumlah bulan/periode yang ingin dibeli (default: 1).
+  - `subscription_plan_code` _(required, string, max: 100)_: Kode paket (contoh: `BASIC-WARUNG`).
+  - `period_count` _(optional, integer, min: 1, max: 12)_: Jumlah bulan/periode yang ingin dibeli (default: 1).
 - **Parameter Terlarang**: `application_id`, `amount`, `currency` (Dilarang dikirim; server menghitung harga secara otoritatif).
 
 #### Contoh Request:
+
 ```http
 POST /api/v1/integrations/customers/WARUNG-001/invoice-preview HTTP/1.1
 Host: apiudev.udumbara.my.id
@@ -205,6 +216,7 @@ Accept: application/json
 ```
 
 #### Contoh Success Response (`200 OK`):
+
 ```json
 {
   "data": {
@@ -239,22 +251,24 @@ Accept: application/json
 ---
 
 ### 3.4. Create Invoice (Penerbitan Invoice Pending)
+
 Menerbitkan invoice penagihan resmi yang siap dibayarkan.
 
 - **HTTP Method**: `POST`
 - **Endpoint Path**: `/api/v1/integrations/customers/{externalId}/invoices`
 - **Path Parameter**:
-  - `externalId` *(required, string)*: `external_customer_id` warung.
+  - `externalId` _(required, string)_: `external_customer_id` warung.
 - **Header Khusus**:
-  - `Idempotency-Key` *(optional jika ada di body, required string, max: 100)*.
+  - `Idempotency-Key` _(optional jika ada di body, required string, max: 100)_.
 - **Request Body Fields**:
-  - `subscription_plan_code` *(required, string, max: 100)*: Kode paket aktif.
-  - `due_at` *(required, string ISO8601/date)*: Batas waktu jatuh tempo pembayaran invoice. **Wajib lebih besar dari waktu sekarang**.
-  - `period_count` *(optional, integer, min: 1, max: 12)*: Durasi periode (default: 1).
-  - `idempotency_key` *(required jika header tidak ada, string, max: 100, regex `/^[A-Za-z0-9][A-Za-z0-9._-]*$/`)*.
+  - `subscription_plan_code` _(required, string, max: 100)_: Kode paket aktif.
+  - `due_at` _(required, string ISO8601/date)_: Batas waktu jatuh tempo pembayaran invoice. **Wajib lebih besar dari waktu sekarang**.
+  - `period_count` _(optional, integer, min: 1, max: 12)_: Durasi periode (default: 1).
+  - `idempotency_key` _(required jika header tidak ada, string, max: 100, regex `/^[A-Za-z0-9][A-Za-z0-9._-]*$/`)_.
 - **Parameter Terlarang**: `application_id`, `amount`, `currency`, `subscription_id`.
 
 #### Contoh Request:
+
 ```http
 POST /api/v1/integrations/customers/WARUNG-001/invoices HTTP/1.1
 Host: apiudev.udumbara.my.id
@@ -272,6 +286,7 @@ Accept: application/json
 ```
 
 #### Contoh Success Response (`201 Created`):
+
 ```json
 {
   "data": {
@@ -312,18 +327,19 @@ Accept: application/json
 ---
 
 ### 3.5. Checkout Invoice (Inisiasi Pembayaran Midtrans)
+
 Meminta inisiasi sesi pembayaran ke payment gateway Midtrans dan menghasilkan QRIS, Nomor VA, atau link GoPay.
 
 - **HTTP Method**: `POST`
 - **Endpoint Path**: `/api/v1/integrations/invoices/{invoiceNumber}/checkout`
 - **Path Parameter**:
-  - `invoiceNumber` *(required, string)*: Nomor invoice UDEV (contoh: `INV-202611-0001`).
+  - `invoiceNumber` _(required, string)_: Nomor invoice UDEV (contoh: `INV-202611-0001`).
 - **Header Khusus**:
-  - `Idempotency-Key` *(optional jika di body, string, max: 64)*.
+  - `Idempotency-Key` _(optional jika di body, string, max: 64)_.
 - **Request Body Fields**:
-  - `idempotency_key` *(required jika header tidak ada, string, max: 64, regex `/^[A-Za-z0-9][A-Za-z0-9._-]*$/`)*.
-  - `provider` *(optional, string, enum: `midtrans`, `dana`)*: **Sangat disarankan selalu mengirimkan `"midtrans"`**.
-  - `payment_method` *(optional, string)*:
+  - `idempotency_key` _(required jika header tidak ada, string, max: 64, regex `/^[A-Za-z0-9][A-Za-z0-9._-]*$/`)_.
+  - `provider` _(optional, string, enum: `midtrans`, `dana`)_: **Sangat disarankan selalu mengirimkan `"midtrans"`**.
+  - `payment_method` _(optional, string)_:
     - `qris` (QRIS Nasional MPM)
     - `va_bca` (BCA Virtual Account)
     - `va_bni` (BNI Virtual Account)
@@ -331,10 +347,11 @@ Meminta inisiasi sesi pembayaran ke payment gateway Midtrans dan menghasilkan QR
     - `va_permata` (Permata Virtual Account)
     - `va_mandiri` atau `echannel` (Mandiri Bill Payment)
     - `gopay` (GoPay Deeplink / QR)
-  - `bank` *(optional, string, in: `bca`, `bni`, `bri`, `permata`, `mandiri`, `echannel`)*: Opsional jika nama bank tidak disatukan di `payment_method`.
+  - `bank` _(optional, string, in: `bca`, `bni`, `bri`, `permata`, `mandiri`, `echannel`)_: Opsional jika nama bank tidak disatukan di `payment_method`.
 - **Parameter Terlarang**: `amount`, `currency`, `merchant`, `merchant_code`.
 
 #### Contoh Request (Checkout BCA Virtual Account):
+
 ```http
 POST /api/v1/integrations/invoices/INV-202611-0001/checkout HTTP/1.1
 Host: apiudev.udumbara.my.id
@@ -351,6 +368,7 @@ Accept: application/json
 ```
 
 #### Contoh Success Response (`200 OK` - Ready):
+
 ```json
 {
   "data": {
@@ -431,16 +449,18 @@ Accept: application/json
 ---
 
 ### 3.6. Get Invoice Detail (Cek Status Pembayaran)
+
 Membaca status terkini suatu invoice (digunakan untuk polling setelah pelanggan membayar atau verifikasi rekonsiliasi).
 
 - **HTTP Method**: `GET`
 - **Endpoint Path**: `/api/v1/integrations/invoices/{invoiceNumber}`
 - **Path Parameter**:
-  - `invoiceNumber` *(required, string)*: Nomor invoice.
+  - `invoiceNumber` _(required, string)_: Nomor invoice.
 - **Query Parameters**:
-  - `reconcile` *(optional, boolean, `1` / `true`)*: Jika `true` dan invoice masih pending, memicu UDEV memeriksa status pembayaran langsung ke gateway.
+  - `reconcile` _(optional, boolean, `1` / `true`)_: Jika `true` dan invoice masih pending, memicu UDEV memeriksa status pembayaran langsung ke gateway.
 
 #### Contoh Request:
+
 ```http
 GET /api/v1/integrations/invoices/INV-202611-0001 HTTP/1.1
 Host: apiudev.udumbara.my.id
@@ -449,6 +469,7 @@ Accept: application/json
 ```
 
 #### Contoh Success Response (`200 OK` - Status Lunas / Paid):
+
 ```json
 {
   "data": {
@@ -523,14 +544,16 @@ Accept: application/json
 ---
 
 ### 3.7. Get Customer Subscription (Status Masa Aktif Pelanggan)
+
 Membaca status paket aktif warung, tanggal mulai, dan tanggal kedaluwarsa resmi dari UDEV.
 
 - **HTTP Method**: `GET`
 - **Endpoint Path**: `/api/v1/integrations/customers/{externalId}/subscription`
 - **Path Parameter**:
-  - `externalId` *(required, string)*: ID eksternal warung di Larissama.
+  - `externalId` _(required, string)_: ID eksternal warung di Larissama.
 
 #### Contoh Request:
+
 ```http
 GET /api/v1/integrations/customers/WARUNG-001/subscription HTTP/1.1
 Host: apiudev.udumbara.my.id
@@ -539,6 +562,7 @@ Accept: application/json
 ```
 
 #### Contoh Success Response (`200 OK`):
+
 ```json
 {
   "data": {
@@ -565,30 +589,34 @@ Accept: application/json
 ---
 
 ### 3.8. Get Customer Transactions (Riwayat Transaksi Pelanggan)
+
 Mengambil daftar histori seluruh invoice dan payment attempts warung secara terpaginasi.
 
 - **HTTP Method**: `GET`
 - **Endpoint Path**: `/api/v1/integrations/customers/{externalId}/transactions`
 - **Path Parameter**:
-  - `externalId` *(required, string)*: ID eksternal warung.
+  - `externalId` _(required, string)_: ID eksternal warung.
 - **Query Parameters**:
-  - `page` *(optional, integer, default: 1)*
-  - `per_page` *(optional, integer, min: 1, max: 100, default: 15)*
+  - `page` _(optional, integer, default: 1)_
+  - `per_page` _(optional, integer, min: 1, max: 100, default: 15)_
 
 #### Contoh Response:
+
 Mengembalikan koleksi array berisikan objek invoice yang sama persis dengan skema `IntegrationInvoiceResource`.
 
 ---
 
 ### 3.9. Validate Referral Code
+
 Memeriksa apakah kode referral mitra valid, aktif, serta mendapatkan rincian besaran diskon.
 
 - **HTTP Method**: `POST`
 - **Endpoint Path**: `/api/v1/integrations/referrals/validate`
 - **Request Body Fields**:
-  - `referral_code` *(required, string, max: 50)*
+  - `referral_code` _(required, string, max: 50)_
 
 #### Contoh Request:
+
 ```json
 {
   "referral_code": "MITRA-JAKARTA"
@@ -596,6 +624,7 @@ Memeriksa apakah kode referral mitra valid, aktif, serta mendapatkan rincian bes
 ```
 
 #### Contoh Success Response (`200 OK`):
+
 ```json
 {
   "data": {
@@ -613,14 +642,16 @@ Memeriksa apakah kode referral mitra valid, aktif, serta mendapatkan rincian bes
 ---
 
 ### 3.10. Attach Referral to Customer (Kunci Diskon Pendaftaran Warung)
+
 Mengunci kode referral pada akun warung saat pertama kali mendaftar.
 
 - **HTTP Method**: `POST`
 - **Endpoint Path**: `/api/v1/integrations/customers/{externalId}/referral`
 - **Request Body Fields**:
-  - `referral_code` *(required, string, max: 50)*
+  - `referral_code` _(required, string, max: 50)_
 
 #### Contoh Success Response (`201 Created`):
+
 ```json
 {
   "data": {
@@ -637,4 +668,5 @@ Mengunci kode referral pada akun warung saat pertama kali mendaftar.
   "request_id": "req_672bc19a3b04c"
 }
 ```
-*Catatan: Jika warung sudah memiliki referral yang terkunci sebelumnya, endpoint ini mengembalikan HTTP `409 Conflict` dengan pesan `"Pelanggan sudah memiliki kode referral yang terkunci."`*
+
+_Catatan: Jika warung sudah memiliki referral yang terkunci sebelumnya, endpoint ini mengembalikan HTTP `409 Conflict` dengan pesan `"Pelanggan sudah memiliki kode referral yang terkunci."`_

@@ -1,4 +1,5 @@
 # DIAGRAM ALUR PEMBAYARAN & SINKRONISASI
+
 ## UDEV CENTRALIZED BILLING ↔ LARISSAMA (MIDTRANS)
 
 ---
@@ -144,7 +145,7 @@ sequenceDiagram
     Back->>UdevWebhook: GET /api/v1/integrations/invoices/INV-202611-0001
     UdevWebhook-->>Back: 200 OK (payment.status: "expired")
     Back-->>Front: Tampilkan Status: "Batas Waktu Pembayaran Habis"
-    
+
     Note over Front: Tampilkan Tombol "Ulangi Pembayaran (Retry)"
     Front->>Back: POST /api/v1/subscription/invoices/INV-202611-0001/retry<br/>{payment_method: "qris"}
     Back->>UdevWebhook: POST /api/v1/integrations/invoices/INV-202611-0001/checkout (Attempt-2)
@@ -170,7 +171,7 @@ sequenceDiagram
     Owner->>App: Login / Buka Dashboard Warung
     App->>Back: Cek Sesi & Akses Warung
     Back->>Back: Periksa tanggal_berakhir lokal
-    
+
     alt Jika Mendekati Habis atau Berkala
         Back->>UdevAPI: GET /api/v1/integrations/customers/{warung_id}/subscription
         UdevAPI-->>Back: 200 OK {status: "active", expires_at: "2026-12-06"}

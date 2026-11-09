@@ -1,4 +1,5 @@
 # CONTOH IMPLEMENTASI RESMI LARAVEL CLIENT
+
 ## BACKEND LARISSAMA (`api.larissama`) ↔ UDEV BILLING
 
 ---
@@ -381,7 +382,7 @@ class SubscriptionPaymentController extends Controller
                 $subscription = $invoiceData['subscription'] ?? null;
                 if ($subscription && ! empty($subscription['expires_at'])) {
                     $newExpiry = CarbonImmutable::parse($subscription['expires_at']);
-                    
+
                     if ($warung->tanggal_berakhir === null || $newExpiry->toDateString() !== $warung->tanggal_berakhir->toDateString()) {
                         $warung->tanggal_berakhir = $newExpiry->toDateString();
                         $warung->aktif = true;

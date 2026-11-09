@@ -1,4 +1,5 @@
 # PANDUAN METODE PEMBAYARAN MIDTRANS
+
 ## UDEV CENTRALIZED BILLING ↔ LARISSAMA
 
 ---
@@ -7,7 +8,7 @@
 
 Di dalam UDEV Centralized Billing, integrasi Midtrans Core API menangani siklus checkout pembayaran secara terenkripsi dan non-intrusif:
 
-1. **Backend UDEV memegang Kredensial**: *Server Key* Midtrans disimpan terenkripsi menggunakan algoritma `AES-256-GCM` di basis data UDEV. Aplikasi Larissama **tidak pernah** berhubungan langsung dengan *Server Key*.
+1. **Backend UDEV memegang Kredensial**: _Server Key_ Midtrans disimpan terenkripsi menggunakan algoritma `AES-256-GCM` di basis data UDEV. Aplikasi Larissama **tidak pernah** berhubungan langsung dengan _Server Key_.
 2. **Kompabilitas Metode**: Checkout dilakukan melalui endpoint UDEV:
    `POST /api/v1/integrations/invoices/{invoiceNumber}/checkout`
    dengan mengirimkan `provider: "midtrans"` dan parameter `payment_method`.
@@ -19,18 +20,18 @@ Di dalam UDEV Centralized Billing, integrasi Midtrans Core API menangani siklus 
 
 > [!IMPORTANT]
 > Terdapat perbedaan penting antara **Dukungan Kode di UDEV** dan **Aktivasi Merchant di Portal Midtrans**.
-> Kode UDEV sudah mendukung 7 metode pembayaran di bawah ini. Namun pada operasional riil (terutama Production), setiap metode pembayaran harus berstatus **Active** di *Midtrans Merchant Dashboard (Settings > Payment Methods)* merchant yang bersangkutan.
+> Kode UDEV sudah mendukung 7 metode pembayaran di bawah ini. Namun pada operasional riil (terutama Production), setiap metode pembayaran harus berstatus **Active** di _Midtrans Merchant Dashboard (Settings > Payment Methods)_ merchant yang bersangkutan.
 
-| Metode Pembayaran | `payment_method` Code | Dukungan Kode UDEV | Syarat di Midtrans Merchant | Format Output Utama | Batas Waktu Default |
-|---|---|---|---|---|---|
-| **QRIS Nasional** | `qris` | **TERDUKUNG** | Acquirer GoPay / LinkAja / ShopeePay / BCA aktif | `qr_content` (EMVCo String) & `checkout_url` (Image QR) | 15 Menit |
-| **BCA Virtual Account** | `va_bca` / `bank: "bca"` | **TERDUKUNG** | BCA VA aktif di portal Midtrans | `payment_code` (Nomor VA BCA) | 24 Jam |
-| **BNI Virtual Account** | `va_bni` / `bank: "bni"` | **TERDUKUNG** | BNI VA aktif di portal Midtrans | `payment_code` (Nomor VA BNI) | 24 Jam |
-| **BRI Virtual Account** | `va_bri` / `bank: "bri"` | **TERDUKUNG** | BRIVA aktif di portal Midtrans | `payment_code` (Nomor BRIVA) | 24 Jam |
-| **Permata Virtual Account** | `va_permata` / `bank: "permata"` | **TERDUKUNG** | Permata VA aktif di portal Midtrans | `payment_code` (Nomor VA Permata) | 24 Jam |
-| **Mandiri Bill Payment** | `va_mandiri` / `echannel` | **TERDUKUNG** | Mandiri E-Channel aktif di portal Midtrans | `biller_code` (Kode Perusahaan) + `bill_key` (Kode Tagihan) | 24 Jam |
-| **GoPay** | `gopay` | **TERDUKUNG** | GoPay Direct API aktif di portal Midtrans | `checkout_url` (Deeplink GoPay) / Fallback QR | 15 Menit |
-| **Indomaret (CStore)** | `indomaret` / `cstore` | **TERDUKUNG** | Indomaret CStore aktif di portal Midtrans | `payment_code` (Kode Pembayaran Indomaret) | 24 Jam |
+| Metode Pembayaran           | `payment_method` Code            | Dukungan Kode UDEV | Syarat di Midtrans Merchant                      | Format Output Utama                                         | Batas Waktu Default |
+| --------------------------- | -------------------------------- | ------------------ | ------------------------------------------------ | ----------------------------------------------------------- | ------------------- |
+| **QRIS Nasional**           | `qris`                           | **TERDUKUNG**      | Acquirer GoPay / LinkAja / ShopeePay / BCA aktif | `qr_content` (EMVCo String) & `checkout_url` (Image QR)     | 15 Menit            |
+| **BCA Virtual Account**     | `va_bca` / `bank: "bca"`         | **TERDUKUNG**      | BCA VA aktif di portal Midtrans                  | `payment_code` (Nomor VA BCA)                               | 24 Jam              |
+| **BNI Virtual Account**     | `va_bni` / `bank: "bni"`         | **TERDUKUNG**      | BNI VA aktif di portal Midtrans                  | `payment_code` (Nomor VA BNI)                               | 24 Jam              |
+| **BRI Virtual Account**     | `va_bri` / `bank: "bri"`         | **TERDUKUNG**      | BRIVA aktif di portal Midtrans                   | `payment_code` (Nomor BRIVA)                                | 24 Jam              |
+| **Permata Virtual Account** | `va_permata` / `bank: "permata"` | **TERDUKUNG**      | Permata VA aktif di portal Midtrans              | `payment_code` (Nomor VA Permata)                           | 24 Jam              |
+| **Mandiri Bill Payment**    | `va_mandiri` / `echannel`        | **TERDUKUNG**      | Mandiri E-Channel aktif di portal Midtrans       | `biller_code` (Kode Perusahaan) + `bill_key` (Kode Tagihan) | 24 Jam              |
+| **GoPay**                   | `gopay`                          | **TERDUKUNG**      | GoPay Direct API aktif di portal Midtrans        | `checkout_url` (Deeplink GoPay) / Fallback QR               | 15 Menit            |
+| **Indomaret (CStore)**      | `indomaret` / `cstore`           | **TERDUKUNG**      | Indomaret CStore aktif di portal Midtrans        | `payment_code` (Kode Pembayaran Indomaret)                  | 24 Jam              |
 
 ---
 
@@ -41,6 +42,7 @@ Di dalam UDEV Centralized Billing, integrasi Midtrans Core API menangani siklus 
 Metode ini memungkinkan pelanggan warung membayar menggunakan aplikasi e-wallet (GoPay, OVO, DANA, ShopeePay, LinkAja) atau mobile banking manapun yang mendukung scan QRIS.
 
 #### Request Checkout:
+
 ```json
 {
   "provider": "midtrans",
@@ -50,6 +52,7 @@ Metode ini memungkinkan pelanggan warung membayar menggunakan aplikasi e-wallet 
 ```
 
 #### Struktur Response `payment`:
+
 ```json
 {
   "status": "pending",
@@ -77,6 +80,7 @@ Metode ini memungkinkan pelanggan warung membayar menggunakan aplikasi e-wallet 
 ```
 
 #### Implementasi Frontend Larissama (`depan-larissama`):
+
 1. **Render Gambar QR**:
    - Pilihan A (Dianjurkan): Render string `payment.qr_content` menggunakan library JavaScript lokal seperti `qrcode` (`QRCode.toDataURL(qr_content)`) agar gambar QR tajam dan tidak bergantung pada CDN gambar eksternal.
    - Pilihan B: Tampilkan tag `<img :src="payment.checkout_url" alt="QRIS Code" />`.
@@ -92,6 +96,7 @@ Metode ini memungkinkan pelanggan warung membayar menggunakan aplikasi e-wallet 
 Pelanggan melakukan transfer ke nomor rekening virtual BCA melalui BCA Mobile (m-BCA), KlikBCA (Internet Banking), myBCA, atau ATM BCA.
 
 #### Request Checkout:
+
 ```json
 {
   "provider": "midtrans",
@@ -101,6 +106,7 @@ Pelanggan melakukan transfer ke nomor rekening virtual BCA melalui BCA Mobile (m
 ```
 
 #### Struktur Response `payment`:
+
 ```json
 {
   "status": "pending",
@@ -129,12 +135,13 @@ Pelanggan melakukan transfer ke nomor rekening virtual BCA melalui BCA Mobile (m
 ```
 
 #### Implementasi Frontend Larissama:
+
 - Tampilkan logo bank **BCA** dan badge `Virtual Account`.
 - Tampilkan nomor VA (`100889977112233`) dengan tombol **"Salin Nomor VA"** (`navigator.clipboard.writeText`).
 - Tampilkan nominal pasti: **Rp100.000** (harus transfer tepat tanpa pembulatan).
 - Berikan accordion instruksi langkah transfer:
-  - *m-BCA*: Buka m-BCA > m-Transfer > BCA Virtual Account > Masukkan nomor VA > Konfirmasi & Masukkan PIN.
-  - *ATM BCA*: Transaksi Lainnya > Transfer > Ke Rek BCA Virtual Account > Masukkan nomor VA > Bayar.
+  - _m-BCA_: Buka m-BCA > m-Transfer > BCA Virtual Account > Masukkan nomor VA > Konfirmasi & Masukkan PIN.
+  - _ATM BCA_: Transaksi Lainnya > Transfer > Ke Rek BCA Virtual Account > Masukkan nomor VA > Bayar.
 
 ---
 
@@ -143,6 +150,7 @@ Pelanggan melakukan transfer ke nomor rekening virtual BCA melalui BCA Mobile (m
 Pembayaran melalui BNI Mobile Banking, BNI Direct, Internet Banking BNI, atau ATM BNI.
 
 #### Request Checkout:
+
 ```json
 {
   "provider": "midtrans",
@@ -152,6 +160,7 @@ Pembayaran melalui BNI Mobile Banking, BNI Direct, Internet Banking BNI, atau AT
 ```
 
 #### Output:
+
 - `payment.payment_code`: Nomor VA BNI (contoh: `9888899771122330`).
 - `payment.bank`: `"bni"`.
 - `payment.payment_instruction.bank`: `"BNI"`.
@@ -164,6 +173,7 @@ Pembayaran melalui BNI Mobile Banking, BNI Direct, Internet Banking BNI, atau AT
 Pembayaran melalui aplikasi BRImo, Internet Banking BRI, AgenBRILink, atau ATM BRI.
 
 #### Request Checkout:
+
 ```json
 {
   "provider": "midtrans",
@@ -173,6 +183,7 @@ Pembayaran melalui aplikasi BRImo, Internet Banking BRI, AgenBRILink, atau ATM B
 ```
 
 #### Output:
+
 - `payment.payment_code`: Nomor BRIVA (contoh: `123458899771122`).
 - `payment.bank`: `"bri"`.
 - `payment.payment_instruction.bank`: `"BRI"`.
@@ -185,6 +196,7 @@ Pembayaran melalui aplikasi BRImo, Internet Banking BRI, AgenBRILink, atau ATM B
 Pembayaran melalui PermataMobile X, PermataNet, atau transfer antar bank (ATM Bersama / Prima / ALTO) dengan kode bank Permata `013`.
 
 #### Request Checkout:
+
 ```json
 {
   "provider": "midtrans",
@@ -194,6 +206,7 @@ Pembayaran melalui PermataMobile X, PermataNet, atau transfer antar bank (ATM Be
 ```
 
 #### Output:
+
 - `payment.payment_code`: Nomor VA Permata (contoh: `8444889977112233`).
 - `payment.bank`: `"permata"`.
 - `payment.payment_instruction.bank`: `"PERMATA"`.
@@ -204,10 +217,12 @@ Pembayaran melalui PermataMobile X, PermataNet, atau transfer antar bank (ATM Be
 
 > [!CAUTION]
 > Khusus Bank Mandiri, sistem **tidak** menggunakan nomor virtual account konvensional biasa, melainkan skema **Mandiri Bill Payment (Multi-Payment / E-Channel)** yang membutuhkan **DUA KODE**:
+>
 > 1. **Kode Perusahaan / Biller Code**: Kode tetap institusi/merchant (contoh: `70012`).
 > 2. **Nomor Pembayaran / Bill Key**: Kode tagihan unik pelanggan (contoh: nomor ponsel atau order id).
 
 #### Request Checkout:
+
 ```json
 {
   "provider": "midtrans",
@@ -215,9 +230,11 @@ Pembayaran melalui PermataMobile X, PermataNet, atau transfer antar bank (ATM Be
   "idempotency_key": "chk-mandiri-inv-001"
 }
 ```
-*(Catatan: `payment_method: "echannel"` juga diterima).*
+
+_(Catatan: `payment_method: "echannel"` juga diterima)._
 
 #### Struktur Response `payment`:
+
 ```json
 {
   "status": "pending",
@@ -244,9 +261,12 @@ Pembayaran melalui PermataMobile X, PermataNet, atau transfer antar bank (ATM Be
 ```
 
 #### Implementasi Frontend Wajib untuk Mandiri:
+
 Frontend Larissama **wajib menampilkan 2 field salin**:
+
 1. Field 1: **Kode Perusahaan (Biller Code)**: `70012` [Tombol Salin]
 2. Field 2: **Nomor Pembayaran (Bill Key)**: `081234567890` [Tombol Salin]
+
 - Instruksi Livin' by Mandiri: Menu Bayar > Cari Penyedia Jasa / Masukkan Biller Code `70012` > Masukkan Nomor Pelanggan / Bill Key > Konfirmasi Tagihan > Masukkan PIN.
 
 ---
@@ -256,6 +276,7 @@ Frontend Larissama **wajib menampilkan 2 field salin**:
 Pembayaran langsung melalui aplikasi GoPay / Gojek di smartphone atau scan QR jika dibuka di komputer.
 
 #### Request Checkout:
+
 ```json
 {
   "provider": "midtrans",
@@ -265,6 +286,7 @@ Pembayaran langsung melalui aplikasi GoPay / Gojek di smartphone atau scan QR ji
 ```
 
 #### Struktur Response `payment`:
+
 ```json
 {
   "status": "pending",
@@ -289,6 +311,7 @@ Pembayaran langsung melalui aplikasi GoPay / Gojek di smartphone atau scan QR ji
 ```
 
 #### Implementasi Frontend Larissama:
+
 - Di browser mobile: Tampilkan tombol utama **"Buka Aplikasi GoPay"** yang mengarahkan pelanggan ke `payment.checkout_url`.
 - Di browser desktop: Midtrans akan mengembalikan QR code GoPay yang dapat dipindai langsung dari smartphone.
 
@@ -299,6 +322,7 @@ Pembayaran langsung melalui aplikasi GoPay / Gojek di smartphone atau scan QR ji
 Pembayaran tunai atau non-tunai di seluruh gerai Indomaret di Indonesia melalui kasir menggunakan kode pembayaran 10-16 digit.
 
 #### Request Checkout:
+
 ```json
 {
   "provider": "midtrans",
@@ -306,9 +330,11 @@ Pembayaran tunai atau non-tunai di seluruh gerai Indomaret di Indonesia melalui 
   "idempotency_key": "chk-indomaret-inv-001"
 }
 ```
-*(Catatan: `payment_method: "cstore"` juga diterima).*
+
+_(Catatan: `payment_method: "cstore"` juga diterima)._
 
 #### Struktur Response `payment`:
+
 ```json
 {
   "status": "pending",
@@ -351,6 +377,7 @@ Pembayaran tunai atau non-tunai di seluruh gerai Indomaret di Indonesia melalui 
 ```
 
 #### Implementasi Frontend Larissama (`depan-larissama`):
+
 - Tampilkan badge / ikon **Gerai Indomaret**.
 - Tampilkan **Kode Pembayaran** (`payment_code`) dengan ukuran huruf besar dan tombol **"Salin Kode Bayar"**.
 - Tampilkan rincian biaya: **Subtotal Tagihan**, **Biaya Admin (Rp5.000)** terpisah, dan **Total Pembayaran**.

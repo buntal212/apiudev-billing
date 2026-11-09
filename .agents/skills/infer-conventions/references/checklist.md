@@ -83,7 +83,7 @@ No Livewire/Inertia/Flux package is installed. This app may be API-only. Confirm
     - Hint: `composer.json` + `package.json`; `ls resources/js/pages`, `resources/views`.
 29. Blade composition: class `<x-*>` components vs anonymous components (`@props`) vs `@include` partials.
     - Hint: `ls app/View/Components`; grep `<x-`, `@include` in `resources/views`.
-32. Localization: short keys (`lang/*/*.php` + `__('messages.welcome')`) vs JSON string keys (`lang/*.json` + `__('Full sentence')`).
+30. Localization: short keys (`lang/*/*.php` + `__('messages.welcome')`) vs JSON string keys (`lang/*.json` + `__('Full sentence')`).
     - Hint: `ls lang`; grep dotted `__('` vs sentence keys.
 
 ## G. Database & migrations

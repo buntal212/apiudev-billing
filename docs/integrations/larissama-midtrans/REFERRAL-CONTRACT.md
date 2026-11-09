@@ -1,18 +1,19 @@
 # KONTRAK BISNIS REFERRAL & KOMISI MITRA
+
 ## UDEV CENTRALIZED BILLING ↔ LARISSAMA
 
 ---
 
 ## 1. Pembagian Batasan Tanggung Jawab
 
-| Domain Tanggung Jawab | Aplikasi Larissama | UDEV Centralized Billing |
-|---|---|---|
-| **Input Kode Referral** | Menyediakan input kode referral pada form pendaftaran warung baru. | - |
-| **Validasi Kode** | Memanggil API UDEV `POST /referrals/validate`. | Memeriksa validitas kode, jenis mitra, dan status aktif. |
-| **Penguncian Harga Warung** | Mengirimkan kode saat warung terdaftar via `POST /customers/{id}/referral`. | Mengunci tarif diskon permanen di tabel `customer_referrals`. |
-| **Kalkulasi Potongan Harga** | Mengambil harga akhir dari UDEV `invoice-preview`. | Menghitung diskon otomatis per kelipatan periode (1–12 bulan). |
-| **Pencatatan Komisi Mitra** | **TIDAK TERLIBAT** (Larissama dilarang mencatat komisi mitra). | Menghitung komisi pertama vs perpanjangan, mencatat audit ledger. |
-| **Saldo & Pencairan Mitra** | **TIDAK TERLIBAT** | Mengelola saldo tersedia, saldo tertahan, payout rekening mitra. |
+| Domain Tanggung Jawab        | Aplikasi Larissama                                                          | UDEV Centralized Billing                                          |
+| ---------------------------- | --------------------------------------------------------------------------- | ----------------------------------------------------------------- |
+| **Input Kode Referral**      | Menyediakan input kode referral pada form pendaftaran warung baru.          | -                                                                 |
+| **Validasi Kode**            | Memanggil API UDEV `POST /referrals/validate`.                              | Memeriksa validitas kode, jenis mitra, dan status aktif.          |
+| **Penguncian Harga Warung**  | Mengirimkan kode saat warung terdaftar via `POST /customers/{id}/referral`. | Mengunci tarif diskon permanen di tabel `customer_referrals`.     |
+| **Kalkulasi Potongan Harga** | Mengambil harga akhir dari UDEV `invoice-preview`.                          | Menghitung diskon otomatis per kelipatan periode (1–12 bulan).    |
+| **Pencatatan Komisi Mitra**  | **TIDAK TERLIBAT** (Larissama dilarang mencatat komisi mitra).              | Menghitung komisi pertama vs perpanjangan, mencatat audit ledger. |
+| **Saldo & Pencairan Mitra**  | **TIDAK TERLIBAT**                                                          | Mengelola saldo tersedia, saldo tertahan, payout rekening mitra.  |
 
 ---
 
@@ -20,19 +21,21 @@
 
 Setiap paket langganan dasar berdurasi 30 hari kalender memiliki struktur harga resmi sebagai berikut:
 
-| Kategori Pendaftaran | Harga Dasar (30 Hari) | Besaran Diskon | Harga Akhir Pelanggan | Kelipatan Periode (N Bulan) |
-|---|---|---|---|---|
-| **Non-Referral (Normal)** | Rp175.000 | Rp0 | **Rp175.000** | Rp175.000 × N |
-| **Referral Umum (`umum`)** | Rp175.000 | Rp50.000 | **Rp125.000** | Rp125.000 × N |
-| **Referral Khusus (`khusus`)** | Rp175.000 | Rp75.000 | **Rp100.000** | Rp100.000 × N |
+| Kategori Pendaftaran           | Harga Dasar (30 Hari) | Besaran Diskon | Harga Akhir Pelanggan | Kelipatan Periode (N Bulan) |
+| ------------------------------ | --------------------- | -------------- | --------------------- | --------------------------- |
+| **Non-Referral (Normal)**      | Rp175.000             | Rp0            | **Rp175.000**         | Rp175.000 × N               |
+| **Referral Umum (`umum`)**     | Rp175.000             | Rp50.000       | **Rp125.000**         | Rp125.000 × N               |
+| **Referral Khusus (`khusus`)** | Rp175.000             | Rp75.000       | **Rp100.000**         | Rp100.000 × N               |
 
 ### Aturan Perhitungan Multi-Periode:
+
 Jika pelanggan warung memilih durasi lebih dari 1 bulan (slider 1–12 periode):
+
 - **Harga Normal**: `175.000 × period_count`
 - **Total Diskon**: `discount_amount × period_count`
 - **Total Tagihan**: `customer_price × period_count`
-Contoh: Warung dengan Referral Khusus memilih durasi 6 bulan (180 hari):
-`Total Tagihan = Rp100.000 × 6 = Rp600.000` (Diskon Rp450.000 dari harga normal Rp1.050.000).
+  Contoh: Warung dengan Referral Khusus memilih durasi 6 bulan (180 hari):
+  `Total Tagihan = Rp100.000 × 6 = Rp600.000` (Diskon Rp450.000 dari harga normal Rp1.050.000).
 
 ---
 
@@ -54,13 +57,15 @@ Contoh: Warung dengan Referral Khusus memilih durasi 6 bulan (180 hari):
 Informasi ini disediakan agar tim teknis memahami tata kelola keuangan di balik setiap pembayaran sukses:
 
 ### Nilai Komisi Tetap:
+
 1. **Pembayaran Sukses Pertama**: **Rp50.000** per warung.
 2. **Pembayaran Sukses Berikutnya (Renewal)**: **Rp7.500** per warung.
 
 ### Aturan Ketat Perhitungan Komisi:
+
 - **Dihitung Berdasarkan Masing-masing Warung**:
   Status "Pembayaran Pertama" dinilai dari riwayat pembayaran warung spesifik tersebut, **bukan** urutan transaksi keseluruhan mitra.
-  *Contoh*: Jika Mitra A memiliki Warung X dan Warung Y:
+  _Contoh_: Jika Mitra A memiliki Warung X dan Warung Y:
   - Pembayaran pertama Warung X menghasilkan komisi Rp50.000 untuk Mitra A.
   - Pembayaran pertama Warung Y juga menghasilkan komisi Rp50.000 untuk Mitra A.
   - Pembayaran kedua Warung X menghasilkan komisi Rp7.500 untuk Mitra A.

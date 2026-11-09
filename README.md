@@ -12,11 +12,13 @@
 Layanan `apiudev-billing` menyertakan scheduler otomatis untuk merekonsiliasi transaksi DANA Sandbox yang masih berstatus `initiated` atau `pending`.
 
 ### Spesifikasi Perintah
+
 - **Perintah Artisan**: `php artisan payments:reconcile-pending {--limit=25}`
 - **Kelas Command**: [`App\Console\Commands\ReconcilePendingPayments`](app/Console/Commands/ReconcilePendingPayments.php)
 - **Registrasi Penjadwalan**: Terdaftar di [`bootstrap/app.php`](bootstrap/app.php) dengan frekuensi setiap menit (`everyMinute()`), diproteksi overlapping (`withoutOverlapping(1)`), dan dibatasi ke satu node (`onOneServer()`).
 
 ### Alur Rekonsiliasi
+
 1. Scheduler memfilter `PaymentAttempt` dengan kriteria: provider `dana`, environment `sandbox`, memiliki `gateway_payment_id`, serta status `initiated` atau `pending`.
 2. [`App\Services\PaymentReconciliationService`](app/Services/PaymentReconciliationService.php) memanggil status transaksi langsung ke gateway DANA via `GET /api/v1/payments/{paymentId}/status`.
 3. Bila status gateway terkonfirmasi `paid`:
@@ -28,6 +30,7 @@ Layanan `apiudev-billing` menyertakan scheduler otomatis untuk merekonsiliasi tr
    - Menerapkan exponential backoff (base 15s hingga max 900s, max 5 percobaan) sebelum diperiksa kembali.
 
 ### Menjalankan Scheduler
+
 - **Pengembangan / Sandbox Lokal**:
   ```bash
   php artisan schedule:work
