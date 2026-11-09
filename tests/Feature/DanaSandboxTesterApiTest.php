@@ -1175,6 +1175,107 @@ class DanaSandboxTesterApiTest extends TestCase
         ]);
     }
 
+    public function test_debit_status_cancelled_uat_returns_safe_diagnostics_and_audits(): void
+    {
+        $merchant = $this->sandboxProvisionedMerchant();
+        Http::fake([
+            "https://dana-gateway.test/api/v1/internal/merchants/{$merchant->gateway_merchant_id}/sandbox-tester/uat/debit-status-cancelled" => Http::response([
+                'data' => [
+                    'merchant_code' => $merchant->merchant_code,
+                    'environment' => 'sandbox',
+                    'payment_id' => '01K7A2M3N4P5Q6R7S8T9V0W1C1',
+                    'uat' => [
+                        'scenario' => 'debit_status_cancelled',
+                        'passed' => true,
+                        'expected' => [
+                            'response_code' => '2005500',
+                            'response_message' => 'Successful',
+                            'latest_transaction_status' => '05',
+                        ],
+                        'received' => [
+                            'http_status' => 200,
+                            'response_code' => '2005500',
+                            'response_message' => 'Successful',
+                            'latest_transaction_status' => '05',
+                            'request_id' => 'dana-status-cancelled-001',
+                        ],
+                        'request' => [
+                            'endpoint' => '/payment-gateway/v1.0/debit/status.htm',
+                            'original_partner_reference_no' => 'ORDER-001',
+                            'service_code' => '54',
+                            'merchant_id' => 'merchant-001',
+                        ],
+                    ],
+                ],
+            ], 200),
+        ]);
+
+        $this->actingAdmin();
+
+        $this->postJson($this->debitStatusCancelledUatUrl($merchant->gateway_merchant_id), [
+            'payment_id' => '01K7A2M3N4P5Q6R7S8T9V0W1C1',
+        ])
+            ->assertOk()
+            ->assertJsonPath('data.uat.passed', true)
+            ->assertJsonPath('data.uat.scenario', 'debit_status_cancelled')
+            ->assertJsonPath('data.uat.expected.response_code', '2005500')
+            ->assertJsonPath('data.uat.expected.latest_transaction_status', '05')
+            ->assertJsonPath('data.uat.received.http_status', 200)
+            ->assertJsonPath('data.uat.received.response_code', '2005500')
+            ->assertJsonPath('data.uat.received.response_message', 'Successful')
+            ->assertJsonPath('data.uat.received.latest_transaction_status', '05')
+            ->assertJsonMissing(['private_key', 'api_key', 'signature']);
+
+        $this->assertDatabaseHas('dana_merchant_provisioning_audits', [
+            'gateway_merchant_id' => $merchant->gateway_merchant_id,
+            'operation' => 'dana_sandbox_tester.uat_debit_status_cancelled',
+            'status' => 'succeeded',
+            'safe_details->passed' => true,
+            'safe_details->response_code' => '2005500',
+            'safe_details->latest_transaction_status' => '05',
+        ]);
+    }
+
+    public function test_cancel_dana_sandbox_test_transaction_proxies_to_gateway_and_audits(): void
+    {
+        $merchant = $this->sandboxProvisionedMerchant();
+        $paymentId = '01K7A2M3N4P5Q6R7S8T9V0W1C2';
+        Http::fake([
+            "https://dana-gateway.test/api/v1/internal/merchants/{$merchant->gateway_merchant_id}/sandbox-tester/transactions/{$paymentId}/cancel" => Http::response([
+                'data' => [
+                    'merchant_code' => $merchant->merchant_code,
+                    'environment' => 'sandbox',
+                    'payment_id' => $paymentId,
+                    'cancel_result' => [
+                        'http_status' => 200,
+                        'response_code' => '2005700',
+                        'response_message' => 'Successful',
+                        'request_id' => 'dana-cancel-001',
+                    ],
+                ],
+            ], 200),
+        ]);
+
+        $this->actingAdmin();
+
+        $this->postJson("/api/v1/admin/dana-gateway-merchants/{$merchant->gateway_merchant_id}/sandbox-tester/transactions/{$paymentId}/cancel", [
+            'reason' => 'Admin cancellation',
+        ])
+            ->assertOk()
+            ->assertJsonPath('data.payment_id', $paymentId)
+            ->assertJsonPath('data.cancel_result.http_status', 200)
+            ->assertJsonPath('data.cancel_result.response_code', '2005700')
+            ->assertJsonMissing(['private_key', 'api_key', 'signature']);
+
+        $this->assertDatabaseHas('dana_merchant_provisioning_audits', [
+            'gateway_merchant_id' => $merchant->gateway_merchant_id,
+            'operation' => 'dana_sandbox_tester.transaction_cancelled',
+            'status' => 'succeeded',
+            'safe_details->payment_id' => $paymentId,
+            'safe_details->response_code' => '2005700',
+        ]);
+    }
+
     public function test_inconsistent_request_uat_safely_passes_through_failure_diagnostics(): void
     {
         $merchant = $this->sandboxProvisionedMerchant();
@@ -1843,6 +1944,11 @@ class DanaSandboxTesterApiTest extends TestCase
     private function debitStatusInvalidSignatureUatUrl(int $merchantId): string
     {
         return "/api/v1/admin/dana-gateway-merchants/{$merchantId}/sandbox-tester/uat/debit-status-invalid-signature";
+    }
+
+    private function debitStatusCancelledUatUrl(int $merchantId): string
+    {
+        return "/api/v1/admin/dana-gateway-merchants/{$merchantId}/sandbox-tester/uat/debit-status-cancelled";
     }
 
     private function armWebhook500UatUrl(int $merchantId): string

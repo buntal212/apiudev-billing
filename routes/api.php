@@ -142,6 +142,7 @@ Route::prefix('v1/admin')
                 Route::post('{merchantId}/sandbox-tester/uat/debit-status-missing-timestamp', [DanaGatewayMerchantProvisioningController::class, 'testDebitStatusMissingTimestamp'])->whereNumber('merchantId');
                 Route::post('{merchantId}/sandbox-tester/uat/debit-status-internal-server-error', [DanaGatewayMerchantProvisioningController::class, 'testDebitStatusInternalServerError'])->whereNumber('merchantId');
                 Route::post('{merchantId}/sandbox-tester/uat/debit-status-invalid-signature', [DanaGatewayMerchantProvisioningController::class, 'testDebitStatusInvalidSignature'])->whereNumber('merchantId');
+                Route::post('{merchantId}/sandbox-tester/uat/debit-status-cancelled', [DanaGatewayMerchantProvisioningController::class, 'testDebitStatusCancelled'])->whereNumber('merchantId');
                 Route::post('{merchantId}/sandbox-tester/uat/arm-webhook-500', [DanaGatewayMerchantProvisioningController::class, 'armDanaSandboxWebhookSimulated500'])->whereNumber('merchantId');
                 Route::get('{merchantId}/sandbox-tester/transactions', [DanaGatewayMerchantProvisioningController::class, 'danaSandboxTestHistory'])->whereNumber('merchantId');
                 Route::get('{merchantId}/sandbox-tester/transactions/{paymentId}/status', [DanaGatewayMerchantProvisioningController::class, 'danaSandboxTestTransactionStatus'])->whereNumber('merchantId')->whereUlid('paymentId');
@@ -168,6 +169,7 @@ Route::prefix('v1/admin')
                 Route::post('/', [DanaGatewayMerchantProvisioningController::class, 'store']);
                 Route::put('{merchantId}/dana-configuration', [DanaGatewayMerchantProvisioningController::class, 'configureDanaSandbox'])->whereNumber('merchantId');
                 Route::post('{merchantId}/sandbox-tester/transactions', [DanaGatewayMerchantProvisioningController::class, 'createDanaSandboxTestTransaction'])->whereNumber('merchantId');
+                Route::post('{merchantId}/sandbox-tester/transactions/{paymentId}/cancel', [DanaGatewayMerchantProvisioningController::class, 'cancelDanaSandboxTestTransaction'])->whereNumber('merchantId')->whereUlid('paymentId');
                 Route::post('{merchantId}/api-keys/issue', [DanaGatewayMerchantProvisioningController::class, 'issueApiKey'])->whereNumber('merchantId');
                 Route::post('{merchantId}/api-key-issuances/{issuanceId}/cancel', [DanaGatewayMerchantProvisioningController::class, 'cancelIssuance'])->whereNumber(['merchantId', 'issuanceId']);
                 Route::delete('{merchantId}/api-keys/{apiKeyId}', [DanaGatewayMerchantProvisioningController::class, 'revokeApiKey'])->whereNumber(['merchantId', 'apiKeyId']);

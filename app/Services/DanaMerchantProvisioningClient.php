@@ -291,6 +291,34 @@ class DanaMerchantProvisioningClient
     }
 
     /** @return array<string, mixed> */
+    public function testDebitStatusCancelled(int $merchantId, ?string $paymentId = null): array
+    {
+        $payload = [];
+        if (is_string($paymentId) && $paymentId !== '') {
+            $payload['payment_id'] = $paymentId;
+        }
+
+        $response = $this->send(fn (PendingRequest $request): Response => $request
+            ->post("/api/v1/internal/merchants/{$merchantId}/sandbox-tester/uat/debit-status-cancelled", $payload));
+
+        return $this->sandboxDebitStatusCancelledUat($this->decodeSuccessfulResponse($response)['data'] ?? null);
+    }
+
+    /** @return array<string, mixed> */
+    public function cancelDanaSandboxTestTransaction(int $merchantId, string $paymentId, ?string $reason = null): array
+    {
+        $payload = [];
+        if (is_string($reason) && $reason !== '') {
+            $payload['reason'] = $reason;
+        }
+
+        $response = $this->send(fn (PendingRequest $request): Response => $request
+            ->post("/api/v1/internal/merchants/{$merchantId}/sandbox-tester/transactions/{$paymentId}/cancel", $payload));
+
+        return $this->decodeSuccessfulResponse($response)['data'] ?? [];
+    }
+
+    /** @return array<string, mixed> */
     public function armDanaSandboxWebhookSimulated500(int $merchantId, ?string $paymentId = null): array
     {
         $payload = [];
@@ -1257,6 +1285,33 @@ class DanaMerchantProvisioningClient
             || ($request['signature_override'] ?? null) !== 'invalid_signature'
             || ($request['service_code'] ?? null) !== '54') {
             throw new DanaMerchantProvisioningException('Respons UAT Debit Status Sandbox tidak valid.', 502, false);
+        }
+
+        return $result;
+    }
+
+    /** @return array<string, mixed> */
+    private function sandboxDebitStatusCancelledUat(mixed $result): array
+    {
+        $uat = is_array($result) ? ($result['uat'] ?? null) : null;
+        $expected = is_array($uat) ? ($uat['expected'] ?? null) : null;
+        $received = is_array($uat) ? ($uat['received'] ?? null) : null;
+        $request = is_array($uat) ? ($uat['request'] ?? null) : null;
+
+        if (! is_array($result)
+            || ! is_string($result['merchant_code'] ?? null)
+            || ($result['environment'] ?? null) !== 'sandbox'
+            || ! is_array($uat)
+            || ($uat['scenario'] ?? null) !== 'debit_status_cancelled'
+            || ! is_bool($uat['passed'] ?? null)
+            || ! is_array($expected)
+            || ($expected['response_code'] ?? null) !== '2005500'
+            || ($expected['latest_transaction_status'] ?? null) !== '05'
+            || ! is_array($received)
+            || ! is_int($received['http_status'] ?? null)
+            || (! is_null($received['response_code'] ?? null) && ! is_string($received['response_code']))
+            || ! is_array($request)) {
+            throw new DanaMerchantProvisioningException('Respons UAT Debit Status Cancelled Sandbox tidak valid.', 502, false);
         }
 
         return $result;

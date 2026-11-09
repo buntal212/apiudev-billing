@@ -657,6 +657,40 @@ class DanaGatewayMerchantProvisioningController extends Controller
         return response()->json(['data' => $result])->header('Cache-Control', 'no-store');
     }
 
+    public function testDebitStatusCancelled(int $merchantId, Request $request, DanaMerchantProvisioningClient $client): JsonResponse
+    {
+        $merchant = $this->sandboxProvisionedMerchant($merchantId);
+        if ($merchant === null) {
+            return $this->merchantNotFound();
+        }
+
+        $paymentId = $request->input('payment_id');
+
+        try {
+            $result = $client->testDebitStatusCancelled($merchantId, is_string($paymentId) ? $paymentId : null);
+        } catch (DanaMerchantProvisioningException $exception) {
+            $this->recordManagementAudit($request, $merchant, 'dana_sandbox_tester.uat_debit_status_cancelled', 'failed', $exception->gatewayStatus, $exception->retryable, [
+                'payment_id' => $paymentId,
+            ]);
+
+            return $this->gatewayError($exception)->header('Cache-Control', 'no-store');
+        }
+
+        $uat = is_array($result['uat'] ?? null) ? $result['uat'] : [];
+        $passed = ($uat['passed'] ?? false) === true;
+
+        $this->recordManagementAudit($request, $merchant, 'dana_sandbox_tester.uat_debit_status_cancelled', $passed ? 'succeeded' : 'failed', 200, false, [
+            'payment_id' => $result['payment_id'] ?? $paymentId,
+            'passed' => $passed,
+            'response_code' => $uat['received']['response_code'] ?? null,
+            'response_message' => $uat['received']['response_message'] ?? null,
+            'latest_transaction_status' => $uat['received']['latest_transaction_status'] ?? null,
+            'request_id' => $uat['received']['request_id'] ?? null,
+        ]);
+
+        return response()->json(['data' => $result])->header('Cache-Control', 'no-store');
+    }
+
     public function armDanaSandboxWebhookSimulated500(int $merchantId, Request $request, DanaMerchantProvisioningClient $client): JsonResponse
     {
         if ($this->sandboxProvisionedMerchant($merchantId) === null) {
@@ -779,6 +813,34 @@ class DanaGatewayMerchantProvisioningController extends Controller
             'dana_response_code' => $result['dana_status']['response_code'],
             'dana_latest_transaction_status' => $result['dana_status']['latest_transaction_status'],
             'dana_request_id' => $result['dana_status']['request_id'],
+        ]);
+
+        return response()->json(['data' => $result])->header('Cache-Control', 'no-store');
+    }
+
+    public function cancelDanaSandboxTestTransaction(int $merchantId, string $paymentId, Request $request, DanaMerchantProvisioningClient $client): JsonResponse
+    {
+        $merchant = $this->sandboxProvisionedMerchant($merchantId);
+        if ($merchant === null) {
+            return $this->merchantNotFound();
+        }
+
+        $reason = $request->input('reason');
+
+        try {
+            $result = $client->cancelDanaSandboxTestTransaction($merchantId, $paymentId, is_string($reason) ? $reason : null);
+        } catch (DanaMerchantProvisioningException $exception) {
+            $this->recordManagementAudit($request, $merchant, 'dana_sandbox_tester.transaction_cancelled', 'failed', $exception->gatewayStatus, $exception->retryable, [
+                'payment_id' => $paymentId,
+            ]);
+
+            return $this->gatewayError($exception)->header('Cache-Control', 'no-store');
+        }
+
+        $this->recordManagementAudit($request, $merchant, 'dana_sandbox_tester.transaction_cancelled', 'succeeded', 200, false, [
+            'payment_id' => $paymentId,
+            'http_status' => $result['cancel_result']['http_status'] ?? null,
+            'response_code' => $result['cancel_result']['response_code'] ?? null,
         ]);
 
         return response()->json(['data' => $result])->header('Cache-Control', 'no-store');
