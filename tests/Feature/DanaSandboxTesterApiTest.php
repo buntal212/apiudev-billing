@@ -1470,6 +1470,125 @@ class DanaSandboxTesterApiTest extends TestCase
         $this->assertDatabaseCount('settlement_events', 0);
     }
 
+    public function test_cancel_dana_sandbox_test_transaction_not_permitted_4035705_records_failed_audit_and_leaves_invoices_untouched(): void
+    {
+        $merchant = $this->sandboxProvisionedMerchant();
+        $paymentId = '01K7A2M3N4P5Q6R7S8T9V0W1C7';
+        Http::fake([
+            "https://dana-gateway.test/api/v1/internal/merchants/{$merchant->gateway_merchant_id}/sandbox-tester/transactions/{$paymentId}/cancel" => Http::response([
+                'data' => [
+                    'merchant_code' => $merchant->merchant_code,
+                    'environment' => 'sandbox',
+                    'payment_id' => $paymentId,
+                    'cancel_result' => [
+                        'http_status' => 403,
+                        'response_code' => '4035705',
+                        'response_message' => 'Do Not Honor',
+                        'request_id' => 'dana-cancel-4035705-001',
+                    ],
+                ],
+            ], 200),
+        ]);
+
+        $this->actingAdmin();
+
+        $this->postJson("/api/v1/admin/dana-gateway-merchants/{$merchant->gateway_merchant_id}/sandbox-tester/transactions/{$paymentId}/cancel", [
+            'reason' => 'UAT Transaction Not Permitted',
+            'partner_reference_no' => '4035705',
+        ])
+            ->assertOk()
+            ->assertJsonPath('data.merchant_code', $merchant->merchant_code)
+            ->assertJsonPath('data.environment', 'sandbox')
+            ->assertJsonPath('data.payment_id', $paymentId)
+            ->assertJsonPath('data.cancel_result.http_status', 403)
+            ->assertJsonPath('data.cancel_result.response_code', '4035705')
+            ->assertJsonPath('data.cancel_result.response_message', 'Do Not Honor');
+
+        Http::assertSent(function (Request $request) use ($merchant, $paymentId): bool {
+            return $request->url() === "https://dana-gateway.test/api/v1/internal/merchants/{$merchant->gateway_merchant_id}/sandbox-tester/transactions/{$paymentId}/cancel"
+                && ($request['partner_reference_no'] ?? null) === '4035705'
+                && ($request['reason'] ?? null) === 'UAT Transaction Not Permitted';
+        });
+
+        $this->assertDatabaseHas('dana_merchant_provisioning_audits', [
+            'gateway_merchant_id' => $merchant->gateway_merchant_id,
+            'operation' => 'dana_sandbox_tester.transaction_cancelled',
+            'status' => 'failed',
+            'safe_details->payment_id' => $paymentId,
+            'safe_details->partner_reference_no' => '4035705',
+            'safe_details->response_code' => '4035705',
+        ]);
+
+        $this->assertDatabaseCount('invoices', 0);
+        $this->assertDatabaseCount('settlement_events', 0);
+        $this->assertDatabaseCount('payment_allocations', 0);
+    }
+
+    public function test_cancel_dana_sandbox_test_transaction_not_permitted_4035705_handles_repeated_requests(): void
+    {
+        $merchant = $this->sandboxProvisionedMerchant();
+        $paymentId = '01K7A2M3N4P5Q6R7S8T9V0W1C8';
+        Http::fake([
+            "https://dana-gateway.test/api/v1/internal/merchants/{$merchant->gateway_merchant_id}/sandbox-tester/transactions/{$paymentId}/cancel" => Http::sequence()
+                ->push([
+                    'data' => [
+                        'merchant_code' => $merchant->merchant_code,
+                        'environment' => 'sandbox',
+                        'payment_id' => $paymentId,
+                        'cancel_result' => [
+                            'http_status' => 403,
+                            'response_code' => '4035705',
+                            'response_message' => 'Do Not Honor',
+                            'request_id' => 'dana-cancel-rep-001',
+                        ],
+                    ],
+                ], 200)
+                ->push([
+                    'data' => [
+                        'merchant_code' => $merchant->merchant_code,
+                        'environment' => 'sandbox',
+                        'payment_id' => $paymentId,
+                        'cancel_result' => [
+                            'http_status' => 403,
+                            'response_code' => '4035705',
+                            'response_message' => 'Do Not Honor',
+                            'request_id' => 'dana-cancel-rep-002',
+                        ],
+                    ],
+                ], 200),
+        ]);
+
+        $this->actingAdmin();
+
+        // First attempt
+        $this->postJson("/api/v1/admin/dana-gateway-merchants/{$merchant->gateway_merchant_id}/sandbox-tester/transactions/{$paymentId}/cancel", [
+            'reason' => 'First attempt 4035705',
+            'partner_reference_no' => '4035705',
+        ])
+            ->assertOk()
+            ->assertJsonPath('data.cancel_result.response_code', '4035705');
+
+        // Repeated attempt
+        $this->postJson("/api/v1/admin/dana-gateway-merchants/{$merchant->gateway_merchant_id}/sandbox-tester/transactions/{$paymentId}/cancel", [
+            'reason' => 'Repeated attempt 4035705',
+            'partner_reference_no' => '4035705',
+        ])
+            ->assertOk()
+            ->assertJsonPath('data.cancel_result.response_code', '4035705');
+
+        $audits = DanaMerchantProvisioningAudit::query()
+            ->where('gateway_merchant_id', $merchant->gateway_merchant_id)
+            ->where('operation', 'dana_sandbox_tester.transaction_cancelled')
+            ->where('safe_details->payment_id', $paymentId)
+            ->get();
+
+        $this->assertCount(2, $audits);
+        $this->assertTrue($audits->every(fn (DanaMerchantProvisioningAudit $audit): bool => $audit->status === 'failed'));
+
+        $this->assertDatabaseCount('invoices', 0);
+        $this->assertDatabaseCount('settlement_events', 0);
+    }
+
     public function test_inconsistent_request_uat_safely_passes_through_failure_diagnostics(): void
     {
         $merchant = $this->sandboxProvisionedMerchant();
