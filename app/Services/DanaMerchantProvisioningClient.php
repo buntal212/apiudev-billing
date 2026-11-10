@@ -305,11 +305,14 @@ class DanaMerchantProvisioningClient
     }
 
     /** @return array<string, mixed> */
-    public function cancelDanaSandboxTestTransaction(int $merchantId, string $paymentId, ?string $reason = null): array
+    public function cancelDanaSandboxTestTransaction(int $merchantId, string $paymentId, ?string $reason = null, ?string $partnerReferenceNo = null): array
     {
         $payload = [];
         if (is_string($reason) && $reason !== '') {
             $payload['reason'] = $reason;
+        }
+        if (is_string($partnerReferenceNo) && $partnerReferenceNo !== '') {
+            $payload['partner_reference_no'] = $partnerReferenceNo;
         }
 
         $response = $this->send(fn (PendingRequest $request): Response => $request

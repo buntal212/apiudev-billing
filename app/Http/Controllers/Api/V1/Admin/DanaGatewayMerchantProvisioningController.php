@@ -826,22 +826,30 @@ class DanaGatewayMerchantProvisioningController extends Controller
         }
 
         $reason = $request->input('reason');
+        $partnerReferenceNo = $request->input('partner_reference_no');
 
         try {
-            $result = $client->cancelDanaSandboxTestTransaction($merchantId, $paymentId, is_string($reason) ? $reason : null);
+            $result = $client->cancelDanaSandboxTestTransaction(
+                $merchantId,
+                $paymentId,
+                is_string($reason) ? $reason : null,
+                is_string($partnerReferenceNo) ? $partnerReferenceNo : null
+            );
         } catch (DanaMerchantProvisioningException $exception) {
             $this->recordManagementAudit($request, $merchant, 'dana_sandbox_tester.transaction_cancelled', 'failed', $exception->gatewayStatus, $exception->retryable, [
                 'payment_id' => $paymentId,
+                'partner_reference_no' => is_string($partnerReferenceNo) ? $partnerReferenceNo : null,
             ]);
 
             return $this->gatewayError($exception)->header('Cache-Control', 'no-store');
         }
 
         $passed = ($result['cancel_result']['http_status'] ?? 0) === 200
-            && ($result['cancel_result']['response_code'] ?? null) === '2005700';
+            && in_array($result['cancel_result']['response_code'] ?? null, ['2005700', '2025700'], true);
 
         $this->recordManagementAudit($request, $merchant, 'dana_sandbox_tester.transaction_cancelled', $passed ? 'succeeded' : 'failed', 200, false, [
             'payment_id' => $paymentId,
+            'partner_reference_no' => is_string($partnerReferenceNo) ? $partnerReferenceNo : null,
             'http_status' => $result['cancel_result']['http_status'] ?? null,
             'response_code' => $result['cancel_result']['response_code'] ?? null,
         ]);
