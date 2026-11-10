@@ -187,10 +187,6 @@ class PaymentAttemptController extends Controller
     ): Response {
         $this->authorize('view', $paymentAttempt);
 
-        if ($paymentAttempt->provider !== 'midtrans') {
-            abort(Response::HTTP_NOT_FOUND, 'Payment attempt bukan transaksi Midtrans.');
-        }
-
         if ($paymentAttempt->status === PaymentAttempt::StatusExpired
             || ($paymentAttempt->checkout_expires_at !== null && $paymentAttempt->checkout_expires_at->isPast())
         ) {
@@ -198,6 +194,23 @@ class PaymentAttemptController extends Controller
                 'message' => 'Kode QRIS telah kedaluwarsa.',
                 'error' => 'qris_expired',
             ], Response::HTTP_GONE);
+        }
+
+        if ($paymentAttempt->provider !== 'midtrans') {
+            if ($paymentAttempt->provider === 'dana') {
+                $metadata = is_array($paymentAttempt->metadata) ? $paymentAttempt->metadata : [];
+                $instruction = is_array($metadata['payment_instruction'] ?? null) ? $metadata['payment_instruction'] : [];
+                $qrContent = $metadata['qr_content'] ?? $instruction['qr_content'] ?? null;
+
+                return response()->json([
+                    'message' => 'Transaksi DANA QRIS menggunakan payload EMVCo MPM (qr_content) dan dirender di frontend client.',
+                    'provider' => 'dana',
+                    'payment_method' => 'qris',
+                    'qr_content' => $qrContent,
+                ], Response::HTTP_OK);
+            }
+
+            abort(Response::HTTP_NOT_FOUND, 'Payment attempt bukan transaksi Midtrans.');
         }
 
         $metadata = is_array($paymentAttempt->metadata) ? $paymentAttempt->metadata : [];

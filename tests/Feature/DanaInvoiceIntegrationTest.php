@@ -256,6 +256,36 @@ class DanaInvoiceIntegrationTest extends TestCase
         $this->assertSame(1, \App\Models\PaymentAllocation::query()->where('invoice_id', $invoice->id)->count());
     }
 
+    public function test_qr_image_endpoint_handles_dana_payment_attempt_gracefully_with_qr_content(): void
+    {
+        $invoice = $this->createPendingInvoice(75_000);
+        $attempt = PaymentAttempt::factory()->for($invoice)->create([
+            'attempt_number' => 1,
+            'provider' => 'dana',
+            'gateway_merchant_code' => 'udev-central',
+            'gateway_environment' => 'sandbox',
+            'status' => PaymentAttempt::StatusPending,
+            'amount' => 75_000,
+            'metadata' => [
+                'payment_method' => 'qris',
+                'qr_content' => '00020101021226570011ID.DANA.WWW01189360091500029570755405750005802ID',
+                'payment_instruction' => [
+                    'type' => 'qris_mpm',
+                    'qr_content' => '00020101021226570011ID.DANA.WWW01189360091500029570755405750005802ID',
+                ],
+            ],
+        ]);
+
+        Sanctum::actingAs(User::factory()->create(['is_admin' => true]), ['admin:access']);
+
+        $response = $this->getJson("/api/v1/admin/payment-attempts/{$attempt->id}/qr-image");
+
+        $response->assertOk()
+            ->assertJsonPath('provider', 'dana')
+            ->assertJsonPath('payment_method', 'qris')
+            ->assertJsonPath('qr_content', '00020101021226570011ID.DANA.WWW01189360091500029570755405750005802ID');
+    }
+
     private function createPendingInvoice(float $amount = 100_000): Invoice
     {
         $app = Application::factory()->create();
