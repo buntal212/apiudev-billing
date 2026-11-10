@@ -1982,6 +1982,64 @@ class DanaSandboxTesterApiTest extends TestCase
         $this->assertDatabaseCount('settlement_events', 0);
     }
 
+    public function test_cancel_dana_sandbox_test_transaction_invalid_signature_4015700_records_audit_and_leaves_invoices_untouched(): void
+    {
+        $merchant = $this->sandboxProvisionedMerchant();
+        $paymentId = '01K7A2M3N4P5Q6R7S8T9V0W1E5';
+        Http::fake([
+            "https://dana-gateway.test/api/v1/internal/merchants/{$merchant->gateway_merchant_id}/sandbox-tester/transactions/{$paymentId}/cancel" => Http::response([
+                'data' => [
+                    'merchant_code' => $merchant->merchant_code,
+                    'environment' => 'sandbox',
+                    'payment_id' => $paymentId,
+                    'cancel_result' => [
+                        'http_status' => 401,
+                        'response_code' => '4015700',
+                        'response_message' => 'Unauthorized. Invalid Signature',
+                        'request_id' => 'dana-cancel-4015700-audit-001',
+                        'is_mock' => true,
+                        'mock_code' => '4015700',
+                        'signature_override' => 'invalid_signature',
+                        'x_signature_invalid' => true,
+                        'original_partner_reference_no' => 'ORDER-REAL-006',
+                        'outbound_original_partner_reference_no' => 'ORDER-REAL-006',
+                    ],
+                ],
+            ], 200),
+        ]);
+
+        $this->actingAdmin();
+
+        $this->postJson("/api/v1/admin/dana-gateway-merchants/{$merchant->gateway_merchant_id}/sandbox-tester/transactions/{$paymentId}/cancel", [
+            'reason' => 'UAT Cancel Invalid Signature (4015700)',
+            'mock_code' => '4015700',
+        ])
+            ->assertOk()
+            ->assertJsonPath('data.payment_id', $paymentId)
+            ->assertJsonPath('data.cancel_result.response_code', '4015700')
+            ->assertJsonPath('data.cancel_result.mock_code', '4015700')
+            ->assertJsonPath('data.cancel_result.x_signature_invalid', true);
+
+        Http::assertSent(function (Request $request) use ($merchant, $paymentId): bool {
+            return $request->url() === "https://dana-gateway.test/api/v1/internal/merchants/{$merchant->gateway_merchant_id}/sandbox-tester/transactions/{$paymentId}/cancel"
+                && ($request['mock_code'] ?? null) === '4015700'
+                && ($request['reason'] ?? null) === 'UAT Cancel Invalid Signature (4015700)';
+        });
+
+        $this->assertDatabaseHas('dana_merchant_provisioning_audits', [
+            'gateway_merchant_id' => $merchant->gateway_merchant_id,
+            'operation' => 'dana_sandbox_tester.transaction_cancelled',
+            'status' => 'failed',
+            'safe_details->payment_id' => $paymentId,
+            'safe_details->mock_code' => '4015700',
+            'safe_details->response_code' => '4015700',
+            'safe_details->http_status' => 401,
+        ]);
+
+        $this->assertDatabaseCount('invoices', 0);
+        $this->assertDatabaseCount('settlement_events', 0);
+    }
+
     public function test_inconsistent_request_uat_safely_passes_through_failure_diagnostics(): void
     {
         $merchant = $this->sandboxProvisionedMerchant();
