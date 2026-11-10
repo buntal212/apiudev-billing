@@ -27,11 +27,13 @@ class DanaMerchantApiKeySecretStore
         $key = $this->keyForVersion($encryptionKeyVersion);
         $fingerprint = $this->fingerprint($attributes['plaintext_api_key'], $key);
 
+        $environment = $attributes['environment'] ?? 'sandbox';
+
         try {
-            return DB::transaction(function () use ($attributes, $merchant, $confirmRotation, $encryptionKeyVersion, $key, $fingerprint): DanaMerchantApiKeySecret {
+            return DB::transaction(function () use ($attributes, $merchant, $confirmRotation, $encryptionKeyVersion, $key, $fingerprint, $environment): DanaMerchantApiKeySecret {
                 $existing = DanaMerchantApiKeySecret::query()
                     ->where('gateway_merchant_id', $attributes['gateway_merchant_id'])
-                    ->where('environment', 'sandbox')
+                    ->where('environment', $environment)
                     ->where('gateway_api_key_id', $attributes['gateway_api_key_id'])
                     ->lockForUpdate()
                     ->first();
@@ -48,7 +50,7 @@ class DanaMerchantApiKeySecretStore
 
                 $secrets = DanaMerchantApiKeySecret::query()
                     ->where('gateway_merchant_id', $attributes['gateway_merchant_id'])
-                    ->where('environment', 'sandbox')
+                    ->where('environment', $environment)
                     ->lockForUpdate()
                     ->get();
                 $activeSecret = $secrets->firstWhere('status', DanaMerchantApiKeySecret::StatusActive);
@@ -63,6 +65,7 @@ class DanaMerchantApiKeySecretStore
                     $attributes['gateway_api_key_id'],
                     $encryptionKeyVersion,
                     $keyVersionNumber,
+                    $environment,
                 );
                 $encrypted = $this->encrypt($attributes['plaintext_api_key'], $key, $additionalAuthenticatedData);
                 $this->decryptPayload(
@@ -75,7 +78,7 @@ class DanaMerchantApiKeySecretStore
                 $secret = DanaMerchantApiKeySecret::query()->create([
                     'gateway_merchant_id' => $attributes['gateway_merchant_id'],
                     'merchant_code' => $merchant->merchant_code,
-                    'environment' => 'sandbox',
+                    'environment' => $environment,
                     'gateway_api_key_id' => $attributes['gateway_api_key_id'],
                     'key_prefix' => $attributes['key_prefix'],
                     'key_version' => $keyVersionNumber,
@@ -184,7 +187,6 @@ class DanaMerchantApiKeySecretStore
         $merchant = DanaMerchantProvisioningAudit::query()
             ->where('operation', 'dana_merchant.provision')
             ->where('gateway_merchant_id', $gatewayMerchantId)
-            ->where('environment', 'sandbox')
             ->where('status', 'succeeded')
             ->where('merchant_code', '!=', 'larissama')
             ->latest('id')
@@ -290,9 +292,9 @@ class DanaMerchantApiKeySecretStore
         return hash_hmac('sha256', $plaintext, hash_hkdf('sha256', $key, 32, 'dana-merchant-secret-fingerprint'));
     }
 
-    private function additionalAuthenticatedData(int $gatewayMerchantId, int $gatewayApiKeyId, string $keyVersion, int $secretVersion): string
+    private function additionalAuthenticatedData(int $gatewayMerchantId, int $gatewayApiKeyId, string $keyVersion, int $secretVersion, string $environment = 'sandbox'): string
     {
-        return implode('|', ['dana-merchant-api-key', 'sandbox', $gatewayMerchantId, $gatewayApiKeyId, $keyVersion, $secretVersion]);
+        return implode('|', ['dana-merchant-api-key', $environment, $gatewayMerchantId, $gatewayApiKeyId, $keyVersion, $secretVersion]);
     }
 
     /** @param array<string, bool|int|string> $safeDetails */

@@ -2,6 +2,8 @@
 
 namespace App\Services;
 
+use App\Models\DanaEnvironmentSetting;
+use Illuminate\Support\Facades\Schema;
 use Illuminate\Validation\ValidationException;
 
 /**
@@ -16,7 +18,10 @@ class SubscriptionBillingMerchantResolver
 
     public const CentralRecipient = 'udev_central';
 
-    public function __construct(private readonly DanaGatewayMerchantCatalog $merchantCatalog) {}
+    public function __construct(
+        private readonly DanaGatewayMerchantCatalog $merchantCatalog,
+        private readonly ?DanaEnvironmentService $danaEnvironmentService = null,
+    ) {}
 
     public function resolveNewCheckoutMerchant(string $environment): string
     {
@@ -30,7 +35,29 @@ class SubscriptionBillingMerchantResolver
             ? 'services.udev_billing.subscription_dana_production_merchant_code'
             : 'services.udev_billing.subscription_dana_sandbox_merchant_code';
 
-        $merchantCode = config($configKey) ?: config('services.udev_billing.subscription_dana_sandbox_merchant_code');
+        $configuredMerchant = config($configKey) ?: config('services.udev_billing.subscription_dana_sandbox_merchant_code');
+
+        $primaryMerchantCode = $this->danaEnvironmentService?->getPrimaryMerchantCode($environment)
+            ?: DanaEnvironmentSetting::getPrimaryMerchantCode($environment);
+
+        if (empty($configuredMerchant) && ($primaryMerchantCode === '' || $primaryMerchantCode === 'udev-central')) {
+            $hasDbCustomSetting = false;
+            if (Schema::hasTable('dana_environment_settings') && Schema::hasColumn('dana_environment_settings', 'primary_merchant_code')) {
+                try {
+                    $hasDbCustomSetting = (bool) DanaEnvironmentSetting::query()
+                        ->where('gateway', 'dana')
+                        ->whereNotNull('primary_merchant_code')
+                        ->where('primary_merchant_code', '!=', '')
+                        ->where('primary_merchant_code', '!=', 'udev-central')
+                        ->exists();
+                } catch (\Throwable) {
+                }
+            }
+            $merchantCode = $hasDbCustomSetting ? $primaryMerchantCode : null;
+        } else {
+            $merchantCode = $primaryMerchantCode ?: $configuredMerchant;
+        }
+
         if (! is_string($merchantCode) || trim($merchantCode) === '') {
             $envLabel = ucfirst($environment);
             throw ValidationException::withMessages([

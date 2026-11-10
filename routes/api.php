@@ -176,6 +176,8 @@ Route::prefix('v1/admin')
             Route::middleware('throttle:admin-dana-gateway-write')->group(function (): void {
                 Route::post('environment/activate-production', [DanaGatewayMerchantProvisioningController::class, 'activateProduction']);
                 Route::post('environment/switch-sandbox', [DanaGatewayMerchantProvisioningController::class, 'switchSandbox']);
+                Route::post('environment/set-primary-merchant', [DanaGatewayMerchantProvisioningController::class, 'setPrimaryMerchant']);
+                Route::post('{merchantId}/set-primary', [DanaGatewayMerchantProvisioningController::class, 'setPrimaryMerchantById'])->whereNumber('merchantId');
                 Route::post('/', [DanaGatewayMerchantProvisioningController::class, 'store']);
                 Route::put('{merchantId}/dana-configuration', [DanaGatewayMerchantProvisioningController::class, 'configureDanaSandbox'])->whereNumber('merchantId');
                 Route::patch('{merchantId}/status', [DanaGatewayMerchantProvisioningController::class, 'toggleMerchantStatus'])->whereNumber('merchantId');

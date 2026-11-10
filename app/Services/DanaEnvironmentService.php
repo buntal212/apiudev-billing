@@ -22,24 +22,38 @@ class DanaEnvironmentService
             $setting = new DanaEnvironmentSetting();
             $setting->gateway = 'dana';
             $setting->active_environment = (string) config('services.dana_gateway.environment', DanaEnvironmentSetting::EnvironmentSandbox);
+            $setting->primary_merchant_code = DanaEnvironmentSetting::getPrimaryMerchantCode();
             $setting->is_production_ready = false;
 
             return $setting;
         }
 
         try {
-            /** @var DanaEnvironmentSetting */
-            return DanaEnvironmentSetting::query()->firstOrCreate(
+            $hasPrimaryColumn = Schema::hasColumn('dana_environment_settings', 'primary_merchant_code');
+            $attributes = [
+                'active_environment' => DanaEnvironmentSetting::EnvironmentSandbox,
+                'is_production_ready' => false,
+            ];
+            if ($hasPrimaryColumn) {
+                $attributes['primary_merchant_code'] = DanaEnvironmentSetting::getPrimaryMerchantCode();
+            }
+
+            /** @var DanaEnvironmentSetting $setting */
+            $setting = DanaEnvironmentSetting::query()->firstOrCreate(
                 ['gateway' => 'dana'],
-                [
-                    'active_environment' => DanaEnvironmentSetting::EnvironmentSandbox,
-                    'is_production_ready' => false,
-                ]
+                $attributes
             );
+
+            if (! $hasPrimaryColumn && empty($setting->primary_merchant_code)) {
+                $setting->primary_merchant_code = DanaEnvironmentSetting::getPrimaryMerchantCode();
+            }
+
+            return $setting;
         } catch (\Throwable) {
             $setting = new DanaEnvironmentSetting();
             $setting->gateway = 'dana';
             $setting->active_environment = (string) config('services.dana_gateway.environment', DanaEnvironmentSetting::EnvironmentSandbox);
+            $setting->primary_merchant_code = DanaEnvironmentSetting::getPrimaryMerchantCode();
             $setting->is_production_ready = false;
 
             return $setting;
@@ -49,6 +63,18 @@ class DanaEnvironmentService
     public function getActiveEnvironment(): string
     {
         return $this->getSetting()->active_environment;
+    }
+
+    public function getPrimaryMerchantCode(?string $environment = null): string
+    {
+        $env = $environment ?: $this->getActiveEnvironment();
+        $setting = $this->getSetting();
+
+        if (is_string($setting->primary_merchant_code) && trim($setting->primary_merchant_code) !== '') {
+            return trim($setting->primary_merchant_code);
+        }
+
+        return DanaEnvironmentSetting::getPrimaryMerchantCode($env);
     }
 
     public function isProductionActive(): bool
@@ -65,9 +91,10 @@ class DanaEnvironmentService
      *     reasons_not_ready: list<string>
      * }
      */
-    public function evaluateProductionReadiness(string $primaryMerchantCode = 'udev-central'): array
+    public function evaluateProductionReadiness(?string $primaryMerchantCode = null): array
     {
-        $readiness = $this->merchantCatalog->readiness($primaryMerchantCode, DanaEnvironmentSetting::EnvironmentProduction);
+        $primaryCode = $primaryMerchantCode ?: $this->getPrimaryMerchantCode(DanaEnvironmentSetting::EnvironmentProduction);
+        $readiness = $this->merchantCatalog->readiness($primaryCode, DanaEnvironmentSetting::EnvironmentProduction);
         $isConfigured = $readiness['merchant_configured'];
         $isActive = $readiness['merchant_active'];
         $isCredentialConfigured = $readiness['credential_configured'];
@@ -87,13 +114,13 @@ class DanaEnvironmentService
 
         $reasonsNotReady = [];
         if (! $isConfigured) {
-            $reasonsNotReady[] = "Merchant DANA Production '{$primaryMerchantCode}' belum terdaftar pada katalog gateway.";
+            $reasonsNotReady[] = "Merchant DANA Production '{$primaryCode}' belum terdaftar pada katalog gateway.";
         }
         if (! $isActive && $isConfigured) {
-            $reasonsNotReady[] = "Merchant DANA Production '{$primaryMerchantCode}' sedang dalam status non-aktif.";
+            $reasonsNotReady[] = "Merchant DANA Production '{$primaryCode}' sedang dalam status non-aktif.";
         }
         if (! $isCredentialConfigured) {
-            $reasonsNotReady[] = "API Key gateway DANA Production untuk '{$primaryMerchantCode}' belum dikonfigurasi.";
+            $reasonsNotReady[] = "API Key gateway DANA Production untuk '{$primaryCode}' belum dikonfigurasi.";
         }
         if (! $isBaseUrlConfigured) {
             $reasonsNotReady[] = 'Base URL gateway DANA Production belum dikonfigurasi.';
@@ -210,6 +237,98 @@ class DanaEnvironmentService
         } else {
             $setting->active_environment = DanaEnvironmentSetting::EnvironmentSandbox;
         }
+
+        return $setting;
+    }
+
+    /**
+     * Switch the active primary merchant for UDEV subscriptions.
+     * Candidate must be verified for active status, credentials, and checkout readiness before activation.
+     *
+     * @throws ValidationException
+     */
+    public function setPrimaryMerchant(string $merchantCode, User $adminUser, ?string $notes = null): DanaEnvironmentSetting
+    {
+        if (! ($adminUser->is_admin ?? false)) {
+            throw ValidationException::withMessages([
+                'authorization' => ['Hanya akun administrator yang berwenang mengubah Merchant Utama DANA.'],
+            ]);
+        }
+
+        $merchantCode = trim($merchantCode);
+        if ($merchantCode === '') {
+            throw ValidationException::withMessages([
+                'merchant_code' => ['Kode merchant tidak boleh kosong.'],
+            ]);
+        }
+
+        $currentEnv = $this->getActiveEnvironment();
+        $sandboxReadiness = $this->merchantCatalog->readiness($merchantCode, DanaEnvironmentSetting::EnvironmentSandbox);
+        if (! $sandboxReadiness['ready']) {
+            $reasons = [];
+            if (! $sandboxReadiness['merchant_configured']) {
+                $reasons[] = "Merchant '{$merchantCode}' belum terdaftar pada katalog gateway Sandbox.";
+            }
+            if (! $sandboxReadiness['merchant_active'] && $sandboxReadiness['merchant_configured']) {
+                $reasons[] = "Merchant '{$merchantCode}' sedang dalam status nonaktif di Sandbox.";
+            }
+            if (! $sandboxReadiness['credential_configured']) {
+                $reasons[] = "API Key gateway Sandbox untuk merchant '{$merchantCode}' belum dikonfigurasi.";
+            }
+            if (! $sandboxReadiness['base_url_configured']) {
+                $reasons[] = 'Base URL gateway Sandbox belum dikonfigurasi.';
+            }
+
+            throw ValidationException::withMessages([
+                'merchant_code' => array_merge(
+                    ["Merchant '{$merchantCode}' belum memenuhi persyaratan kesiapan Sandbox untuk dijadikan Merchant Utama:"],
+                    $reasons
+                ),
+            ]);
+        }
+
+        if ($currentEnv === DanaEnvironmentSetting::EnvironmentProduction) {
+            $prodReadiness = $this->merchantCatalog->readiness($merchantCode, DanaEnvironmentSetting::EnvironmentProduction);
+            if (! $prodReadiness['ready']) {
+                $reasons = [];
+                if (! $prodReadiness['merchant_configured']) {
+                    $reasons[] = "Merchant '{$merchantCode}' belum terdaftar pada katalog gateway Production.";
+                }
+                if (! $prodReadiness['merchant_active'] && $prodReadiness['merchant_configured']) {
+                    $reasons[] = "Merchant '{$merchantCode}' sedang dalam status nonaktif di Production.";
+                }
+                if (! $prodReadiness['credential_configured']) {
+                    $reasons[] = "API Key gateway Production untuk merchant '{$merchantCode}' belum dikonfigurasi.";
+                }
+                if (! $prodReadiness['base_url_configured']) {
+                    $reasons[] = 'Base URL gateway Production belum dikonfigurasi.';
+                }
+
+                throw ValidationException::withMessages([
+                    'merchant_code' => array_merge(
+                        ["Environment aktif adalah Production, namun merchant '{$merchantCode}' belum siap untuk Production:"],
+                        $reasons
+                    ),
+                ]);
+            }
+        }
+
+        $setting = $this->getSetting();
+        $updates = [
+            'last_switched_at' => now(),
+            'last_switched_by' => $adminUser->id,
+            'activation_notes' => $notes ?: "Merchant Utama DANA diubah menjadi {$merchantCode}",
+        ];
+
+        if ($setting->exists) {
+            if (Schema::hasColumn('dana_environment_settings', 'primary_merchant_code')) {
+                $updates['primary_merchant_code'] = $merchantCode;
+            }
+            $setting->update($updates);
+        }
+
+        $setting->primary_merchant_code = $merchantCode;
+        config(['services.udev_billing.subscription_dana_sandbox_merchant_code' => $merchantCode]);
 
         return $setting;
     }

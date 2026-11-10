@@ -18,7 +18,7 @@ class StoreDanaGatewayMerchantDanaConfigurationRequest extends ApiFormRequest
     public function rules(): array
     {
         return [
-            'environment' => ['required', 'string', 'in:sandbox'],
+            'environment' => ['required', 'string', 'in:sandbox,production'],
             'partner_id' => ['required', 'string', 'max:150'],
             'merchant_id' => ['required', 'string', 'max:150'],
             'private_key' => ['nullable', 'string', 'max:65535'],

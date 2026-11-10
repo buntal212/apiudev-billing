@@ -2,6 +2,7 @@
 
 namespace App\Services;
 
+use App\Models\DanaEnvironmentSetting;
 use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Http\Client\PendingRequest;
 use Illuminate\Http\Client\Response;
@@ -10,7 +11,7 @@ use Illuminate\Support\Facades\Http;
 class DanaMerchantProvisioningClient
 {
     /**
-     * @param  array{code: string, name: string, email: string|null, environment: string}  $attributes
+     * @param  array{code: string, name: string, email: string|null, environment?: string}  $attributes
      */
     public function stableIdempotencyKey(array $attributes): string
     {
@@ -18,7 +19,7 @@ class DanaMerchantProvisioningClient
             'code' => $attributes['code'],
             'name' => $attributes['name'],
             'email' => $attributes['email'],
-            'environment' => $attributes['environment'],
+            'environment' => $attributes['environment'] ?? 'sandbox',
         ], JSON_THROW_ON_ERROR));
     }
 
@@ -45,16 +46,19 @@ class DanaMerchantProvisioningClient
     }
 
     /**
-     * @param  array{code: string, name: string, email: string|null, environment: string}  $attributes
+     * @param  array{code: string, name: string, email: string|null, environment?: string}  $attributes
      * @return array{merchant: array{merchant_id: int, merchant_code: string, merchant_name: string, environment: string, merchant_status: string, provisioning_status: string, credential_status: string, dana_configuration_status: string, provisioned_at: string|null}, status: int}
      */
     public function provision(array $attributes, string $idempotencyKey): array
     {
-        $response = $this->send(function (PendingRequest $request) use ($attributes, $idempotencyKey): Response {
-            return $request->post('/api/v1/internal/merchants', [
-                ...$attributes,
-                'idempotency_key' => $idempotencyKey,
-            ]);
+        $payload = [
+            ...$attributes,
+            'environment' => $attributes['environment'] ?? 'sandbox',
+            'idempotency_key' => $idempotencyKey,
+        ];
+
+        $response = $this->send(function (PendingRequest $request) use ($payload): Response {
+            return $request->post('/api/v1/internal/merchants', $payload);
         });
 
         $body = $this->decodeSuccessfulResponse($response);
@@ -117,18 +121,20 @@ class DanaMerchantProvisioningClient
     /**
      * @return array{merchant_code: string, merchant_status: string, environment: string, active_api_key_count: int, dana_configuration: array{available: bool, enabled: bool, ready: bool}, readiness_status: string, not_ready_components: list<string>}
      */
-    public function readiness(int $merchantId): array
+    public function readiness(int $merchantId, ?string $environment = null): array
     {
-        $response = $this->send(fn (PendingRequest $request): Response => $request->get("/api/v1/internal/merchants/{$merchantId}/readiness"));
+        $params = is_string($environment) && $environment !== '' ? ['environment' => $environment] : [];
+        $response = $this->send(fn (PendingRequest $request): Response => $request->get("/api/v1/internal/merchants/{$merchantId}/readiness", $params));
         $body = $this->decodeSuccessfulResponse($response);
 
         return $this->readinessData($body['data'] ?? null);
     }
 
     /** @return array<string, mixed> */
-    public function storedDanaConfiguration(int $merchantId): array
+    public function storedDanaConfiguration(int $merchantId, ?string $environment = null): array
     {
-        $response = $this->send(fn (PendingRequest $request): Response => $request->get("/api/v1/internal/merchants/{$merchantId}/dana-configuration"));
+        $params = is_string($environment) && $environment !== '' ? ['environment' => $environment] : [];
+        $response = $this->send(fn (PendingRequest $request): Response => $request->get("/api/v1/internal/merchants/{$merchantId}/dana-configuration", $params));
         $body = $this->decodeSuccessfulResponse($response);
 
         return $this->storedDanaConfigurationData($body['data'] ?? null);
@@ -547,10 +553,13 @@ class DanaMerchantProvisioningClient
             throw new DanaMerchantProvisioningException('Konfigurasi autentikasi provisioning merchant gateway belum tersedia.', 503, false);
         }
 
+        $primaryMerchantCode = DanaEnvironmentSetting::getPrimaryMerchantCode();
+
         return Http::acceptJson()
             ->asJson()
             ->baseUrl(rtrim($baseUrl, '/'))
             ->withToken($token)
+            ->withHeader('X-Primary-Merchant-Code', $primaryMerchantCode)
             ->timeout((int) config('services.dana_merchant_provisioning.timeout', 8))
             ->connectTimeout((int) config('services.dana_merchant_provisioning.connect_timeout', 3));
     }

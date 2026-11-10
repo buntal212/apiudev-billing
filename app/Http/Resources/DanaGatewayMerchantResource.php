@@ -2,6 +2,7 @@
 
 namespace App\Http\Resources;
 
+use App\Models\DanaEnvironmentSetting;
 use Illuminate\Http\Request;
 use Illuminate\Http\Resources\Json\JsonResource;
 
@@ -14,6 +15,8 @@ class DanaGatewayMerchantResource extends JsonResource
      */
     public function toArray(Request $request): array
     {
+        $primaryMerchantCode = DanaEnvironmentSetting::getPrimaryMerchantCode($this['environment'] ?? 'sandbox');
+
         return [
             'merchant_id' => $this['merchant_id'],
             'merchant_code' => $this['merchant_code'],
@@ -24,6 +27,7 @@ class DanaGatewayMerchantResource extends JsonResource
             'credential_status' => $this['credential_status'],
             'dana_configuration_status' => $this['dana_configuration_status'],
             'provisioned_at' => $this['provisioned_at'],
+            'is_primary' => $this['merchant_code'] === $primaryMerchantCode,
         ];
     }
 }

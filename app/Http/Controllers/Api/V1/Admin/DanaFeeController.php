@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Api\V1\Admin;
 
 use App\Http\Controllers\Controller;
+use App\Models\DanaEnvironmentSetting;
 use App\Models\DanaPaymentMethodFee;
 use App\Services\DanaFeeService;
 use Illuminate\Http\JsonResponse;
@@ -25,10 +26,10 @@ class DanaFeeController extends Controller
             'environment' => ['nullable', 'string', 'in:sandbox,production'],
         ]);
 
-        $merchantCode = $validated['merchant_code'] ?? 'udev-central';
+        $environment = $validated['environment'] ?? $request->query('environment');
+        $merchantCode = $validated['merchant_code'] ?? DanaEnvironmentSetting::getPrimaryMerchantCode($environment ?? 'sandbox');
         $paymentMethod = $validated['payment_method'];
         $amount = (float) $validated['amount'];
-        $environment = $validated['environment'] ?? $request->query('environment');
 
         $feeData = $this->danaFeeService->calculateFee($merchantCode, $paymentMethod, $amount, $environment);
 
@@ -43,8 +44,8 @@ class DanaFeeController extends Controller
      */
     public function index(Request $request): JsonResponse
     {
-        $merchantCode = $request->query('merchant_code', 'udev-central');
         $environment = $request->query('environment');
+        $merchantCode = $request->query('merchant_code') ?: DanaEnvironmentSetting::getPrimaryMerchantCode($environment ?? 'sandbox');
         $methods = ['qris', 'dana_wallet', 'va_bri', 'va_pani', 'va_cimb', 'va_btpn'];
         $items = [];
 

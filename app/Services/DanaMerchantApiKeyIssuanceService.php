@@ -27,10 +27,11 @@ class DanaMerchantApiKeyIssuanceService
 
     public function issue(DanaMerchantProvisioningAudit $merchant, int $adminId, array $attributes, string $idempotencyKey): DanaMerchantApiKeyIssuance
     {
+        $env = $attributes['environment'] ?? 'sandbox';
         $fingerprint = hash_hmac('sha256', json_encode($attributes, JSON_THROW_ON_ERROR), (string) config('app.key'));
         $replayed = false;
 
-        $issuance = DB::transaction(function () use ($merchant, $adminId, $fingerprint, $idempotencyKey, &$replayed): DanaMerchantApiKeyIssuance {
+        $issuance = DB::transaction(function () use ($merchant, $adminId, $fingerprint, $idempotencyKey, $env, &$replayed): DanaMerchantApiKeyIssuance {
             $existing = DanaMerchantApiKeyIssuance::query()
                 ->where('gateway_merchant_id', $merchant->gateway_merchant_id)
                 ->where('idempotency_key', $idempotencyKey)
@@ -49,6 +50,7 @@ class DanaMerchantApiKeyIssuanceService
 
             $blockingIssuance = DanaMerchantApiKeyIssuance::query()
                 ->where('gateway_merchant_id', $merchant->gateway_merchant_id)
+                ->where('environment', $env)
                 ->whereIn('status', self::BlockingStatuses)
                 ->lockForUpdate()
                 ->first();
@@ -60,7 +62,7 @@ class DanaMerchantApiKeyIssuanceService
                 'admin_user_id' => $adminId,
                 'gateway_merchant_id' => $merchant->gateway_merchant_id,
                 'merchant_code' => $merchant->merchant_code,
-                'environment' => 'sandbox',
+                'environment' => $env,
                 'idempotency_key' => $idempotencyKey,
                 'request_fingerprint' => $fingerprint,
                 'status' => 'pending',
@@ -76,7 +78,7 @@ class DanaMerchantApiKeyIssuanceService
             if (! is_numeric($apiKeyId) || ! is_numeric($data['id'] ?? null)) {
                 throw new DanaMerchantProvisioningException('Metadata issuance gateway tidak valid.', 502, false);
             } $issuance->update(['gateway_issuance_id' => (int) $data['id'], 'gateway_api_key_id' => (int) $apiKeyId, 'key_prefix' => (string) ($data['key_prefix'] ?? ''), 'status' => 'pending']);
-            $this->store->store(['gateway_merchant_id' => $merchant->gateway_merchant_id, 'gateway_api_key_id' => (int) $apiKeyId, 'key_prefix' => (string) ($data['key_prefix'] ?? ''), 'plaintext_api_key' => $gateway['api_key']]);
+            $this->store->store(['gateway_merchant_id' => $merchant->gateway_merchant_id, 'gateway_api_key_id' => (int) $apiKeyId, 'key_prefix' => (string) ($data['key_prefix'] ?? ''), 'plaintext_api_key' => $gateway['api_key'], 'environment' => $env]);
             $issuance->update(['secret_stored_at' => now(), 'status' => 'confirmation_pending']);
 
             return $this->confirm($issuance);

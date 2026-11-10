@@ -53,6 +53,7 @@ class DanaGatewayMerchantProvisioningController extends Controller
         DanaMerchantProvisioningClient $client,
     ): JsonResponse {
         $attributes = $request->validated();
+        $attributes['environment'] = $attributes['environment'] ?? 'sandbox';
         $idempotencyKey = $client->stableIdempotencyKey($attributes);
 
         try {
@@ -94,11 +95,14 @@ class DanaGatewayMerchantProvisioningController extends Controller
             return $this->merchantNotFound();
         }
 
+        $environment = $request->has('environment') ? (string) $request->query('environment') : null;
+
         try {
-            $readiness = $client->readiness($merchantId);
+            $readiness = $client->readiness($merchantId, $environment);
         } catch (DanaMerchantProvisioningException $exception) {
             $this->recordManagementAudit($request, $merchant, 'dana_merchant.readiness_viewed', 'failed', $exception->gatewayStatus, $exception->retryable, [
                 'retryable' => $exception->retryable,
+                'environment' => $environment ?? 'sandbox',
             ]);
 
             return $this->gatewayError($exception);
@@ -108,6 +112,7 @@ class DanaGatewayMerchantProvisioningController extends Controller
             'readiness_status' => $readiness['readiness_status'],
             'active_api_key_count' => $readiness['active_api_key_count'],
             'dana_configuration_ready' => $readiness['dana_configuration']['ready'],
+            'environment' => $environment ?? 'sandbox',
         ]);
 
         return new DanaGatewayMerchantReadinessResource($readiness);
@@ -146,14 +151,16 @@ class DanaGatewayMerchantProvisioningController extends Controller
         return new DanaGatewayMerchantDanaConfigurationResource($configuration);
     }
 
-    public function storedDanaConfiguration(int $merchantId, DanaMerchantProvisioningClient $client): DanaGatewayMerchantStoredConfigurationResource|JsonResponse
+    public function storedDanaConfiguration(int $merchantId, Request $request, DanaMerchantProvisioningClient $client): DanaGatewayMerchantStoredConfigurationResource|JsonResponse
     {
         if ($this->sandboxProvisionedMerchant($merchantId) === null) {
             return $this->merchantNotFound();
         }
 
+        $environment = $request->has('environment') ? (string) $request->query('environment') : null;
+
         try {
-            return (new DanaGatewayMerchantStoredConfigurationResource($client->storedDanaConfiguration($merchantId)))
+            return (new DanaGatewayMerchantStoredConfigurationResource($client->storedDanaConfiguration($merchantId, $environment)))
                 ->response()
                 ->header('Cache-Control', 'no-store');
         } catch (DanaMerchantProvisioningException $exception) {
@@ -1026,7 +1033,14 @@ class DanaGatewayMerchantProvisioningController extends Controller
         if ($merchant === null) {
             return $this->merchantNotFound();
         }
-        $attributes = $request->validate(['environment' => ['required', 'in:sandbox'], 'name' => ['required', 'string', 'max:120'], 'abilities' => ['required', 'array', 'min:1'], 'abilities.*' => ['string', 'in:payments:create,payments:read,payments:*'], 'expires_at' => ['nullable', 'date', 'after:now']]);
+        $attributes = $request->validate([
+            'environment' => ['nullable', 'string', 'in:sandbox,production'],
+            'name' => ['required', 'string', 'max:120'],
+            'abilities' => ['required', 'array', 'min:1'],
+            'abilities.*' => ['string', 'in:payments:create,payments:read,payments:*'],
+            'expires_at' => ['nullable', 'date', 'after:now'],
+        ]);
+        $attributes['environment'] = $attributes['environment'] ?? 'sandbox';
         $idempotencyKey = $request->header('Idempotency-Key');
         if (! is_string($idempotencyKey) || ! preg_match('/\A[a-zA-Z0-9][a-zA-Z0-9._-]{15,127}\z/', $idempotencyKey)) {
             throw ValidationException::withMessages(['idempotency_key' => 'Idempotency-Key wajib berupa identifier tindakan yang valid.']);
@@ -1100,7 +1114,7 @@ class DanaGatewayMerchantProvisioningController extends Controller
         }
     }
 
-    public function toggleMerchantStatus(int $merchantId, Request $request, DanaMerchantProvisioningClient $client): JsonResponse
+    public function toggleMerchantStatus(int $merchantId, Request $request, DanaMerchantProvisioningClient $client, DanaEnvironmentService $envService): JsonResponse
     {
         try {
             $merchantData = $client->find($merchantId);
@@ -1110,11 +1124,12 @@ class DanaGatewayMerchantProvisioningController extends Controller
 
         $merchantCode = $merchantData['merchant_code'];
         $environment = $merchantData['environment'] ?? 'sandbox';
+        $primaryMerchantCode = $envService->getPrimaryMerchantCode($environment);
 
-        if ($merchantCode === 'udev-central') {
+        if ($merchantCode === $primaryMerchantCode) {
             return response()->json([
                 'status' => 'error',
-                'message' => 'Merchant udev-central adalah merchant sistem pusat dan tidak dapat dinonaktifkan.',
+                'message' => "Merchant {$merchantCode} adalah merchant sistem pusat dan tidak dapat dinonaktifkan.",
             ], Response::HTTP_UNPROCESSABLE_ENTITY);
         }
 
@@ -1203,7 +1218,7 @@ class DanaGatewayMerchantProvisioningController extends Controller
         ]);
     }
 
-    public function destroyMerchant(int $merchantId, Request $request, DanaMerchantProvisioningClient $client): JsonResponse
+    public function destroyMerchant(int $merchantId, Request $request, DanaMerchantProvisioningClient $client, DanaEnvironmentService $envService): JsonResponse
     {
         try {
             $merchantData = $client->find($merchantId);
@@ -1213,11 +1228,12 @@ class DanaGatewayMerchantProvisioningController extends Controller
 
         $merchantCode = $merchantData['merchant_code'];
         $environment = $merchantData['environment'] ?? 'sandbox';
+        $primaryMerchantCode = $envService->getPrimaryMerchantCode($environment);
 
-        if ($merchantCode === 'udev-central') {
+        if ($merchantCode === $primaryMerchantCode) {
             return response()->json([
                 'status' => 'error',
-                'message' => 'Merchant udev-central adalah merchant sistem pusat dan tidak dapat dihapus.',
+                'message' => "Merchant {$merchantCode} adalah merchant sistem pusat dan tidak dapat dihapus.",
             ], Response::HTTP_UNPROCESSABLE_ENTITY);
         }
 
@@ -1301,12 +1317,14 @@ class DanaGatewayMerchantProvisioningController extends Controller
     public function getEnvironment(Request $request, DanaEnvironmentService $envService): JsonResponse
     {
         $setting = $envService->getSetting();
-        $readiness = $envService->evaluateProductionReadiness();
+        $primaryMerchantCode = $envService->getPrimaryMerchantCode();
+        $readiness = $envService->evaluateProductionReadiness($primaryMerchantCode);
 
         return response()->json([
             'status' => 'success',
             'data' => [
                 'active_environment' => $setting->active_environment,
+                'primary_merchant_code' => $primaryMerchantCode,
                 'is_production_ready' => $readiness['is_ready'],
                 'production_activated_at' => $setting->production_activated_at?->format('Y-m-d H:i:s'),
                 'production_activated_by' => $setting->productionActivatedBy?->name,
@@ -1314,6 +1332,54 @@ class DanaGatewayMerchantProvisioningController extends Controller
                 'last_switched_by' => $setting->lastSwitchedBy?->name,
                 'activation_notes' => $setting->activation_notes,
                 'readiness' => $readiness,
+            ],
+        ]);
+    }
+
+    public function setPrimaryMerchant(Request $request, DanaEnvironmentService $envService): JsonResponse
+    {
+        $validated = $request->validate([
+            'merchant_code' => ['required', 'string', 'max:60'],
+            'notes' => ['nullable', 'string', 'max:500'],
+        ]);
+
+        /** @var User $user */
+        $user = $request->user();
+        $setting = $envService->setPrimaryMerchant($validated['merchant_code'], $user, $validated['notes'] ?? null);
+
+        return response()->json([
+            'status' => 'success',
+            'message' => "Merchant {$validated['merchant_code']} berhasil ditetapkan sebagai Merchant Utama DANA.",
+            'data' => [
+                'primary_merchant_code' => $setting->primary_merchant_code,
+                'active_environment' => $setting->active_environment,
+            ],
+        ]);
+    }
+
+    public function setPrimaryMerchantById(int $merchantId, Request $request, DanaEnvironmentService $envService, DanaMerchantProvisioningClient $client): JsonResponse
+    {
+        try {
+            $merchantData = $client->find($merchantId);
+        } catch (DanaMerchantProvisioningException $exception) {
+            return $this->gatewayError($exception);
+        }
+
+        $merchantCode = $merchantData['merchant_code'];
+        $notes = $request->input('notes');
+
+        /** @var User $user */
+        $user = $request->user();
+        $setting = $envService->setPrimaryMerchant($merchantCode, $user, is_string($notes) ? $notes : null);
+
+        return response()->json([
+            'status' => 'success',
+            'message' => "Merchant {$merchantCode} berhasil ditetapkan sebagai Merchant Utama DANA.",
+            'data' => [
+                'merchant_id' => $merchantId,
+                'merchant_code' => $merchantCode,
+                'primary_merchant_code' => $setting->primary_merchant_code,
+                'active_environment' => $setting->active_environment,
             ],
         ]);
     }
@@ -1512,7 +1578,6 @@ class DanaGatewayMerchantProvisioningController extends Controller
         return DanaMerchantProvisioningAudit::query()
             ->where('operation', 'dana_merchant.provision')
             ->where('gateway_merchant_id', $merchantId)
-            ->where('environment', 'sandbox')
             ->where('status', 'succeeded')
             ->where('merchant_code', '!=', 'larissama')
             ->latest('id')

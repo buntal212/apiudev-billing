@@ -16,6 +16,7 @@ return new class extends Migration
                 $table->id();
                 $table->string('gateway', 30)->default('dana')->unique();
                 $table->string('active_environment', 20)->default('sandbox');
+                $table->string('primary_merchant_code', 60)->default('udev-central');
                 $table->boolean('is_production_ready')->default(false);
                 $table->timestamp('production_activated_at')->nullable();
                 $table->foreignId('production_activated_by')->nullable()->constrained('users')->nullOnDelete();

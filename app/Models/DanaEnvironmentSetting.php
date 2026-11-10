@@ -18,6 +18,7 @@ class DanaEnvironmentSetting extends Model
     protected $fillable = [
         'gateway',
         'active_environment',
+        'primary_merchant_code',
         'is_production_ready',
         'production_activated_at',
         'production_activated_by',
@@ -67,5 +68,29 @@ class DanaEnvironmentSetting extends Model
         } catch (\Throwable) {
             return (string) config('services.dana_gateway.environment', self::EnvironmentSandbox);
         }
+    }
+
+    public static function getPrimaryMerchantCode(string $environment = self::EnvironmentSandbox): string
+    {
+        if (Schema::hasTable('dana_environment_settings') && Schema::hasColumn('dana_environment_settings', 'primary_merchant_code')) {
+            try {
+                $code = (string) static::query()->where('gateway', 'dana')->value('primary_merchant_code');
+                if (trim($code) !== '') {
+                    return trim($code);
+                }
+            } catch (\Throwable) {
+            }
+        }
+
+        $configKey = $environment === self::EnvironmentProduction
+            ? 'services.udev_billing.subscription_dana_production_merchant_code'
+            : 'services.udev_billing.subscription_dana_sandbox_merchant_code';
+
+        $merchantCode = config($configKey) ?: config('services.udev_billing.subscription_dana_sandbox_merchant_code');
+        if (is_string($merchantCode) && trim($merchantCode) !== '') {
+            return trim($merchantCode);
+        }
+
+        return '';
     }
 }

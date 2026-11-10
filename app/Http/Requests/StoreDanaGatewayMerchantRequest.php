@@ -22,7 +22,7 @@ class StoreDanaGatewayMerchantRequest extends ApiFormRequest
             'code' => ['required', 'string', 'alpha_dash:ascii', 'max:60'],
             'name' => ['required', 'string', 'max:180'],
             'email' => ['nullable', 'email', 'max:255'],
-            'environment' => ['required', 'in:sandbox,production'],
+            'environment' => ['nullable', 'string', 'in:sandbox,production'],
             'service_token' => ['prohibited'],
             'idempotency_key' => ['prohibited'],
         ];

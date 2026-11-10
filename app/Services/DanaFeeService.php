@@ -2,6 +2,7 @@
 
 namespace App\Services;
 
+use App\Models\DanaEnvironmentSetting;
 use App\Models\DanaPaymentMethodFee;
 use App\Models\Invoice;
 use Illuminate\Support\Facades\Schema;
@@ -115,7 +116,20 @@ class DanaFeeService
 
             $rule = $query->first();
 
-            if ($rule === null && $merchantCode !== 'udev-central') {
+            $primaryCode = DanaEnvironmentSetting::getPrimaryMerchantCode($env);
+            if ($rule === null && $merchantCode !== $primaryCode) {
+                $fallbackQuery = DanaPaymentMethodFee::query()
+                    ->where('merchant_code', $primaryCode)
+                    ->where('payment_method', $paymentMethod);
+
+                if ($hasEnvColumn) {
+                    $fallbackQuery->where('environment', $env);
+                }
+
+                $rule = $fallbackQuery->first();
+            }
+
+            if ($rule === null && $merchantCode !== 'udev-central' && $primaryCode !== 'udev-central') {
                 $fallbackQuery = DanaPaymentMethodFee::query()
                     ->where('merchant_code', 'udev-central')
                     ->where('payment_method', $paymentMethod);
@@ -202,7 +216,7 @@ class DanaFeeService
         ?string $merchantCode = null,
         ?string $environment = null,
     ): array {
-        $merchant = $merchantCode ?: 'udev-central';
+        $merchant = $merchantCode ?: DanaEnvironmentSetting::getPrimaryMerchantCode($env);
         $env = $environment ?: (string) config('services.dana_gateway.environment', 'sandbox');
         $subtotal = (float) $invoice->getRawOriginal('amount');
         $calc = $this->calculateFee($merchant, $paymentMethod, $subtotal, $env);

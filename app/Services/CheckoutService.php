@@ -308,20 +308,23 @@ class CheckoutService
                         ->first()
                     : null;
 
-                // Application mappings pointing to 'udev-central' or legacy 'udev-demo' are central/legacy
+                $activeDanaEnv = $this->danaEnvironmentService->getActiveEnvironment();
+                $primaryMerchantCode = $this->danaEnvironmentService->getPrimaryMerchantCode($activeDanaEnv);
+                $centralMerchantCodes = array_values(array_unique([$primaryMerchantCode, 'udev-central', 'udev-demo']));
+
+                // Application mappings pointing to primary merchant, 'udev-central', or legacy 'udev-demo' are central/legacy
                 // fallbacks for UDEV subscriptions; only distinct tenant merchants represent customer applications.
-                $hasCustomerTenantMapping = ($prodDanaMapping !== null && ! in_array($prodDanaMapping->gateway_merchant_code, ['udev-central', 'udev-demo'], true))
-                    || ($sandboxDanaMapping !== null && ! in_array($sandboxDanaMapping->gateway_merchant_code, ['udev-central', 'udev-demo'], true));
+                $hasCustomerTenantMapping = ($prodDanaMapping !== null && ! in_array($prodDanaMapping->gateway_merchant_code, $centralMerchantCodes, true))
+                    || ($sandboxDanaMapping !== null && ! in_array($sandboxDanaMapping->gateway_merchant_code, $centralMerchantCodes, true));
 
                 $isCustomerAppInvoice = $hasCustomerTenantMapping;
-                $activeDanaEnv = $this->danaEnvironmentService->getActiveEnvironment();
 
                 if ($isCustomerAppInvoice) {
                     $chosenEnvironment = null;
                     $recipientMerchantCode = null;
 
                     // Prioritaskan Production jika ada mapping aktif, approved, dan credential lengkap/terverifikasi
-                    if ($prodDanaMapping !== null && ! in_array($prodDanaMapping->gateway_merchant_code, ['udev-central', 'udev-demo'], true)) {
+                    if ($prodDanaMapping !== null && ! in_array($prodDanaMapping->gateway_merchant_code, $centralMerchantCodes, true)) {
                         $prodReadiness = $this->merchantCatalog->readiness($prodDanaMapping->gateway_merchant_code, 'production');
                         if ($prodReadiness['ready']) {
                             $chosenEnvironment = 'production';
@@ -330,13 +333,13 @@ class CheckoutService
                     }
 
                     if ($recipientMerchantCode === null) {
-                        if ($activeDanaEnv === 'production' && $prodDanaMapping !== null && ! in_array($prodDanaMapping->gateway_merchant_code, ['udev-central', 'udev-demo'], true)) {
+                        if ($activeDanaEnv === 'production' && $prodDanaMapping !== null && ! in_array($prodDanaMapping->gateway_merchant_code, $centralMerchantCodes, true)) {
                             throw ValidationException::withMessages([
                                 'invoice' => ['Merchant DANA Production untuk aplikasi ini belum siap digunakan. Transaksi live tidak dapat dialihkan ke Sandbox.'],
                             ]);
                         }
 
-                        if ($sandboxDanaMapping !== null && ! in_array($sandboxDanaMapping->gateway_merchant_code, ['udev-central', 'udev-demo'], true)) {
+                        if ($sandboxDanaMapping !== null && ! in_array($sandboxDanaMapping->gateway_merchant_code, $centralMerchantCodes, true)) {
                             $sandboxReadiness = $this->merchantCatalog->readiness($sandboxDanaMapping->gateway_merchant_code, 'sandbox');
                             if ($sandboxReadiness['ready']) {
                                 $chosenEnvironment = 'sandbox';
@@ -357,7 +360,7 @@ class CheckoutService
                 } else {
                     $chosenEnvironment = $activeDanaEnv;
                     if ($chosenEnvironment === 'production') {
-                        $centralProdReadiness = $this->merchantCatalog->readiness('udev-central', 'production');
+                        $centralProdReadiness = $this->merchantCatalog->readiness($primaryMerchantCode, 'production');
                         if (! $centralProdReadiness['ready']) {
                             $chosenEnvironment = 'sandbox';
                         }

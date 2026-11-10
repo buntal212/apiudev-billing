@@ -209,7 +209,7 @@ class DanaGatewayMerchantManagementApiTest extends TestCase
         $this->actingAdmin();
 
         $this->putJson($this->configurationUrl($merchant->gateway_merchant_id), $this->configurationPayload([
-            'environment' => 'production',
+            'environment' => 'invalid_env',
             'service_token' => 'frontend-supplied-token',
         ]))
             ->assertUnprocessable()
