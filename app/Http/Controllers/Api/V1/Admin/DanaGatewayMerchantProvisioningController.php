@@ -837,7 +837,10 @@ class DanaGatewayMerchantProvisioningController extends Controller
             return $this->gatewayError($exception)->header('Cache-Control', 'no-store');
         }
 
-        $this->recordManagementAudit($request, $merchant, 'dana_sandbox_tester.transaction_cancelled', 'succeeded', 200, false, [
+        $passed = ($result['cancel_result']['http_status'] ?? 0) === 200
+            && ($result['cancel_result']['response_code'] ?? null) === '2005700';
+
+        $this->recordManagementAudit($request, $merchant, 'dana_sandbox_tester.transaction_cancelled', $passed ? 'succeeded' : 'failed', 200, false, [
             'payment_id' => $paymentId,
             'http_status' => $result['cancel_result']['http_status'] ?? null,
             'response_code' => $result['cancel_result']['response_code'] ?? null,
