@@ -22,13 +22,15 @@ class DanaFeeController extends Controller
             'payment_method' => ['required', 'string', 'in:qris,dana_wallet,va_bri,va_pani,va_cimb,va_btpn'],
             'amount' => ['required', 'numeric', 'min:1'],
             'merchant_code' => ['nullable', 'string', 'max:60'],
+            'environment' => ['nullable', 'string', 'in:sandbox,production'],
         ]);
 
         $merchantCode = $validated['merchant_code'] ?? 'udev-central';
         $paymentMethod = $validated['payment_method'];
         $amount = (float) $validated['amount'];
+        $environment = $validated['environment'] ?? $request->query('environment');
 
-        $feeData = $this->danaFeeService->calculateFee($merchantCode, $paymentMethod, $amount);
+        $feeData = $this->danaFeeService->calculateFee($merchantCode, $paymentMethod, $amount, $environment);
 
         return response()->json([
             'status' => 'success',
@@ -42,11 +44,12 @@ class DanaFeeController extends Controller
     public function index(Request $request): JsonResponse
     {
         $merchantCode = $request->query('merchant_code', 'udev-central');
+        $environment = $request->query('environment');
         $methods = ['qris', 'dana_wallet', 'va_bri', 'va_pani', 'va_cimb', 'va_btpn'];
         $items = [];
 
         foreach ($methods as $method) {
-            $items[] = $this->danaFeeService->calculateFee($merchantCode, $method, 100000);
+            $items[] = $this->danaFeeService->calculateFee($merchantCode, $method, 100000, $environment);
         }
 
         return response()->json([

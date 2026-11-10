@@ -26,6 +26,10 @@ class CheckoutService
 
     private DanaFeeService $danaFeeService;
 
+    private DanaGatewayMerchantCatalog $merchantCatalog;
+
+    private DanaEnvironmentService $danaEnvironmentService;
+
     public function __construct(
         private DanaGatewayClient $gatewayClient,
         private DanaGatewayMerchantResolver $merchantResolver,
@@ -34,11 +38,15 @@ class CheckoutService
         ?MidtransSecretStore $midtransSecretStore = null,
         ?MidtransFeeService $midtransFeeService = null,
         ?DanaFeeService $danaFeeService = null,
+        ?DanaGatewayMerchantCatalog $merchantCatalog = null,
+        ?DanaEnvironmentService $danaEnvironmentService = null,
     ) {
         $this->midtransClient = $midtransClient ?? app(MidtransGatewayProvisioningClient::class);
         $this->midtransSecretStore = $midtransSecretStore ?? app(MidtransSecretStore::class);
         $this->midtransFeeService = $midtransFeeService ?? app(MidtransFeeService::class);
         $this->danaFeeService = $danaFeeService ?? app(DanaFeeService::class);
+        $this->merchantCatalog = $merchantCatalog ?? app(DanaGatewayMerchantCatalog::class);
+        $this->danaEnvironmentService = $danaEnvironmentService ?? app(DanaEnvironmentService::class);
     }
 
     public function startCheckout(
@@ -280,16 +288,111 @@ class CheckoutService
                     ]);
                 }
 
-                $environment = (string) config('services.dana_gateway.environment', 'sandbox');
-                $recipientMerchantCode = $this->subscriptionMerchantResolver
-                    ->resolveNewCheckoutMerchant($environment);
+                $appId = $lockedInvoice->plan?->application_id ?? $lockedInvoice->customer?->application_id;
+
+                $prodDanaMapping = $appId !== null
+                    ? ApplicationPaymentGateway::query()
+                        ->where('application_id', $appId)
+                        ->where('provider', 'dana')
+                        ->where('environment', 'production')
+                        ->where('is_active', true)
+                        ->first()
+                    : null;
+
+                $sandboxDanaMapping = $appId !== null
+                    ? ApplicationPaymentGateway::query()
+                        ->where('application_id', $appId)
+                        ->where('provider', 'dana')
+                        ->where('environment', 'sandbox')
+                        ->where('is_active', true)
+                        ->first()
+                    : null;
+
+                // Application mappings pointing to 'udev-central' or legacy 'udev-demo' are central/legacy
+                // fallbacks for UDEV subscriptions; only distinct tenant merchants represent customer applications.
+                $hasCustomerTenantMapping = ($prodDanaMapping !== null && ! in_array($prodDanaMapping->gateway_merchant_code, ['udev-central', 'udev-demo'], true))
+                    || ($sandboxDanaMapping !== null && ! in_array($sandboxDanaMapping->gateway_merchant_code, ['udev-central', 'udev-demo'], true));
+
+                $isCustomerAppInvoice = $hasCustomerTenantMapping;
+                $activeDanaEnv = $this->danaEnvironmentService->getActiveEnvironment();
+
+                if ($isCustomerAppInvoice) {
+                    $chosenEnvironment = null;
+                    $recipientMerchantCode = null;
+
+                    // Prioritaskan Production jika ada mapping aktif, approved, dan credential lengkap/terverifikasi
+                    if ($prodDanaMapping !== null && ! in_array($prodDanaMapping->gateway_merchant_code, ['udev-central', 'udev-demo'], true)) {
+                        $prodReadiness = $this->merchantCatalog->readiness($prodDanaMapping->gateway_merchant_code, 'production');
+                        if ($prodReadiness['ready']) {
+                            $chosenEnvironment = 'production';
+                            $recipientMerchantCode = $prodDanaMapping->gateway_merchant_code;
+                        }
+                    }
+
+                    if ($recipientMerchantCode === null) {
+                        if ($activeDanaEnv === 'production' && $prodDanaMapping !== null && ! in_array($prodDanaMapping->gateway_merchant_code, ['udev-central', 'udev-demo'], true)) {
+                            throw ValidationException::withMessages([
+                                'invoice' => ['Merchant DANA Production untuk aplikasi ini belum siap digunakan. Transaksi live tidak dapat dialihkan ke Sandbox.'],
+                            ]);
+                        }
+
+                        if ($sandboxDanaMapping !== null && ! in_array($sandboxDanaMapping->gateway_merchant_code, ['udev-central', 'udev-demo'], true)) {
+                            $sandboxReadiness = $this->merchantCatalog->readiness($sandboxDanaMapping->gateway_merchant_code, 'sandbox');
+                            if ($sandboxReadiness['ready']) {
+                                $chosenEnvironment = 'sandbox';
+                                $recipientMerchantCode = $sandboxDanaMapping->gateway_merchant_code;
+                            } else {
+                                throw ValidationException::withMessages([
+                                    'invoice' => ['Merchant DANA Sandbox aplikasi belum siap digunakan.'],
+                                ]);
+                            }
+                        } else {
+                            throw ValidationException::withMessages([
+                                'invoice' => ['Aplikasi invoice belum memiliki mapping merchant DANA yang siap digunakan.'],
+                            ]);
+                        }
+                    }
+
+                    $isCentral = false;
+                } else {
+                    $chosenEnvironment = $activeDanaEnv;
+                    if ($chosenEnvironment === 'production') {
+                        $centralProdReadiness = $this->merchantCatalog->readiness('udev-central', 'production');
+                        if (! $centralProdReadiness['ready']) {
+                            $chosenEnvironment = 'sandbox';
+                        }
+                    }
+
+                    $recipientMerchantCode = $this->subscriptionMerchantResolver
+                        ->resolveNewCheckoutMerchant($chosenEnvironment);
+                    $isCentral = true;
+                }
 
                 $feeSnapshot = $this->danaFeeService->buildFeeSnapshot(
                     invoice: $lockedInvoice,
                     paymentMethod: $paymentMethod,
                     merchantCode: $recipientMerchantCode,
+                    environment: $chosenEnvironment,
                 );
                 $attemptAmount = $feeSnapshot['total_amount'];
+
+                $attemptMetadata = [
+                    'invoice_number' => $lockedInvoice->invoice_number,
+                    'application_customer_id' => $lockedInvoice->application_customer_id,
+                    'subscription_id' => $lockedInvoice->subscription_id,
+                    'payment_method' => $paymentMethod,
+                    'fee_breakdown' => $feeSnapshot,
+                    'gateway_provider' => 'dana',
+                    'gateway_environment' => $chosenEnvironment,
+                    'gateway_merchant_code' => $recipientMerchantCode,
+                ];
+
+                if ($isCentral) {
+                    $attemptMetadata[SubscriptionBillingMerchantResolver::RecipientMetadataKey] = SubscriptionBillingMerchantResolver::CentralRecipient;
+                } elseif ($appId !== null) {
+                    $attemptMetadata['application_id'] = $appId;
+                    $attemptMetadata['billing_recipient'] = 'application_customer';
+                }
 
                 $attempt = PaymentAttempt::query()->create([
                     'invoice_id' => $lockedInvoice->getKey(),
@@ -297,20 +400,13 @@ class CheckoutService
                     'provider' => 'dana',
                     'merchant_reference' => $merchantReference,
                     'gateway_merchant_code' => $recipientMerchantCode,
-                    'gateway_environment' => $environment,
+                    'gateway_environment' => $chosenEnvironment,
                     'amount' => $attemptAmount,
                     'currency' => $lockedInvoice->currency,
                     'status' => PaymentAttempt::StatusInitiated,
                     'idempotency_key' => $fullIdempotencyKey,
                     'requested_at' => now(),
-                    'metadata' => [
-                        'invoice_number' => $lockedInvoice->invoice_number,
-                        'application_customer_id' => $lockedInvoice->application_customer_id,
-                        'subscription_id' => $lockedInvoice->subscription_id,
-                        'payment_method' => $paymentMethod,
-                        'fee_breakdown' => $feeSnapshot,
-                        SubscriptionBillingMerchantResolver::RecipientMetadataKey => SubscriptionBillingMerchantResolver::CentralRecipient,
-                    ],
+                    'metadata' => $attemptMetadata,
                 ]);
 
                 return CheckoutOutboxMessage::query()->create([
@@ -1152,12 +1248,14 @@ class CheckoutService
 
             $expectedOutboxKey = 'midtrans-checkout-attempt-'.$attempt->getKey();
         } elseif ($this->subscriptionMerchantResolver->isCentralAttempt($metadata)) {
+            $attemptEnv = $attempt->gateway_environment ?: 'sandbox';
             $configuredMerchant = $this->subscriptionMerchantResolver
-                ->resolveNewCheckoutMerchant('sandbox');
+                ->resolveNewCheckoutMerchant($attemptEnv);
 
             if ($configuredMerchant !== $attempt->gateway_merchant_code) {
+                $envLabel = ucfirst($attemptEnv);
                 throw ValidationException::withMessages([
-                    'payment_attempt' => ['Merchant penerima UDEV untuk checkout ini tidak lagi cocok dengan konfigurasi Sandbox.'],
+                    'payment_attempt' => ["Merchant penerima UDEV untuk checkout ini tidak lagi cocok dengan konfigurasi {$envLabel}."],
                 ]);
             }
             $expectedOutboxKey = 'dana-checkout-attempt-'.$attempt->getKey();
@@ -1166,12 +1264,13 @@ class CheckoutService
                 'payment_attempt' => ['Paket invoice tidak ditemukan untuk memvalidasi merchant.'],
             ]);
         } else {
-            // Attempts without the central marker predate the policy. Keep them
-            // on their stored application merchant; never reroute them.
+            // Attempts without the central marker predate the policy or belong to application mapping.
+            // Keep them on their stored application merchant; never reroute them.
+            $attemptEnv = $attempt->gateway_environment ?: 'sandbox';
             $mapping = ApplicationPaymentGateway::query()
                 ->where('application_id', $invoice->plan->application_id)
                 ->where('provider', 'dana')
-                ->where('environment', 'sandbox')
+                ->where('environment', $attemptEnv)
                 ->where('gateway_merchant_code', $attempt->gateway_merchant_code)
                 ->where('is_active', true)
                 ->first();

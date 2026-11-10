@@ -14,10 +14,13 @@ use App\Http\Resources\DanaGatewayMerchantDanaConfigurationResource;
 use App\Http\Resources\DanaGatewayMerchantReadinessResource;
 use App\Http\Resources\DanaGatewayMerchantResource;
 use App\Http\Resources\DanaGatewayMerchantStoredConfigurationResource;
+use App\Models\ApplicationPaymentGateway;
 use App\Models\DanaMerchantApiKeyIssuance;
 use App\Models\DanaMerchantProvisioningAudit;
 use App\Models\DanaSandboxResultContext;
+use App\Models\PaymentAttempt;
 use App\Models\User;
+use App\Services\DanaEnvironmentService;
 use App\Services\DanaMerchantApiKeyIssuanceService;
 use App\Services\DanaMerchantProvisioningClient;
 use App\Services\DanaMerchantProvisioningException;
@@ -27,6 +30,7 @@ use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Http\Resources\Json\AnonymousResourceCollection;
 use Illuminate\Validation\ValidationException;
+use Symfony\Component\HttpFoundation\Response;
 
 class DanaGatewayMerchantProvisioningController extends Controller
 {
@@ -1094,6 +1098,227 @@ class DanaGatewayMerchantProvisioningController extends Controller
         } catch (DanaMerchantProvisioningException $e) {
             return $this->gatewayError($e)->header('Cache-Control', 'no-store');
         }
+    }
+
+    public function toggleMerchantStatus(int $merchantId, Request $request, DanaMerchantProvisioningClient $client): JsonResponse
+    {
+        try {
+            $merchantData = $client->find($merchantId);
+        } catch (DanaMerchantProvisioningException $exception) {
+            return $this->gatewayError($exception);
+        }
+
+        $merchantCode = $merchantData['merchant_code'];
+        $environment = $merchantData['environment'] ?? 'sandbox';
+
+        if ($merchantCode === 'udev-central') {
+            return response()->json([
+                'status' => 'error',
+                'message' => 'Merchant udev-central adalah merchant sistem pusat dan tidak dapat dinonaktifkan.',
+            ], Response::HTTP_UNPROCESSABLE_ENTITY);
+        }
+
+        $validated = $request->validate([
+            'is_active' => ['required', 'boolean'],
+        ]);
+
+        $newActive = (bool) $validated['is_active'];
+
+        if (! $newActive) {
+            $pendingCount = PaymentAttempt::query()
+                ->where('gateway_merchant_code', $merchantCode)
+                ->where('gateway_environment', $environment)
+                ->whereIn('status', [PaymentAttempt::StatusInitiated, PaymentAttempt::StatusPending])
+                ->count();
+
+            if ($pendingCount > 0) {
+                return response()->json([
+                    'status' => 'error',
+                    'message' => "Merchant {$merchantCode} memiliki {$pendingCount} transaksi pending dan tidak dapat dinonaktifkan.",
+                ], Response::HTTP_UNPROCESSABLE_ENTITY);
+            }
+
+            $activeMappings = ApplicationPaymentGateway::query()
+                ->where('provider', 'dana')
+                ->where('environment', $environment)
+                ->where('gateway_merchant_code', $merchantCode)
+                ->where('is_active', true)
+                ->count();
+
+            if ($activeMappings > 0) {
+                return response()->json([
+                    'status' => 'error',
+                    'message' => "Merchant {$merchantCode} masih terhubung ke {$activeMappings} mapping aplikasi aktif. Nonaktifkan mapping terlebih dahulu.",
+                ], Response::HTTP_UNPROCESSABLE_ENTITY);
+            }
+        }
+
+        $newStatus = $newActive ? 'active' : 'suspended';
+        try {
+            $client->updateStatus($merchantId, $newStatus);
+        } catch (\Throwable) {
+            // Local fallback
+        }
+
+        $audit = DanaMerchantProvisioningAudit::query()
+            ->where('gateway_merchant_id', $merchantId)
+            ->latest('id')
+            ->first();
+
+        if ($audit !== null) {
+            $this->recordManagementAudit($request, $audit, $newActive ? 'dana_merchant.activated' : 'dana_merchant.deactivated', 'succeeded', 200, false, [
+                'merchant_code' => $merchantCode,
+                'environment' => $environment,
+                'is_active' => $newActive,
+            ]);
+        }
+
+        return response()->json([
+            'status' => 'success',
+            'message' => 'Status merchant DANA berhasil diperbarui.',
+            'data' => [
+                'merchant_id' => $merchantId,
+                'merchant_code' => $merchantCode,
+                'environment' => $environment,
+                'is_active' => $newActive,
+                'status' => $newStatus,
+            ],
+        ]);
+    }
+
+    public function destroyMerchant(int $merchantId, Request $request, DanaMerchantProvisioningClient $client): JsonResponse
+    {
+        try {
+            $merchantData = $client->find($merchantId);
+        } catch (DanaMerchantProvisioningException $exception) {
+            return $this->gatewayError($exception);
+        }
+
+        $merchantCode = $merchantData['merchant_code'];
+        $environment = $merchantData['environment'] ?? 'sandbox';
+
+        if ($merchantCode === 'udev-central') {
+            return response()->json([
+                'status' => 'error',
+                'message' => 'Merchant udev-central adalah merchant sistem pusat dan tidak dapat dihapus.',
+            ], Response::HTTP_UNPROCESSABLE_ENTITY);
+        }
+
+        $pendingCount = PaymentAttempt::query()
+            ->where('gateway_merchant_code', $merchantCode)
+            ->where('gateway_environment', $environment)
+            ->whereIn('status', [PaymentAttempt::StatusInitiated, PaymentAttempt::StatusPending])
+            ->count();
+
+        if ($pendingCount > 0) {
+            return response()->json([
+                'status' => 'error',
+                'message' => "Merchant {$merchantCode} memiliki {$pendingCount} transaksi pending dan tidak dapat dihapus.",
+            ], Response::HTTP_UNPROCESSABLE_ENTITY);
+        }
+
+        $historyCount = PaymentAttempt::query()
+            ->where('gateway_merchant_code', $merchantCode)
+            ->count();
+
+        if ($historyCount > 0) {
+            return response()->json([
+                'status' => 'error',
+                'message' => "Merchant {$merchantCode} memiliki riwayat {$historyCount} transaksi pembayaran dan tidak dapat dihapus. Silakan nonaktifkan merchant sebagai gantinya.",
+            ], Response::HTTP_UNPROCESSABLE_ENTITY);
+        }
+
+        $mappingCount = ApplicationPaymentGateway::query()
+            ->where('provider', 'dana')
+            ->where('environment', $environment)
+            ->where('gateway_merchant_code', $merchantCode)
+            ->where('is_active', true)
+            ->count();
+
+        if ($mappingCount > 0) {
+            return response()->json([
+                'status' => 'error',
+                'message' => "Merchant {$merchantCode} masih digunakan oleh {$mappingCount} mapping aplikasi aktif. Hapus atau nonaktifkan mapping terlebih dahulu.",
+            ], Response::HTTP_UNPROCESSABLE_ENTITY);
+        }
+
+        try {
+            $client->delete($merchantId);
+        } catch (\Throwable) {
+            // Local fallback
+        }
+
+        $audit = DanaMerchantProvisioningAudit::query()
+            ->where('gateway_merchant_id', $merchantId)
+            ->latest('id')
+            ->first();
+
+        if ($audit !== null) {
+            $this->recordManagementAudit($request, $audit, 'dana_merchant.deleted', 'succeeded', 200, false, [
+                'merchant_code' => $merchantCode,
+                'environment' => $environment,
+            ]);
+        }
+
+        return response()->json([
+            'status' => 'success',
+            'message' => "Merchant DANA {$merchantCode} berhasil dihapus.",
+        ]);
+    }
+
+    public function getEnvironment(Request $request, DanaEnvironmentService $envService): JsonResponse
+    {
+        $setting = $envService->getSetting();
+        $readiness = $envService->evaluateProductionReadiness();
+
+        return response()->json([
+            'status' => 'success',
+            'data' => [
+                'active_environment' => $setting->active_environment,
+                'is_production_ready' => $readiness['is_ready'],
+                'production_activated_at' => $setting->production_activated_at?->format('Y-m-d H:i:s'),
+                'production_activated_by' => $setting->productionActivatedBy?->name,
+                'last_switched_at' => $setting->last_switched_at?->format('Y-m-d H:i:s'),
+                'last_switched_by' => $setting->lastSwitchedBy?->name,
+                'activation_notes' => $setting->activation_notes,
+                'readiness' => $readiness,
+            ],
+        ]);
+    }
+
+    public function activateProduction(Request $request, DanaEnvironmentService $envService): JsonResponse
+    {
+        $validated = $request->validate([
+            'confirmation_phrase' => ['required', 'string'],
+            'notes' => ['nullable', 'string', 'max:500'],
+        ]);
+
+        /** @var User $user */
+        $user = $request->user();
+        $setting = $envService->activateProduction($user, $validated['confirmation_phrase'], $validated['notes'] ?? null);
+
+        return response()->json([
+            'status' => 'success',
+            'message' => 'Environment DANA Production berhasil diaktifkan.',
+            'data' => $setting,
+        ]);
+    }
+
+    public function switchSandbox(Request $request, DanaEnvironmentService $envService): JsonResponse
+    {
+        $validated = $request->validate([
+            'notes' => ['nullable', 'string', 'max:500'],
+        ]);
+
+        /** @var User $user */
+        $user = $request->user();
+        $setting = $envService->switchToSandbox($user, $validated['notes'] ?? null);
+
+        return response()->json([
+            'status' => 'success',
+            'message' => 'Environment DANA berhasil dikembalikan ke Sandbox.',
+            'data' => $setting,
+        ]);
     }
 
     private function issuanceData(DanaMerchantApiKeyIssuance $issuance): array

@@ -16,6 +16,7 @@ class DanaPaymentMethodFee extends Model
 
     protected $fillable = [
         'merchant_code',
+        'environment',
         'payment_method',
         'payment_method_name',
         'customer_fee_type',

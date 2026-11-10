@@ -96,6 +96,21 @@ class DanaMerchantProvisioningClient
         return $this->merchant($body['data'] ?? null);
     }
 
+    public function updateStatus(int $merchantId, string $status): array
+    {
+        $response = $this->send(fn (PendingRequest $request): Response => $request->patch("/api/v1/internal/merchants/{$merchantId}/status", ['status' => $status]));
+        $body = $this->decodeSuccessfulResponse($response);
+
+        return is_array($body['data'] ?? null) ? $body['data'] : [];
+    }
+
+    public function delete(int $merchantId): bool
+    {
+        $response = $this->send(fn (PendingRequest $request): Response => $request->delete("/api/v1/internal/merchants/{$merchantId}"));
+
+        return $response->successful();
+    }
+
     /**
      * @return array{merchant_code: string, merchant_status: string, environment: string, active_api_key_count: int, dana_configuration: array{available: bool, enabled: bool, ready: bool}, readiness_status: string, not_ready_components: list<string>}
      */

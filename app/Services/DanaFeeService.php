@@ -96,22 +96,35 @@ class DanaFeeService
      *     rule_id: ?int
      * }
      */
-    public function calculateFee(string $merchantCode, string $paymentMethod, float|int|string $subtotal): array
+    public function calculateFee(string $merchantCode, string $paymentMethod, float|int|string $subtotal, ?string $environment = null): array
     {
         $subtotalFloat = (float) $subtotal;
+        $env = $environment ?: (string) config('services.dana_gateway.environment', 'sandbox');
         $rule = null;
 
         if (Schema::hasTable('dana_payment_method_fees')) {
-            $rule = DanaPaymentMethodFee::query()
+            $hasEnvColumn = Schema::hasColumn('dana_payment_method_fees', 'environment');
+
+            $query = DanaPaymentMethodFee::query()
                 ->where('merchant_code', $merchantCode)
-                ->where('payment_method', $paymentMethod)
-                ->first();
+                ->where('payment_method', $paymentMethod);
+
+            if ($hasEnvColumn) {
+                $query->where('environment', $env);
+            }
+
+            $rule = $query->first();
 
             if ($rule === null && $merchantCode !== 'udev-central') {
-                $rule = DanaPaymentMethodFee::query()
+                $fallbackQuery = DanaPaymentMethodFee::query()
                     ->where('merchant_code', 'udev-central')
-                    ->where('payment_method', $paymentMethod)
-                    ->first();
+                    ->where('payment_method', $paymentMethod);
+
+                if ($hasEnvColumn) {
+                    $fallbackQuery->where('environment', $env);
+                }
+
+                $rule = $fallbackQuery->first();
             }
         }
 
@@ -187,10 +200,12 @@ class DanaFeeService
         Invoice $invoice,
         string $paymentMethod,
         ?string $merchantCode = null,
+        ?string $environment = null,
     ): array {
         $merchant = $merchantCode ?: 'udev-central';
+        $env = $environment ?: (string) config('services.dana_gateway.environment', 'sandbox');
         $subtotal = (float) $invoice->getRawOriginal('amount');
-        $calc = $this->calculateFee($merchant, $paymentMethod, $subtotal);
+        $calc = $this->calculateFee($merchant, $paymentMethod, $subtotal, $env);
 
         $metadata = is_array($invoice->metadata) ? $invoice->metadata : [];
         $basePrice = (float) ($metadata['normal_price'] ?? $subtotal);
@@ -204,6 +219,7 @@ class DanaFeeService
             'payment_method' => $paymentMethod,
             'payment_method_label' => $calc['payment_method_name'],
             'provider' => 'dana',
+            'environment' => $env,
             'customer_fee' => $calc['customer_fee'],
             'fee_amount' => $calc['customer_fee'], // backward compatibility
             'fee_rate' => 0.0,

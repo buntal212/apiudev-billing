@@ -130,6 +130,7 @@ Route::prefix('v1/admin')
             ->only(['index', 'store', 'update', 'destroy']);
         Route::prefix('dana-gateway-merchants')->group(function (): void {
             Route::middleware('throttle:admin-dana-gateway-read')->group(function (): void {
+                Route::get('environment', [DanaGatewayMerchantProvisioningController::class, 'getEnvironment']);
                 Route::get('/', [DanaGatewayMerchantProvisioningController::class, 'index']);
                 Route::get('{merchantId}/dana-configuration', [DanaGatewayMerchantProvisioningController::class, 'storedDanaConfiguration'])->whereNumber('merchantId');
                 Route::get('{merchantId}/sandbox-tester/validation', [DanaGatewayMerchantProvisioningController::class, 'validateDanaSandboxTester'])->whereNumber('merchantId');
@@ -173,8 +174,12 @@ Route::prefix('v1/admin')
                 Route::get('{merchantId}/sandbox-tester/transactions/{paymentId}/result', [DanaGatewayMerchantProvisioningController::class, 'sandboxPaymentResultFromHistory'])->whereNumber('merchantId')->whereUlid('paymentId');
             });
             Route::middleware('throttle:admin-dana-gateway-write')->group(function (): void {
+                Route::post('environment/activate-production', [DanaGatewayMerchantProvisioningController::class, 'activateProduction']);
+                Route::post('environment/switch-sandbox', [DanaGatewayMerchantProvisioningController::class, 'switchSandbox']);
                 Route::post('/', [DanaGatewayMerchantProvisioningController::class, 'store']);
                 Route::put('{merchantId}/dana-configuration', [DanaGatewayMerchantProvisioningController::class, 'configureDanaSandbox'])->whereNumber('merchantId');
+                Route::patch('{merchantId}/status', [DanaGatewayMerchantProvisioningController::class, 'toggleMerchantStatus'])->whereNumber('merchantId');
+                Route::delete('{merchantId}', [DanaGatewayMerchantProvisioningController::class, 'destroyMerchant'])->whereNumber('merchantId');
                 Route::post('{merchantId}/sandbox-tester/transactions', [DanaGatewayMerchantProvisioningController::class, 'createDanaSandboxTestTransaction'])->whereNumber('merchantId');
                 Route::post('{merchantId}/sandbox-tester/transactions/{paymentId}/cancel', [DanaGatewayMerchantProvisioningController::class, 'cancelDanaSandboxTestTransaction'])->whereNumber('merchantId')->whereUlid('paymentId');
                 Route::post('{merchantId}/api-keys/issue', [DanaGatewayMerchantProvisioningController::class, 'issueApiKey'])->whereNumber('merchantId');

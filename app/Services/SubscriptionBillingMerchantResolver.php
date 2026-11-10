@@ -20,24 +20,30 @@ class SubscriptionBillingMerchantResolver
 
     public function resolveNewCheckoutMerchant(string $environment): string
     {
-        if ($environment !== 'sandbox') {
+        if (! in_array($environment, ['sandbox', 'production'], true)) {
             throw ValidationException::withMessages([
-                'invoice' => ['Checkout langganan DANA hanya tersedia pada Sandbox.'],
+                'invoice' => ['Environment DANA tidak didukung.'],
             ]);
         }
 
-        $merchantCode = config('services.udev_billing.subscription_dana_sandbox_merchant_code');
+        $configKey = $environment === 'production'
+            ? 'services.udev_billing.subscription_dana_production_merchant_code'
+            : 'services.udev_billing.subscription_dana_sandbox_merchant_code';
+
+        $merchantCode = config($configKey) ?: config('services.udev_billing.subscription_dana_sandbox_merchant_code');
         if (! is_string($merchantCode) || trim($merchantCode) === '') {
+            $envLabel = ucfirst($environment);
             throw ValidationException::withMessages([
-                'invoice' => ['Merchant penerima UDEV Sandbox belum dikonfigurasi. Checkout baru dihentikan.'],
+                'invoice' => ["Merchant penerima UDEV {$envLabel} belum dikonfigurasi. Checkout baru dihentikan."],
             ]);
         }
 
         try {
             $this->merchantCatalog->ensureUsable($merchantCode, $environment);
         } catch (ValidationException) {
+            $envLabel = ucfirst($environment);
             throw ValidationException::withMessages([
-                'invoice' => ['Merchant penerima UDEV Sandbox belum siap digunakan. Checkout baru dihentikan.'],
+                'invoice' => ["Merchant penerima UDEV {$envLabel} belum siap digunakan. Checkout baru dihentikan."],
             ]);
         }
 
