@@ -1658,7 +1658,7 @@ class DanaSandboxTesterApiTest extends TestCase
                         'response_code' => '4045701',
                         'response_message' => 'Transaction Not Found',
                         'mock_code' => '4045701',
-                        'outbound_original_partner_reference_no' => '4045701',
+                        'outbound_original_partner_reference_no' => '12345678',
                         'original_partner_reference_no' => 'ORDER-REAL-001',
                     ],
                 ],
@@ -2034,6 +2034,61 @@ class DanaSandboxTesterApiTest extends TestCase
             'safe_details->mock_code' => '4015700',
             'safe_details->response_code' => '4015700',
             'safe_details->http_status' => 401,
+        ]);
+
+        $this->assertDatabaseCount('invoices', 0);
+        $this->assertDatabaseCount('settlement_events', 0);
+    }
+
+    public function test_cancel_dana_sandbox_test_transaction_timeout_5005701_records_audit_and_leaves_invoices_untouched(): void
+    {
+        $merchant = $this->sandboxProvisionedMerchant();
+        $paymentId = '01K7A2M3N4P5Q6R7S8T9V0W1E6';
+        Http::fake([
+            "https://dana-gateway.test/api/v1/internal/merchants/{$merchant->gateway_merchant_id}/sandbox-tester/transactions/{$paymentId}/cancel" => Http::response([
+                'data' => [
+                    'merchant_code' => $merchant->merchant_code,
+                    'environment' => 'sandbox',
+                    'payment_id' => $paymentId,
+                    'cancel_result' => [
+                        'http_status' => 500,
+                        'response_code' => '5005701',
+                        'response_message' => 'Internal Server Error',
+                        'request_id' => 'dana-cancel-5005701-audit-001',
+                        'is_mock' => true,
+                        'mock_code' => '5005701',
+                        'original_partner_reference_no' => 'ORDER-REAL-007',
+                        'outbound_original_partner_reference_no' => '5005701',
+                    ],
+                ],
+            ], 200),
+        ]);
+
+        $this->actingAdmin();
+
+        $this->postJson("/api/v1/admin/dana-gateway-merchants/{$merchant->gateway_merchant_id}/sandbox-tester/transactions/{$paymentId}/cancel", [
+            'reason' => 'UAT Cancel Timeout (5005701)',
+            'mock_code' => '5005701',
+        ])
+            ->assertOk()
+            ->assertJsonPath('data.payment_id', $paymentId)
+            ->assertJsonPath('data.cancel_result.response_code', '5005701')
+            ->assertJsonPath('data.cancel_result.mock_code', '5005701');
+
+        Http::assertSent(function (Request $request) use ($merchant, $paymentId): bool {
+            return $request->url() === "https://dana-gateway.test/api/v1/internal/merchants/{$merchant->gateway_merchant_id}/sandbox-tester/transactions/{$paymentId}/cancel"
+                && ($request['mock_code'] ?? null) === '5005701'
+                && ($request['reason'] ?? null) === 'UAT Cancel Timeout (5005701)';
+        });
+
+        $this->assertDatabaseHas('dana_merchant_provisioning_audits', [
+            'gateway_merchant_id' => $merchant->gateway_merchant_id,
+            'operation' => 'dana_sandbox_tester.transaction_cancelled',
+            'status' => 'failed',
+            'safe_details->payment_id' => $paymentId,
+            'safe_details->mock_code' => '5005701',
+            'safe_details->response_code' => '5005701',
+            'safe_details->http_status' => 500,
         ]);
 
         $this->assertDatabaseCount('invoices', 0);
