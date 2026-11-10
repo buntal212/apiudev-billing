@@ -336,6 +336,130 @@ class DanaMultiMerchantDualEnvironmentTest extends TestCase
             ->assertJsonPath('data.active_environment', 'sandbox');
     }
 
+    public function test_gateway_network_failure_during_status_toggle_returns_error_and_does_not_claim_success(): void
+    {
+        Http::fake([
+            '*/api/v1/internal/merchants/2/status' => Http::response(['message' => 'Internal Server Error'], 500),
+            '*/api/v1/internal/merchants/2' => Http::response([
+                'data' => $this->mockMerchantPayload('larissama', 2, 'active'),
+            ]),
+        ]);
+
+        $this->actingAdmin()
+            ->patchJson('/api/v1/admin/dana-gateway-merchants/2/status', ['is_active' => false])
+            ->assertStatus(503)
+            ->assertJsonPath('message', 'Gateway provisioning merchant sedang mengalami gangguan.');
+
+        // Pastikan tidak ada audit succeeded untuk tindakan ini
+        $succeededAudit = DanaMerchantProvisioningAudit::query()
+            ->where('gateway_merchant_id', 2)
+            ->where('operation', 'dana_merchant.deactivated')
+            ->where('status', 'succeeded')
+            ->first();
+        $this->assertNull($succeededAudit);
+
+        // Pastikan audit tercatat dengan status failed
+        $failedAudit = DanaMerchantProvisioningAudit::query()
+            ->where('gateway_merchant_id', 2)
+            ->where('operation', 'dana_merchant.deactivated')
+            ->where('status', 'failed')
+            ->first();
+        $this->assertNotNull($failedAudit);
+    }
+
+    public function test_gateway_network_failure_during_delete_returns_error_and_does_not_claim_success(): void
+    {
+        Http::fake([
+            '*/api/v1/internal/merchants/2' => function (HttpRequest $request) {
+                if ($request->method() === 'DELETE') {
+                    return Http::response(['message' => 'Gateway timeout'], 504);
+                }
+
+                return Http::response([
+                    'data' => $this->mockMerchantPayload('larissama', 2, 'suspended'),
+                ]);
+            },
+        ]);
+
+        $this->actingAdmin()
+            ->deleteJson('/api/v1/admin/dana-gateway-merchants/2')
+            ->assertStatus(503)
+            ->assertJsonPath('message', 'Gateway provisioning merchant sedang mengalami gangguan.');
+
+        $succeededAudit = DanaMerchantProvisioningAudit::query()
+            ->where('gateway_merchant_id', 2)
+            ->where('operation', 'dana_merchant.deleted')
+            ->where('status', 'succeeded')
+            ->first();
+        $this->assertNull($succeededAudit);
+
+        $failedAudit = DanaMerchantProvisioningAudit::query()
+            ->where('gateway_merchant_id', 2)
+            ->where('operation', 'dana_merchant.deleted')
+            ->where('status', 'failed')
+            ->first();
+        $this->assertNotNull($failedAudit);
+    }
+
+    public function test_gateway_successful_status_toggle_and_deletion_updates_audit_consistently(): void
+    {
+        Http::fake([
+            '*/api/v1/internal/merchants/2/status' => Http::response([
+                'data' => $this->mockMerchantPayload('larissama', 2, 'suspended'),
+            ], 200),
+            '*/api/v1/internal/merchants/2' => function (HttpRequest $request) {
+                if ($request->method() === 'DELETE') {
+                    return Http::response(['status' => 'success', 'message' => 'Merchant berhasil dihapus.'], 200);
+                }
+
+                return Http::response([
+                    'data' => $this->mockMerchantPayload('larissama', 2, 'suspended'),
+                ]);
+            },
+        ]);
+
+        // 1. Sukses toggle status ke nonaktif
+        $this->actingAdmin()
+            ->patchJson('/api/v1/admin/dana-gateway-merchants/2/status', ['is_active' => false])
+            ->assertOk()
+            ->assertJsonPath('status', 'success');
+
+        $statusAudit = DanaMerchantProvisioningAudit::query()
+            ->where('gateway_merchant_id', 2)
+            ->where('operation', 'dana_merchant.deactivated')
+            ->where('status', 'succeeded')
+            ->first();
+        $this->assertNotNull($statusAudit);
+
+        // 2. Sukses hapus merchant
+        $this->actingAdmin()
+            ->deleteJson('/api/v1/admin/dana-gateway-merchants/2')
+            ->assertOk()
+            ->assertJsonPath('status', 'success');
+
+        $deleteAudit = DanaMerchantProvisioningAudit::query()
+            ->where('gateway_merchant_id', 2)
+            ->where('operation', 'dana_merchant.deleted')
+            ->where('status', 'succeeded')
+            ->first();
+        $this->assertNotNull($deleteAudit);
+    }
+
+    private function mockMerchantPayload(string $code = 'larissama', int $id = 2, string $status = 'active'): array
+    {
+        return [
+            'merchant_id' => $id,
+            'merchant_code' => $code,
+            'merchant_name' => ucfirst($code),
+            'environment' => 'sandbox',
+            'merchant_status' => $status,
+            'provisioning_status' => 'provisioned',
+            'credential_status' => 'configured',
+            'dana_configuration_status' => 'available',
+            'provisioned_at' => now()->toIso8601String(),
+        ];
+    }
+
     private function actingAdmin(): self
     {
         $admin = User::factory()->create(['is_admin' => true]);

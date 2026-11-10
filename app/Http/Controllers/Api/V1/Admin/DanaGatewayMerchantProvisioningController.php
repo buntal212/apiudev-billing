@@ -1154,24 +1154,41 @@ class DanaGatewayMerchantProvisioningController extends Controller
         }
 
         $newStatus = $newActive ? 'active' : 'suspended';
-        try {
-            $client->updateStatus($merchantId, $newStatus);
-        } catch (\Throwable) {
-            // Local fallback
-        }
-
         $audit = DanaMerchantProvisioningAudit::query()
             ->where('gateway_merchant_id', $merchantId)
             ->latest('id')
             ->first();
 
-        if ($audit !== null) {
-            $this->recordManagementAudit($request, $audit, $newActive ? 'dana_merchant.activated' : 'dana_merchant.deactivated', 'succeeded', 200, false, [
+        try {
+            $client->updateStatus($merchantId, $newStatus);
+        } catch (DanaMerchantProvisioningException $exception) {
+            $this->recordManagementAudit($request, $audit, $newActive ? 'dana_merchant.activated' : 'dana_merchant.deactivated', 'failed', $exception->gatewayStatus, $exception->retryable, [
                 'merchant_code' => $merchantCode,
                 'environment' => $environment,
                 'is_active' => $newActive,
-            ]);
+                'error' => $exception->getMessage(),
+            ], fallbackMerchantId: $merchantId, fallbackMerchantCode: $merchantCode);
+
+            return $this->gatewayError($exception);
+        } catch (\Throwable $exception) {
+            $this->recordManagementAudit($request, $audit, $newActive ? 'dana_merchant.activated' : 'dana_merchant.deactivated', 'failed', 502, true, [
+                'merchant_code' => $merchantCode,
+                'environment' => $environment,
+                'is_active' => $newActive,
+                'error' => $exception->getMessage(),
+            ], fallbackMerchantId: $merchantId, fallbackMerchantCode: $merchantCode);
+
+            return response()->json([
+                'status' => 'error',
+                'message' => 'Gagal menyinkronkan status merchant ke gateway: '.$exception->getMessage(),
+            ], Response::HTTP_BAD_GATEWAY);
         }
+
+        $this->recordManagementAudit($request, $audit, $newActive ? 'dana_merchant.activated' : 'dana_merchant.deactivated', 'succeeded', 200, false, [
+            'merchant_code' => $merchantCode,
+            'environment' => $environment,
+            'is_active' => $newActive,
+        ], fallbackMerchantId: $merchantId, fallbackMerchantCode: $merchantCode);
 
         return response()->json([
             'status' => 'success',
@@ -1242,23 +1259,38 @@ class DanaGatewayMerchantProvisioningController extends Controller
             ], Response::HTTP_UNPROCESSABLE_ENTITY);
         }
 
-        try {
-            $client->delete($merchantId);
-        } catch (\Throwable) {
-            // Local fallback
-        }
-
         $audit = DanaMerchantProvisioningAudit::query()
             ->where('gateway_merchant_id', $merchantId)
             ->latest('id')
             ->first();
 
-        if ($audit !== null) {
-            $this->recordManagementAudit($request, $audit, 'dana_merchant.deleted', 'succeeded', 200, false, [
+        try {
+            $client->delete($merchantId);
+        } catch (DanaMerchantProvisioningException $exception) {
+            $this->recordManagementAudit($request, $audit, 'dana_merchant.deleted', 'failed', $exception->gatewayStatus, $exception->retryable, [
                 'merchant_code' => $merchantCode,
                 'environment' => $environment,
-            ]);
+                'error' => $exception->getMessage(),
+            ], fallbackMerchantId: $merchantId, fallbackMerchantCode: $merchantCode);
+
+            return $this->gatewayError($exception);
+        } catch (\Throwable $exception) {
+            $this->recordManagementAudit($request, $audit, 'dana_merchant.deleted', 'failed', 502, true, [
+                'merchant_code' => $merchantCode,
+                'environment' => $environment,
+                'error' => $exception->getMessage(),
+            ], fallbackMerchantId: $merchantId, fallbackMerchantCode: $merchantCode);
+
+            return response()->json([
+                'status' => 'error',
+                'message' => 'Gagal menghapus merchant dari gateway: '.$exception->getMessage(),
+            ], Response::HTTP_BAD_GATEWAY);
         }
+
+        $this->recordManagementAudit($request, $audit, 'dana_merchant.deleted', 'succeeded', 200, false, [
+            'merchant_code' => $merchantCode,
+            'environment' => $environment,
+        ], fallbackMerchantId: $merchantId, fallbackMerchantCode: $merchantCode);
 
         return response()->json([
             'status' => 'success',
@@ -1497,21 +1529,26 @@ class DanaGatewayMerchantProvisioningController extends Controller
      */
     private function recordManagementAudit(
         Request $request,
-        DanaMerchantProvisioningAudit $merchant,
+        ?DanaMerchantProvisioningAudit $merchant,
         string $operation,
         string $status,
         ?int $gatewayStatus,
         bool $retryable,
         array $safeDetails,
         ?string $idempotencyKey = null,
+        ?int $fallbackMerchantId = null,
+        ?string $fallbackMerchantCode = null,
     ): void {
+        $merchantId = $merchant?->gateway_merchant_id ?? $fallbackMerchantId;
+        $merchantCode = $merchant?->merchant_code ?? $fallbackMerchantCode ?? 'unknown';
+
         DanaMerchantProvisioningAudit::query()->create([
             'admin_user_id' => (int) $request->user()->getAuthIdentifier(),
             'operation' => $operation,
-            'merchant_code' => $merchant->merchant_code,
-            'gateway_merchant_id' => $merchant->gateway_merchant_id,
+            'merchant_code' => $merchantCode,
+            'gateway_merchant_id' => $merchantId,
             'environment' => 'sandbox',
-            'idempotency_fingerprint' => hash('sha256', $idempotencyKey ?? "{$operation}:{$merchant->gateway_merchant_id}"),
+            'idempotency_fingerprint' => hash('sha256', $idempotencyKey ?? "{$operation}:{$merchantId}"),
             'status' => $status,
             'gateway_status' => $gatewayStatus,
             'safe_details' => $safeDetails,

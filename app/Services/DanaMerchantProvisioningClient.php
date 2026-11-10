@@ -107,8 +107,11 @@ class DanaMerchantProvisioningClient
     public function delete(int $merchantId): bool
     {
         $response = $this->send(fn (PendingRequest $request): Response => $request->delete("/api/v1/internal/merchants/{$merchantId}"));
+        if (! $response->successful()) {
+            throw $this->exceptionFor($response);
+        }
 
-        return $response->successful();
+        return true;
     }
 
     /**
