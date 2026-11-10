@@ -305,7 +305,7 @@ class DanaMerchantProvisioningClient
     }
 
     /** @return array<string, mixed> */
-    public function cancelDanaSandboxTestTransaction(int $merchantId, string $paymentId, ?string $reason = null, ?string $partnerReferenceNo = null): array
+    public function cancelDanaSandboxTestTransaction(int $merchantId, string $paymentId, ?string $reason = null, ?string $partnerReferenceNo = null, ?string $mockCode = null): array
     {
         $payload = [];
         if (is_string($reason) && $reason !== '') {
@@ -313,6 +313,9 @@ class DanaMerchantProvisioningClient
         }
         if (is_string($partnerReferenceNo) && $partnerReferenceNo !== '') {
             $payload['partner_reference_no'] = $partnerReferenceNo;
+        }
+        if (is_string($mockCode) && $mockCode !== '') {
+            $payload['mock_code'] = $mockCode;
         }
 
         $response = $this->send(fn (PendingRequest $request): Response => $request
@@ -1380,7 +1383,7 @@ class DanaMerchantProvisioningClient
             'merchant_code' => $result['merchant_code'],
             'environment' => 'sandbox',
             'transaction' => [
-                ...collect($transaction)->only(['id', 'merchant_order_id', 'amount_minor', 'currency', 'status', 'checkout_url', 'checkout_available', 'created_at', 'updated_at'])->all(),
+                ...collect($transaction)->only(['id', 'merchant_order_id', 'partner_reference_no', 'reference_no', 'amount_minor', 'currency', 'status', 'checkout_url', 'checkout_available', 'created_at', 'updated_at'])->all(),
                 'expires_at' => $expiresAt,
                 'payment_instruction' => $paymentInstruction,
             ],
