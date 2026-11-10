@@ -1959,7 +1959,7 @@ class MidtransInvoiceCheckoutAndSettlementTest extends TestCase
                 'transaction_status' => 'pending',
                 'payment_code' => '1029384756',
                 'store' => 'indomaret',
-                'expiry_time' => '2026-11-09 23:59:59',
+                'expiry_time' => now()->addDays(2)->format('Y-m-d H:i:s'),
             ], 201),
         ]);
 

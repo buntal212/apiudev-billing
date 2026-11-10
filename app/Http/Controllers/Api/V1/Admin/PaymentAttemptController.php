@@ -5,14 +5,20 @@ namespace App\Http\Controllers\Api\V1\Admin;
 use App\Http\Controllers\Controller;
 use App\Http\Requests\ListPaymentAttemptsRequest;
 use App\Http\Resources\PaymentAttemptResource;
+use App\Models\CheckoutOutboxMessage;
 use App\Models\MidtransMerchantCredential;
 use App\Models\PaymentAttempt;
 use App\Services\CheckoutService;
+use App\Services\DanaGatewayClient;
+use App\Services\DanaGatewayMerchantResolver;
 use App\Services\MidtransSecretStore;
+use App\Services\PaymentAttemptService;
 use App\Services\PaymentReconciliationService;
 use Illuminate\Database\Eloquent\Builder;
+use Illuminate\Http\Request;
 use Illuminate\Http\Resources\Json\AnonymousResourceCollection;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Log;
 use Symfony\Component\HttpFoundation\Response;
 
 class PaymentAttemptController extends Controller
@@ -96,6 +102,77 @@ class PaymentAttemptController extends Controller
         $attempt = $checkoutService->retryCheckout($paymentAttempt);
 
         return new PaymentAttemptResource($attempt->load([
+            'invoice.subscription',
+            'checkoutOutbox',
+            'latestReconciliationRun',
+            'paymentAllocation',
+            'settlementEvents',
+        ]));
+    }
+
+    public function cancel(
+        Request $request,
+        PaymentAttempt $paymentAttempt,
+        DanaGatewayClient $gatewayClient,
+        DanaGatewayMerchantResolver $merchantResolver,
+        PaymentAttemptService $paymentAttemptService,
+    ): PaymentAttemptResource {
+        $this->authorize('update', $paymentAttempt);
+        $this->authorize('update', $paymentAttempt->invoice);
+
+        if (! in_array($paymentAttempt->status, [PaymentAttempt::StatusInitiated, PaymentAttempt::StatusPending], true)) {
+            abort(Response::HTTP_UNPROCESSABLE_ENTITY, "Percobaan pembayaran dengan status '{$paymentAttempt->status}' tidak dapat dibatalkan.");
+        }
+
+        $reason = (string) ($request->input('reason') ?? 'Dibatalkan oleh admin melalui invoice.');
+
+        if ($paymentAttempt->provider === 'dana' && ! empty($paymentAttempt->gateway_payment_id)) {
+            try {
+                $merchant = $merchantResolver->resolve(
+                    (string) $paymentAttempt->gateway_merchant_code,
+                    (string) $paymentAttempt->gateway_environment,
+                );
+                $gatewayClient->cancelPayment($merchant, (string) $paymentAttempt->gateway_payment_id, $reason);
+            } catch (\Throwable $e) {
+                Log::warning('Gagal membatalkan transaksi DANA di gateway.', ['attempt_id' => $paymentAttempt->id, 'error' => $e->getMessage()]);
+            }
+        }
+
+        $cancelledAttempt = $paymentAttemptService->transitionStatus(
+            $paymentAttempt,
+            PaymentAttempt::StatusCancelled,
+            failureCode: 'user_cancelled',
+            failureMessage: $reason,
+        );
+
+        $outbox = CheckoutOutboxMessage::query()
+            ->where('payment_attempt_id', $paymentAttempt->id)
+            ->first();
+
+        if ($outbox !== null && $outbox->status !== CheckoutOutboxMessage::StatusCompleted) {
+            $outbox->update([
+                'status' => CheckoutOutboxMessage::StatusFailed,
+                'error_code' => 'attempt_cancelled',
+            ]);
+        }
+
+        return new PaymentAttemptResource($cancelledAttempt->fresh()->load([
+            'invoice.subscription',
+            'checkoutOutbox',
+            'latestReconciliationRun',
+            'paymentAllocation',
+            'settlementEvents',
+        ]));
+    }
+
+    public function inquiry(
+        PaymentAttempt $paymentAttempt,
+        PaymentReconciliationService $reconciliationService,
+    ): PaymentAttemptResource {
+        $this->authorize('update', $paymentAttempt);
+        $reconciliationService->reconcile($paymentAttempt, true);
+
+        return new PaymentAttemptResource($paymentAttempt->fresh()->load([
             'invoice.subscription',
             'checkoutOutbox',
             'latestReconciliationRun',

@@ -24,6 +24,8 @@ class CheckoutService
 
     private MidtransFeeService $midtransFeeService;
 
+    private DanaFeeService $danaFeeService;
+
     public function __construct(
         private DanaGatewayClient $gatewayClient,
         private DanaGatewayMerchantResolver $merchantResolver,
@@ -31,10 +33,12 @@ class CheckoutService
         ?MidtransGatewayProvisioningClient $midtransClient = null,
         ?MidtransSecretStore $midtransSecretStore = null,
         ?MidtransFeeService $midtransFeeService = null,
+        ?DanaFeeService $danaFeeService = null,
     ) {
         $this->midtransClient = $midtransClient ?? app(MidtransGatewayProvisioningClient::class);
         $this->midtransSecretStore = $midtransSecretStore ?? app(MidtransSecretStore::class);
         $this->midtransFeeService = $midtransFeeService ?? app(MidtransFeeService::class);
+        $this->danaFeeService = $danaFeeService ?? app(DanaFeeService::class);
     }
 
     public function startCheckout(
@@ -280,6 +284,13 @@ class CheckoutService
                 $recipientMerchantCode = $this->subscriptionMerchantResolver
                     ->resolveNewCheckoutMerchant($environment);
 
+                $feeSnapshot = $this->danaFeeService->buildFeeSnapshot(
+                    invoice: $lockedInvoice,
+                    paymentMethod: $paymentMethod,
+                    merchantCode: $recipientMerchantCode,
+                );
+                $attemptAmount = $feeSnapshot['total_amount'];
+
                 $attempt = PaymentAttempt::query()->create([
                     'invoice_id' => $lockedInvoice->getKey(),
                     'attempt_number' => $attemptNumber,
@@ -287,7 +298,7 @@ class CheckoutService
                     'merchant_reference' => $merchantReference,
                     'gateway_merchant_code' => $recipientMerchantCode,
                     'gateway_environment' => $environment,
-                    'amount' => $lockedInvoice->amount,
+                    'amount' => $attemptAmount,
                     'currency' => $lockedInvoice->currency,
                     'status' => PaymentAttempt::StatusInitiated,
                     'idempotency_key' => $fullIdempotencyKey,
@@ -297,6 +308,7 @@ class CheckoutService
                         'application_customer_id' => $lockedInvoice->application_customer_id,
                         'subscription_id' => $lockedInvoice->subscription_id,
                         'payment_method' => $paymentMethod,
+                        'fee_breakdown' => $feeSnapshot,
                         SubscriptionBillingMerchantResolver::RecipientMetadataKey => SubscriptionBillingMerchantResolver::CentralRecipient,
                     ],
                 ]);
@@ -551,7 +563,7 @@ class CheckoutService
             return strtolower($provider);
         }
 
-        if (in_array($paymentMethod, ['gopay', 'bank_transfer', 'va_bca', 'va_bni', 'va_bri', 'va_permata', 'va_mandiri', 'echannel', 'indomaret', 'cstore'], true)) {
+        if (in_array($paymentMethod, ['gopay', 'bank_transfer', 'va_bca', 'va_bni', 'va_permata', 'va_mandiri', 'echannel', 'indomaret', 'cstore'], true)) {
             return 'midtrans';
         }
 
@@ -570,10 +582,6 @@ class CheckoutService
                 ->where('is_active', true)
                 ->first();
 
-            if ($midtransMapping !== null) {
-                return 'midtrans';
-            }
-
             $danaMapping = ApplicationPaymentGateway::query()
                 ->where('application_id', $appId)
                 ->where('provider', 'dana')
@@ -587,6 +595,28 @@ class CheckoutService
                     ->where('provider', 'dana')
                     ->where('is_active', true)
                     ->first();
+            }
+
+            if ($paymentMethod === 'va_bri') {
+                if ($danaMapping !== null && $midtransMapping === null) {
+                    return 'dana';
+                }
+                if ($midtransMapping !== null) {
+                    return 'midtrans';
+                }
+            }
+
+            if ($paymentMethod === 'qris') {
+                if ($danaMapping !== null && $midtransMapping === null) {
+                    return 'dana';
+                }
+                if ($midtransMapping !== null) {
+                    return 'midtrans';
+                }
+            }
+
+            if ($midtransMapping !== null) {
+                return 'midtrans';
             }
 
             if ($danaMapping !== null) {

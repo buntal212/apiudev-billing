@@ -9,6 +9,7 @@ use App\Http\Controllers\Api\V1\Admin\ApplicationIntegrationTestController;
 use App\Http\Controllers\Api\V1\Admin\ApplicationIntegrationTokenController;
 use App\Http\Controllers\Api\V1\Admin\ApplicationPaymentGatewayController;
 use App\Http\Controllers\Api\V1\Admin\BillingGatewayTransactionController;
+use App\Http\Controllers\Api\V1\Admin\DanaFeeController;
 use App\Http\Controllers\Api\V1\Admin\DanaGatewayMerchantProvisioningController;
 use App\Http\Controllers\Api\V1\Admin\DokuGatewayAdminController;
 use App\Http\Controllers\Api\V1\Admin\InvoiceCheckoutController;
@@ -21,6 +22,7 @@ use App\Http\Controllers\Api\V1\Admin\ReferralCommissionController;
 use App\Http\Controllers\Api\V1\Admin\SubscriptionController;
 use App\Http\Controllers\Api\V1\Admin\SubscriptionPlanController;
 use App\Http\Controllers\Api\V1\Auth\AuthController;
+use App\Http\Controllers\Api\V1\DanaWebhookController;
 use App\Http\Controllers\Api\V1\Integration\IntegrationBillingController;
 use App\Http\Controllers\Api\V1\Integration\IntegrationCustomerController;
 use App\Http\Controllers\Api\V1\Integration\IntegrationReferralController;
@@ -37,6 +39,11 @@ Route::post('v1/payment-gateways/midtrans/webhook', MidtransWebhookController::c
     ->name('payment-gateways.midtrans.webhook');
 Route::post('v1/webhooks/midtrans', MidtransWebhookController::class)
     ->name('webhooks.midtrans');
+
+Route::post('v1/payment-gateways/dana/webhook', DanaWebhookController::class)
+    ->name('payment-gateways.dana.webhook');
+Route::post('v1/webhooks/dana', DanaWebhookController::class)
+    ->name('webhooks.dana');
 
 Route::prefix('v1/auth')->group(function (): void {
     Route::post('login', [AuthController::class, 'login'])->middleware('throttle:admin-login');
@@ -225,9 +232,13 @@ Route::prefix('v1/admin')
             ->only(['index', 'store', 'show', 'update', 'destroy']);
         Route::apiResource('subscriptions', SubscriptionController::class)
             ->only(['index', 'show']);
+        Route::get('payment-gateways/dana/fee', [DanaFeeController::class, 'preview']);
+        Route::get('payment-gateways/dana/fees', [DanaFeeController::class, 'index']);
         Route::apiResource('invoices', InvoiceController::class)
             ->only(['index', 'store', 'show']);
         Route::post('invoices/{invoice}/reconcile', [InvoiceController::class, 'reconcile'])
+            ->middleware('throttle:admin-dana-gateway-write');
+        Route::post('invoices/{invoice}/cancel-checkout', [InvoiceController::class, 'cancelCheckout'])
             ->middleware('throttle:admin-dana-gateway-write');
         Route::post('invoices/{invoice}/sandbox-simulate-payment', [InvoiceController::class, 'sandboxSimulatePayment'])
             ->middleware('throttle:admin-dana-gateway-write');
@@ -240,6 +251,10 @@ Route::prefix('v1/admin')
             ->name('admin.payment-attempts.qr-image');
         Route::post('payment-attempts/{paymentAttempt}/checkout/retry', [PaymentAttemptController::class, 'retryCheckout'])
             ->middleware('throttle:admin-dana-gateway-write');
+        Route::post('payment-attempts/{paymentAttempt}/cancel', [PaymentAttemptController::class, 'cancel'])
+            ->middleware('throttle:admin-dana-gateway-write');
+        Route::post('payment-attempts/{paymentAttempt}/inquiry', [PaymentAttemptController::class, 'inquiry'])
+            ->middleware('throttle:admin-payment-reconciliation');
         Route::post('payment-attempts/{paymentAttempt}/reconcile', [PaymentAttemptController::class, 'reconcile'])
             ->middleware('throttle:admin-payment-reconciliation');
     });

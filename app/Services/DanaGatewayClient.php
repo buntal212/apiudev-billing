@@ -64,6 +64,34 @@ class DanaGatewayClient
         return $payment;
     }
 
+    /** @return array<string, mixed> */
+    public function cancelPayment(DanaGatewayMerchant $merchant, string $paymentId, ?string $reason = null): array
+    {
+        $response = $this->request($merchant)->post("/api/v1/payments/{$paymentId}/cancel", [
+            'reason' => $reason,
+        ]);
+        $body = $this->decodeSuccessfulResponse($response);
+
+        if (! is_array($body)) {
+            throw new DanaGatewayException('Respons pembatalan pembayaran gateway tidak valid.', false);
+        }
+
+        return $body;
+    }
+
+    /** @return array<string, mixed> */
+    public function queryPaymentStatus(DanaGatewayMerchant $merchant, string $paymentId): array
+    {
+        $response = $this->request($merchant)->get("/api/v1/payments/{$paymentId}/inquiry");
+        $body = $this->decodeSuccessfulResponse($response);
+
+        if (! is_array($body)) {
+            throw new DanaGatewayException('Respons query pembayaran gateway tidak valid.', false);
+        }
+
+        return $body;
+    }
+
     private function request(DanaGatewayMerchant $merchant): PendingRequest
     {
         return Http::acceptJson()

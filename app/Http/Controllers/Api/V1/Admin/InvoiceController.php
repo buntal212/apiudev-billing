@@ -6,9 +6,12 @@ use App\Http\Controllers\Controller;
 use App\Http\Requests\ListInvoicesRequest;
 use App\Http\Requests\StoreInvoiceRequest;
 use App\Http\Resources\InvoiceResource;
+use App\Models\CheckoutOutboxMessage;
 use App\Models\Invoice;
 use App\Models\PaymentAttempt;
 use App\Services\CheckoutService;
+use App\Services\DanaGatewayClient;
+use App\Services\DanaGatewayMerchantResolver;
 use App\Services\InvoiceService;
 use App\Services\InvoiceSettlementService;
 use App\Services\PaymentAttemptService;
@@ -18,6 +21,7 @@ use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Http\Resources\Json\AnonymousResourceCollection;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
 use Illuminate\Validation\ValidationException;
 use Symfony\Component\HttpFoundation\Response;
@@ -134,6 +138,62 @@ class InvoiceController extends Controller
         }
 
         $reconciliationService->reconcile($attempt, true);
+
+        return $this->show($invoice->fresh());
+    }
+
+    public function cancelCheckout(
+        Request $request,
+        Invoice $invoice,
+        DanaGatewayClient $gatewayClient,
+        DanaGatewayMerchantResolver $merchantResolver,
+        PaymentAttemptService $paymentAttemptService,
+    ): InvoiceResource {
+        $this->authorize('update', $invoice);
+
+        $attempt = $invoice->paymentAttempts()
+            ->latest('attempt_number')
+            ->first();
+
+        if ($attempt === null) {
+            abort(Response::HTTP_UNPROCESSABLE_ENTITY, 'Invoice belum memiliki percobaan pembayaran untuk dibatalkan.');
+        }
+
+        if (! in_array($attempt->status, [PaymentAttempt::StatusInitiated, PaymentAttempt::StatusPending], true)) {
+            abort(Response::HTTP_UNPROCESSABLE_ENTITY, "Percobaan pembayaran dengan status '{$attempt->status}' tidak dapat dibatalkan.");
+        }
+
+        $reason = (string) ($request->input('reason') ?? 'Dibatalkan oleh admin melalui invoice.');
+
+        if ($attempt->provider === 'dana' && ! empty($attempt->gateway_payment_id)) {
+            try {
+                $merchant = $merchantResolver->resolve(
+                    (string) $attempt->gateway_merchant_code,
+                    (string) $attempt->gateway_environment,
+                );
+                $gatewayClient->cancelPayment($merchant, (string) $attempt->gateway_payment_id, $reason);
+            } catch (\Throwable $e) {
+                Log::warning('Gagal membatalkan transaksi DANA di gateway.', ['attempt_id' => $attempt->id, 'error' => $e->getMessage()]);
+            }
+        }
+
+        $paymentAttemptService->transitionStatus(
+            $attempt,
+            PaymentAttempt::StatusCancelled,
+            failureCode: 'user_cancelled',
+            failureMessage: $reason,
+        );
+
+        $outbox = CheckoutOutboxMessage::query()
+            ->where('payment_attempt_id', $attempt->id)
+            ->first();
+
+        if ($outbox !== null && $outbox->status !== CheckoutOutboxMessage::StatusCompleted) {
+            $outbox->update([
+                'status' => CheckoutOutboxMessage::StatusFailed,
+                'error_code' => 'attempt_cancelled',
+            ]);
+        }
 
         return $this->show($invoice->fresh());
     }
