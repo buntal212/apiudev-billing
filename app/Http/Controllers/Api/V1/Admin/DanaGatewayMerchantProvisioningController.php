@@ -22,6 +22,7 @@ use App\Models\PaymentAttempt;
 use App\Models\User;
 use App\Services\DanaEnvironmentService;
 use App\Services\DanaMerchantApiKeyIssuanceService;
+use App\Services\DanaMerchantApiKeySecretStore;
 use App\Services\DanaMerchantProvisioningClient;
 use App\Services\DanaMerchantProvisioningException;
 use App\Services\DanaMerchantSecretStoreException;
@@ -999,6 +1000,7 @@ class DanaGatewayMerchantProvisioningController extends Controller
         int $apiKeyId,
         RevokeDanaGatewayMerchantApiKeyRequest $request,
         DanaMerchantProvisioningClient $client,
+        ?DanaMerchantApiKeySecretStore $secretStore = null,
     ): DanaGatewayMerchantApiKeyRevocationResource|JsonResponse {
         $merchant = $this->sandboxProvisionedMerchant($merchantId);
         if ($merchant === null) {
@@ -1016,6 +1018,12 @@ class DanaGatewayMerchantProvisioningController extends Controller
             ], $idempotencyKey);
 
             return $this->gatewayError($exception);
+        }
+
+        $secretStore = $secretStore ?? app(DanaMerchantApiKeySecretStore::class);
+        try {
+            $secretStore->markRevoked($merchantId, $apiKeyId);
+        } catch (\Throwable) {
         }
 
         $this->recordManagementAudit($request, $merchant, 'dana_merchant.api_key_revoked', 'succeeded', 200, false, [

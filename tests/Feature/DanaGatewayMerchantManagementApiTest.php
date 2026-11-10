@@ -454,6 +454,65 @@ class DanaGatewayMerchantManagementApiTest extends TestCase
         Http::assertNothingSent();
     }
 
+    public function test_readiness_gateway_connection_failure_returns_safe_503_and_audits_failure(): void
+    {
+        $merchant = $this->sandboxProvisionedMerchant();
+        Http::fake(fn (): never => throw new ConnectionException('connection refused to gateway with '.self::PrivateKey));
+        $this->actingAdmin();
+
+        $this->getJson($this->readinessUrl($merchant->gateway_merchant_id).'?environment=production')
+            ->assertStatus(503)
+            ->assertJsonPath('message', 'Gateway provisioning merchant tidak dapat dihubungi.')
+            ->assertDontSee(self::PrivateKey)
+            ->assertDontSee(self::ServiceToken);
+
+        $audit = DanaMerchantProvisioningAudit::query()
+            ->where('operation', 'dana_merchant.readiness_viewed')
+            ->sole();
+        $this->assertSame('failed', $audit->status);
+        $this->assertNull($audit->gateway_status);
+        $this->assertSame('production', $audit->safe_details['environment'] ?? null);
+        $this->assertTrue($audit->safe_details['retryable'] ?? false);
+    }
+
+    public function test_dual_environment_production_configuration_persists_to_same_merchant_and_audited(): void
+    {
+        $merchant = $this->sandboxProvisionedMerchant();
+        Http::fake([
+            "https://dana-gateway.test/api/v1/internal/merchants/{$merchant->gateway_merchant_id}/dana-configuration" => function (HttpRequest $request): mixed {
+                $this->assertSame('production', $request->data()['environment']);
+
+                return Http::response([
+                    'data' => [
+                        'merchant_code' => 'udev-salon',
+                        'environment' => 'production',
+                        'dana_configuration' => ['available' => true, 'enabled' => false, 'ready' => true],
+                    ],
+                ]);
+            },
+        ]);
+        $this->actingAdmin();
+
+        $payload = $this->configurationPayload([
+            'environment' => 'production',
+            'partner_id' => 'partner-prod-001',
+            'channel_id' => 'channel-prod-001',
+            'enabled' => false,
+        ]);
+
+        $this->putJson($this->configurationUrl($merchant->gateway_merchant_id), $payload)
+            ->assertOk()
+            ->assertJsonPath('data.environment', 'production')
+            ->assertJsonPath('data.dana_configuration.ready', true)
+            ->assertDontSee(self::PrivateKey);
+
+        $this->assertDatabaseHas('dana_merchant_provisioning_audits', [
+            'operation' => 'dana_merchant.dana_configuration_updated',
+            'gateway_merchant_id' => $merchant->gateway_merchant_id,
+            'status' => 'succeeded',
+        ]);
+    }
+
     /** @return array{gateway_merchant_id: int, merchant_code: string} */
     private function sandboxProvisionedMerchant(array $overrides = []): DanaMerchantProvisioningAudit
     {

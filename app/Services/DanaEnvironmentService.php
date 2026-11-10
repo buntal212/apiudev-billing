@@ -329,6 +329,9 @@ class DanaEnvironmentService
 
         $setting->primary_merchant_code = $merchantCode;
         config(['services.udev_billing.subscription_dana_sandbox_merchant_code' => $merchantCode]);
+        if ($currentEnv === DanaEnvironmentSetting::EnvironmentProduction) {
+            config(['services.udev_billing.subscription_dana_production_merchant_code' => $merchantCode]);
+        }
 
         return $setting;
     }

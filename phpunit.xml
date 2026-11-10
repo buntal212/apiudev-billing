@@ -33,5 +33,7 @@
         <env name="TELESCOPE_ENABLED" value="false"/>
         <env name="NIGHTWATCH_ENABLED" value="false"/>
         <env name="DANA_GATEWAY_MERCHANTS" value="{}"/>
+        <env name="DANA_MERCHANT_SECRET_STORE_ACTIVE_KEY_VERSION" value="v1"/>
+        <env name="DANA_MERCHANT_SECRET_STORE_KEYS" value='{"v1":"base64:AgvKd1migRF7GhtC1OMX3+fWegRebHe19GB2WBbS1xI="}'/>
     </php>
 </phpunit>

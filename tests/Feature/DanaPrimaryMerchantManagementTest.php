@@ -250,6 +250,58 @@ class DanaPrimaryMerchantManagementTest extends TestCase
         $this->assertSame('udev-central', DanaEnvironmentSetting::getPrimaryMerchantCode());
     }
 
+    public function test_set_primary_merchant_by_id_fails_when_candidate_is_unready(): void
+    {
+        // Mock merchant 3 as unready merchant
+        Http::fake([
+            '*/api/v1/internal/merchants/3' => Http::response([
+                'data' => [
+                    'merchant_id' => 3,
+                    'merchant_code' => 'UNREADY-MERCHANT',
+                    'merchant_name' => 'Unready Merchant',
+                    'environment' => 'sandbox',
+                    'merchant_status' => 'active',
+                    'provisioning_status' => 'provisioned',
+                    'credential_status' => 'configured',
+                    'dana_configuration_status' => 'available',
+                    'provisioned_at' => now()->toIso8601String(),
+                ],
+            ]),
+        ]);
+
+        $response = $this->actingAdmin()
+            ->postJson('/api/v1/admin/dana-gateway-merchants/3/set-primary');
+
+        $response->assertStatus(Response::HTTP_UNPROCESSABLE_ENTITY)
+            ->assertJsonValidationErrors('merchant_code');
+
+        // Primary merchant must remain unchanged
+        $this->assertSame('udev-central', DanaEnvironmentSetting::getPrimaryMerchantCode());
+    }
+
+    public function test_merchants_list_reflects_updated_primary_merchant_and_persists_after_reload(): void
+    {
+        $this->mockProvisioningClient();
+
+        // 1. Initial list: udev-central is primary
+        $initList = $this->actingAdmin()->getJson('/api/v1/admin/dana-gateway-merchants')->assertOk()->json('data');
+        $this->assertTrue(collect($initList)->firstWhere('merchant_code', 'udev-central')['is_primary']);
+        $this->assertFalse(collect($initList)->firstWhere('merchant_code', 'MRC-0002')['is_primary']);
+
+        // 2. Set MRC-0002 as primary via set-primary by ID
+        $this->actingAdmin()
+            ->postJson('/api/v1/admin/dana-gateway-merchants/2/set-primary')
+            ->assertOk()
+            ->assertJsonPath('status', 'success')
+            ->assertJsonPath('data.primary_merchant_code', 'MRC-0002');
+
+        // 3. Subsequent list (and simulated reload): MRC-0002 is primary, udev-central is not
+        $reloadedList = $this->actingAdmin()->getJson('/api/v1/admin/dana-gateway-merchants')->assertOk()->json('data');
+        $this->assertFalse(collect($reloadedList)->firstWhere('merchant_code', 'udev-central')['is_primary']);
+        $this->assertTrue(collect($reloadedList)->firstWhere('merchant_code', 'MRC-0002')['is_primary']);
+        $this->assertSame('MRC-0002', DanaEnvironmentSetting::getPrimaryMerchantCode());
+    }
+
     private function actingAdmin(): self
     {
         $admin = User::factory()->create(['is_admin' => true]);
@@ -261,37 +313,70 @@ class DanaPrimaryMerchantManagementTest extends TestCase
     private function mockProvisioningClient(): void
     {
         Http::fake([
-            '*/api/v1/internal/merchants/*' => function (HttpRequest $request): mixed {
+            '*/api/v1/internal/merchants*' => function (HttpRequest $request): mixed {
                 $url = $request->url();
-                preg_match('#/merchants/(\d+)#', $url, $m);
-                $id = isset($m[1]) ? (int) $m[1] : 1;
-                $code = $id === 2 ? 'MRC-0002' : 'udev-central';
+                if (preg_match('#/merchants/(\d+)#', $url, $m)) {
+                    $id = (int) $m[1];
+                    $code = $id === 2 ? 'MRC-0002' : 'udev-central';
 
-                if ($request->method() === 'PATCH') {
+                    if ($request->method() === 'PATCH') {
+                        return Http::response([
+                            'status' => 'success',
+                            'data' => [
+                                'merchant_id' => $id,
+                                'merchant_code' => $code,
+                                'merchant_name' => ucfirst($code),
+                                'environment' => 'sandbox',
+                                'is_active' => (bool) ($request['is_active'] ?? false),
+                                'merchant_status' => $request['status'] ?? 'suspended',
+                            ],
+                        ]);
+                    }
+
                     return Http::response([
-                        'status' => 'success',
                         'data' => [
                             'merchant_id' => $id,
                             'merchant_code' => $code,
                             'merchant_name' => ucfirst($code),
                             'environment' => 'sandbox',
-                            'is_active' => (bool) ($request['is_active'] ?? false),
-                            'merchant_status' => $request['status'] ?? 'suspended',
+                            'merchant_status' => 'active',
+                            'provisioning_status' => 'provisioned',
+                            'credential_status' => 'configured',
+                            'dana_configuration_status' => 'available',
+                            'provisioned_at' => now()->toIso8601String(),
                         ],
                     ]);
                 }
 
                 return Http::response([
                     'data' => [
-                        'merchant_id' => $id,
-                        'merchant_code' => $code,
-                        'merchant_name' => ucfirst($code),
-                        'environment' => 'sandbox',
-                        'merchant_status' => 'active',
-                        'provisioning_status' => 'provisioned',
-                        'credential_status' => 'configured',
-                        'dana_configuration_status' => 'available',
-                        'provisioned_at' => now()->toIso8601String(),
+                        [
+                            'merchant_id' => 1,
+                            'merchant_code' => 'udev-central',
+                            'merchant_name' => 'UDEV Central',
+                            'environment' => 'sandbox',
+                            'merchant_status' => 'active',
+                            'provisioning_status' => 'provisioned',
+                            'credential_status' => 'configured',
+                            'dana_configuration_status' => 'available',
+                            'provisioned_at' => now()->toIso8601String(),
+                        ],
+                        [
+                            'merchant_id' => 2,
+                            'merchant_code' => 'MRC-0002',
+                            'merchant_name' => 'UDEV-SANBOX-BILL',
+                            'environment' => 'sandbox',
+                            'merchant_status' => 'active',
+                            'provisioning_status' => 'provisioned',
+                            'credential_status' => 'configured',
+                            'dana_configuration_status' => 'available',
+                            'provisioned_at' => now()->toIso8601String(),
+                        ],
+                    ],
+                    'meta' => [
+                        'current_page' => 1,
+                        'per_page' => 15,
+                        'total' => 2,
                     ],
                 ]);
             },

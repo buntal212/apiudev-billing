@@ -147,19 +147,66 @@ class DanaMerchantApiKeySecretStore
                 $secret->gateway_api_key_id,
                 $secret->encryption_key_version,
                 $secret->key_version,
+                $secret->environment,
             ),
         );
     }
 
-    public function markRevoked(int $gatewayMerchantId, int $gatewayApiKeyId): void
+    public function hasActiveSecretForMerchantCode(string $merchantCode, string $environment): bool
     {
-        DB::transaction(function () use ($gatewayMerchantId, $gatewayApiKeyId): void {
-            $secret = DanaMerchantApiKeySecret::query()
+        return DanaMerchantApiKeySecret::query()
+            ->where('merchant_code', $merchantCode)
+            ->where('environment', $environment)
+            ->where('status', DanaMerchantApiKeySecret::StatusActive)
+            ->exists();
+    }
+
+    public function activeSecretForMerchantCode(string $merchantCode, string $environment): string
+    {
+        $secret = DanaMerchantApiKeySecret::query()
+            ->where('merchant_code', $merchantCode)
+            ->where('environment', $environment)
+            ->where('status', DanaMerchantApiKeySecret::StatusActive)
+            ->first();
+
+        if ($secret === null) {
+            throw new DanaMerchantSecretStoreException("Secret API key untuk merchant '{$merchantCode}' ({$environment}) belum tersedia.");
+        }
+
+        if (! is_string($secret->ciphertext)
+            || ! is_string($secret->nonce)
+            || ! is_string($secret->authentication_tag)
+            || ! is_string($secret->encryption_key_version)) {
+            throw new DanaMerchantSecretStoreException("Secret API key untuk merchant '{$merchantCode}' tidak dapat digunakan.");
+        }
+
+        return $this->decryptPayload(
+            ciphertext: $secret->ciphertext,
+            nonce: $secret->nonce,
+            authenticationTag: $secret->authentication_tag,
+            key: $this->keyForVersion($secret->encryption_key_version),
+            additionalAuthenticatedData: $this->additionalAuthenticatedData(
+                $secret->gateway_merchant_id,
+                $secret->gateway_api_key_id,
+                $secret->encryption_key_version,
+                $secret->key_version,
+                $secret->environment,
+            ),
+        );
+    }
+
+    public function markRevoked(int $gatewayMerchantId, int $gatewayApiKeyId, ?string $environment = null): void
+    {
+        DB::transaction(function () use ($gatewayMerchantId, $gatewayApiKeyId, $environment): void {
+            $query = DanaMerchantApiKeySecret::query()
                 ->where('gateway_merchant_id', $gatewayMerchantId)
-                ->where('environment', 'sandbox')
-                ->where('gateway_api_key_id', $gatewayApiKeyId)
-                ->lockForUpdate()
-                ->first();
+                ->where('gateway_api_key_id', $gatewayApiKeyId);
+
+            if ($environment !== null) {
+                $query->where('environment', $environment);
+            }
+
+            $secret = $query->lockForUpdate()->first();
 
             if ($secret === null) {
                 throw new DanaMerchantSecretStoreException('Secret API key merchant tidak ditemukan.');
