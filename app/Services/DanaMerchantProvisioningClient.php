@@ -1572,7 +1572,7 @@ class DanaMerchantProvisioningClient
 
         if (! is_array($configuration)
             || ! is_string($configuration['merchant_code'] ?? null)
-            || ($configuration['environment'] ?? null) !== 'sandbox'
+            || ! in_array($configuration['environment'] ?? null, ['sandbox', 'production'], true)
             || ! is_bool($configuration['configuration_exists'] ?? null)
             || ! is_array($status)
             || ! is_bool($status['available'] ?? null)
@@ -1587,14 +1587,14 @@ class DanaMerchantProvisioningClient
         if ($values === null) {
             return [
                 'merchant_code' => $configuration['merchant_code'],
-                'environment' => 'sandbox',
+                'environment' => (string) $configuration['environment'],
                 'configuration_exists' => false,
                 'dana_configuration' => $status,
                 'configuration' => null,
             ];
         }
 
-        $stringOrNull = ['partner_id', 'merchant_id', 'origin', 'channel_id', 'external_store_id', 'sub_merchant_id', 'notification_url', 'callback_url', 'mcc'];
+        $stringOrNull = ['partner_id', 'client_id', 'merchant_id', 'origin', 'channel_id', 'external_store_id', 'sub_merchant_id', 'notification_url', 'callback_url', 'mcc'];
         foreach ($stringOrNull as $field) {
             $value = $values[$field] ?? null;
             if ($value !== null && ! is_string($value)) {
@@ -1603,13 +1603,14 @@ class DanaMerchantProvisioningClient
         }
         if (! is_bool($values['enabled'] ?? null)
             || ! is_bool($values['private_key_configured'] ?? null)
-            || ! is_bool($values['dana_webhook_public_key_configured'] ?? null)) {
+            || ! is_bool($values['dana_webhook_public_key_configured'] ?? null)
+            || (array_key_exists('client_secret_configured', $values) && ! is_bool($values['client_secret_configured']))) {
             throw new DanaMerchantProvisioningException('Respons metadata konfigurasi DANA gateway tidak valid.', 502, false);
         }
 
         return [
             'merchant_code' => $configuration['merchant_code'],
-            'environment' => 'sandbox',
+            'environment' => (string) $configuration['environment'],
             'configuration_exists' => $configuration['configuration_exists'],
             'dana_configuration' => $status,
             'configuration' => collect($values)->only([
@@ -1617,6 +1618,7 @@ class DanaMerchantProvisioningClient
                 'enabled',
                 'private_key_configured',
                 'dana_webhook_public_key_configured',
+                'client_secret_configured',
             ])->all(),
         ];
     }

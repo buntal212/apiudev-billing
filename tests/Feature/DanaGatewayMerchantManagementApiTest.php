@@ -513,6 +513,93 @@ class DanaGatewayMerchantManagementApiTest extends TestCase
         ]);
     }
 
+    public function test_stored_production_configuration_can_be_retrieved_without_gateway_error(): void
+    {
+        $merchant = $this->sandboxProvisionedMerchant();
+        Http::fake([
+            "https://dana-gateway.test/api/v1/internal/merchants/{$merchant->gateway_merchant_id}/dana-configuration?environment=production" => Http::response([
+                'data' => [
+                    'merchant_code' => $merchant->merchant_code,
+                    'environment' => 'production',
+                    'configuration_exists' => true,
+                    'dana_configuration' => ['available' => true, 'enabled' => false, 'ready' => true],
+                    'configuration' => [
+                        'partner_id' => 'partner-prod-001',
+                        'client_id' => 'client-id-prod-001',
+                        'merchant_id' => 'merchant-prod-001',
+                        'origin' => 'https://udev.example',
+                        'channel_id' => 'prod-channel',
+                        'notification_url' => 'https://dana.example/webhook',
+                        'callback_url' => 'https://udev.example/callback',
+                        'mcc' => '7392',
+                        'enabled' => false,
+                        'private_key_configured' => true,
+                        'dana_webhook_public_key_configured' => true,
+                        'client_secret_configured' => true,
+                    ],
+                ],
+            ]),
+        ]);
+        $this->actingAdmin();
+
+        $this->getJson($this->storedConfigurationUrl($merchant->gateway_merchant_id).'?environment=production')
+            ->assertOk()
+            ->assertHeader('Cache-Control')
+            ->assertJsonPath('data.environment', 'production')
+            ->assertJsonPath('data.configuration_exists', true)
+            ->assertJsonPath('data.configuration.partner_id', 'partner-prod-001')
+            ->assertJsonPath('data.configuration.client_id', 'client-id-prod-001')
+            ->assertJsonPath('data.configuration.client_secret_configured', true)
+            ->assertJsonMissingPath('data.configuration.private_key')
+            ->assertJsonMissingPath('data.configuration.client_secret');
+    }
+
+    public function test_production_configuration_with_client_id_and_secret_persists_without_leaking_secret(): void
+    {
+        $merchant = $this->sandboxProvisionedMerchant();
+        Http::fake([
+            "https://dana-gateway.test/api/v1/internal/merchants/{$merchant->gateway_merchant_id}/dana-configuration" => function (HttpRequest $request): mixed {
+                $data = $request->data();
+                $this->assertSame('production', $data['environment']);
+                $this->assertSame('client-prod-custom', $data['client_id']);
+                $this->assertSame('secret-token-12345', $data['client_secret']);
+
+                return Http::response([
+                    'data' => [
+                        'merchant_code' => 'udev-salon',
+                        'environment' => 'production',
+                        'dana_configuration' => ['available' => true, 'enabled' => true, 'ready' => true],
+                    ],
+                ]);
+            },
+        ]);
+        $this->actingAdmin();
+
+        $payload = $this->configurationPayload([
+            'environment' => 'production',
+            'partner_id' => 'partner-prod-001',
+            'client_id' => 'client-prod-custom',
+            'client_secret' => 'secret-token-12345',
+            'channel_id' => 'channel-prod-001',
+            'enabled' => true,
+        ]);
+
+        $this->putJson($this->configurationUrl($merchant->gateway_merchant_id), $payload)
+            ->assertOk()
+            ->assertJsonPath('data.environment', 'production')
+            ->assertDontSee('secret-token-12345')
+            ->assertDontSee(self::PrivateKey);
+
+        $audit = DanaMerchantProvisioningAudit::query()
+            ->where('operation', 'dana_merchant.dana_configuration_updated')
+            ->where('gateway_merchant_id', $merchant->gateway_merchant_id)
+            ->latest('id')
+            ->firstOrFail();
+
+        $auditPayload = json_encode($audit->safe_details, JSON_THROW_ON_ERROR);
+        $this->assertStringNotContainsString('secret-token-12345', $auditPayload);
+    }
+
     /** @return array{gateway_merchant_id: int, merchant_code: string} */
     private function sandboxProvisionedMerchant(array $overrides = []): DanaMerchantProvisioningAudit
     {
