@@ -19,7 +19,7 @@ class DanaEnvironmentService
     public function getSetting(): DanaEnvironmentSetting
     {
         if (! Schema::hasTable('dana_environment_settings')) {
-            $setting = new DanaEnvironmentSetting();
+            $setting = new DanaEnvironmentSetting;
             $setting->gateway = 'dana';
             $setting->active_environment = (string) config('services.dana_gateway.environment', DanaEnvironmentSetting::EnvironmentSandbox);
             $setting->primary_merchant_code = DanaEnvironmentSetting::getPrimaryMerchantCode();
@@ -44,13 +44,13 @@ class DanaEnvironmentService
                 $attributes
             );
 
-            if (! $hasPrimaryColumn && empty($setting->primary_merchant_code)) {
+            if (empty($setting->primary_merchant_code)) {
                 $setting->primary_merchant_code = DanaEnvironmentSetting::getPrimaryMerchantCode();
             }
 
             return $setting;
         } catch (\Throwable) {
-            $setting = new DanaEnvironmentSetting();
+            $setting = new DanaEnvironmentSetting;
             $setting->gateway = 'dana';
             $setting->active_environment = (string) config('services.dana_gateway.environment', DanaEnvironmentSetting::EnvironmentSandbox);
             $setting->primary_merchant_code = DanaEnvironmentSetting::getPrimaryMerchantCode();
@@ -320,11 +320,18 @@ class DanaEnvironmentService
             'activation_notes' => $notes ?: "Merchant Utama DANA diubah menjadi {$merchantCode}",
         ];
 
-        if ($setting->exists) {
+        if (Schema::hasTable('dana_environment_settings')) {
             if (Schema::hasColumn('dana_environment_settings', 'primary_merchant_code')) {
                 $updates['primary_merchant_code'] = $merchantCode;
             }
-            $setting->update($updates);
+            if ($setting->exists) {
+                $setting->update($updates);
+            } else {
+                $updates['gateway'] = 'dana';
+                $updates['active_environment'] = $currentEnv;
+                $updates['is_production_ready'] = false;
+                $setting = DanaEnvironmentSetting::query()->create($updates);
+            }
         }
 
         $setting->primary_merchant_code = $merchantCode;
