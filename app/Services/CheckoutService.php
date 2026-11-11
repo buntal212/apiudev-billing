@@ -333,7 +333,7 @@ class CheckoutService
                     }
 
                     if ($recipientMerchantCode === null) {
-                        if ($activeDanaEnv === 'production' && $prodDanaMapping !== null && ! in_array($prodDanaMapping->gateway_merchant_code, $centralMerchantCodes, true)) {
+                        if ($activeDanaEnv === 'production') {
                             throw ValidationException::withMessages([
                                 'invoice' => ['Merchant DANA Production untuk aplikasi ini belum siap digunakan. Transaksi live tidak dapat dialihkan ke Sandbox.'],
                             ]);
@@ -360,9 +360,12 @@ class CheckoutService
                 } else {
                     $chosenEnvironment = $activeDanaEnv;
                     if ($chosenEnvironment === 'production') {
+                        $setting = $this->danaEnvironmentService->getSetting();
                         $centralProdReadiness = $this->merchantCatalog->readiness($primaryMerchantCode, 'production');
-                        if (! $centralProdReadiness['ready']) {
-                            $chosenEnvironment = 'sandbox';
+                        if (! $setting->is_production_ready || ! $centralProdReadiness['ready']) {
+                            throw ValidationException::withMessages([
+                                'invoice' => ['Merchant DANA Production pusat belum siap digunakan. Transaksi live tidak dapat dialihkan ke Sandbox.'],
+                            ]);
                         }
                     }
 
@@ -508,6 +511,7 @@ class CheckoutService
                         'invoice_number' => $attempt->invoice->invoice_number,
                         'udev_sandbox_payment_method' => $paymentMethod,
                     ],
+                    environment: $attempt->gateway_environment,
                 );
             }
 

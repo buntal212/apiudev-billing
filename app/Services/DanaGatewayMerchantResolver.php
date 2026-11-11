@@ -17,9 +17,18 @@ class DanaGatewayMerchantResolver
 
     public function resolve(string $merchantCode, string $environment): DanaGatewayMerchant
     {
-        $this->merchantCatalog->ensureUsable($merchantCode, $environment);
-
         $baseUrl = config("services.dana_gateway.base_urls.{$environment}");
+
+        if (! is_string($baseUrl) || trim($baseUrl) === '') {
+            $envVar = $environment === 'production' ? 'DANA_GATEWAY_PRODUCTION_BASE_URL' : 'DANA_GATEWAY_SANDBOX_BASE_URL';
+            throw new RuntimeException("Konfigurasi Base URL gateway DANA ({$envVar}) untuk environment '{$environment}' belum dikonfigurasi.");
+        }
+
+        if (! filter_var($baseUrl, FILTER_VALIDATE_URL) || (! str_starts_with(strtolower($baseUrl), 'https://') && ! app()->environment('testing', 'local'))) {
+            throw new RuntimeException("Base URL gateway DANA untuk environment '{$environment}' harus berupa URL HTTPS yang valid.");
+        }
+
+        $this->merchantCatalog->ensureUsable($merchantCode, $environment);
 
         // 1. Priority A: Encrypted secret store from database (AES-256-GCM)
         $apiKey = null;
@@ -37,8 +46,8 @@ class DanaGatewayMerchantResolver
                 : null;
         }
 
-        if (! is_string($baseUrl) || $baseUrl === '' || ! is_string($apiKey) || $apiKey === '') {
-            throw new RuntimeException('Konfigurasi merchant gateway DANA belum lengkap.');
+        if (! is_string($apiKey) || trim($apiKey) === '') {
+            throw new RuntimeException("API key gateway DANA untuk merchant '{$merchantCode}' ({$environment}) belum dikonfigurasi.");
         }
 
         return new DanaGatewayMerchant(

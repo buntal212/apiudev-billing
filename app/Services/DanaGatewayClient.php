@@ -44,7 +44,7 @@ class DanaGatewayClient
     }
 
     /** @return array<string, mixed> */
-    public function createPayment(DanaGatewayMerchant $merchant, string $idempotencyKey, string $merchantOrderId, int $amountMinor, array $metadata): array
+    public function createPayment(DanaGatewayMerchant $merchant, string $idempotencyKey, string $merchantOrderId, int $amountMinor, array $metadata, ?string $environment = null): array
     {
         $response = $this->request($merchant)
             ->withHeader('Idempotency-Key', $idempotencyKey)
@@ -52,6 +52,7 @@ class DanaGatewayClient
                 'merchant_order_id' => $merchantOrderId,
                 'amount_minor' => $amountMinor,
                 'currency' => 'IDR',
+                'environment' => $environment ?: $merchant->environment,
                 'metadata' => $metadata,
             ]);
         $body = $this->decodeSuccessfulResponse($response);

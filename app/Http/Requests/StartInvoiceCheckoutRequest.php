@@ -25,6 +25,8 @@ class StartInvoiceCheckoutRequest extends ApiFormRequest
             'currency' => ['prohibited'],
             'merchant' => ['prohibited'],
             'merchant_code' => ['prohibited'],
+            'environment' => ['prohibited'],
+            'gateway_environment' => ['prohibited'],
         ];
     }
 

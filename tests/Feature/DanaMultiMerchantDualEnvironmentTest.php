@@ -6,14 +6,14 @@ use App\Models\Application;
 use App\Models\ApplicationCustomer;
 use App\Models\ApplicationPaymentGateway;
 use App\Models\CheckoutOutboxMessage;
+use App\Models\DanaEnvironmentSetting;
 use App\Models\DanaMerchantProvisioningAudit;
-use App\Models\DanaPaymentMethodFee;
 use App\Models\Invoice;
 use App\Models\PaymentAttempt;
 use App\Models\SubscriptionPlan;
 use App\Models\User;
-use App\Services\DanaEnvironmentService;
 use App\Services\DanaFeeService;
+use App\Services\DanaGatewayMerchantResolver;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\Client\Request as HttpRequest;
 use Illuminate\Support\Facades\Http;
@@ -493,6 +493,186 @@ class DanaMultiMerchantDualEnvironmentTest extends TestCase
                 ],
             ]);
         });
+    }
+
+    public function test_central_production_checkout_rejects_silent_fallback_when_merchant_not_ready(): void
+    {
+        DanaEnvironmentSetting::query()->updateOrCreate(
+            ['gateway' => 'dana'],
+            [
+                'active_environment' => 'production',
+                'primary_merchant_code' => 'udev-central',
+                'is_production_ready' => false,
+            ]
+        );
+
+        // Set udev-central production merchant to not ready
+        config()->set('services.dana_gateway.merchants.production.udev-central.is_active', false);
+
+        $invoice = Invoice::factory()->create([
+            'amount' => '1000.00',
+            'currency' => 'IDR',
+            'status' => Invoice::StatusPending,
+            'due_at' => now()->addDay(),
+        ]);
+
+        $this->actingAdmin()
+            ->postJson("/api/v1/admin/invoices/{$invoice->id}/checkout", [
+                'payment_method' => 'dana_wallet',
+            ], ['Idempotency-Key' => 'test-central-prod-no-fallback'])
+            ->assertStatus(422)
+            ->assertJsonValidationErrors(['invoice'])
+            ->assertJsonFragment(['Merchant DANA Production pusat belum siap digunakan. Transaksi live tidak dapat dialihkan ke Sandbox.']);
+    }
+
+    public function test_tenant_production_checkout_rejects_silent_fallback_when_prod_mapping_missing(): void
+    {
+        DanaEnvironmentSetting::query()->updateOrCreate(
+            ['gateway' => 'dana'],
+            [
+                'active_environment' => 'production',
+                'is_production_ready' => true,
+            ]
+        );
+
+        $application = Application::factory()->create(['code' => 'APP-ONLY-SBX']);
+        $customer = ApplicationCustomer::factory()->create(['application_id' => $application->id]);
+        $plan = SubscriptionPlan::factory()->create(['application_id' => $application->id]);
+
+        $invoice = Invoice::factory()->create([
+            'application_customer_id' => $customer->id,
+            'subscription_plan_id' => $plan->id,
+            'amount' => '1000.00',
+            'currency' => 'IDR',
+            'status' => Invoice::StatusPending,
+            'due_at' => now()->addDay(),
+        ]);
+
+        // Mapping hanya ada di sandbox
+        ApplicationPaymentGateway::query()->create([
+            'application_id' => $application->id,
+            'provider' => 'dana',
+            'environment' => 'sandbox',
+            'gateway_merchant_code' => 'tenant-sbx-only',
+            'is_active' => true,
+        ]);
+
+        $this->actingAdmin()
+            ->postJson("/api/v1/admin/invoices/{$invoice->id}/checkout", [
+                'payment_method' => 'dana_wallet',
+            ], ['Idempotency-Key' => 'test-tenant-prod-no-fallback'])
+            ->assertStatus(422)
+            ->assertJsonValidationErrors(['invoice'])
+            ->assertJsonFragment(['Merchant DANA Production untuk aplikasi ini belum siap digunakan. Transaksi live tidak dapat dialihkan ke Sandbox.']);
+    }
+
+    public function test_checkout_dispatch_sends_environment_field_to_gateway(): void
+    {
+        $application = Application::factory()->create(['code' => 'APP-ENV-DISP']);
+        $customer = ApplicationCustomer::factory()->create(['application_id' => $application->id]);
+        $plan = SubscriptionPlan::factory()->create(['application_id' => $application->id]);
+
+        $invoice = Invoice::factory()->create([
+            'application_customer_id' => $customer->id,
+            'subscription_plan_id' => $plan->id,
+            'amount' => '1000.00',
+            'currency' => 'IDR',
+            'status' => Invoice::StatusPending,
+            'due_at' => now()->addDay(),
+        ]);
+
+        ApplicationPaymentGateway::query()->create([
+            'application_id' => $application->id,
+            'provider' => 'dana',
+            'environment' => 'production',
+            'gateway_merchant_code' => 'larissama',
+            'is_active' => true,
+        ]);
+
+        $receivedEnvironment = null;
+        Http::fake(function (HttpRequest $request) use (&$receivedEnvironment) {
+            if ($request->method() === 'POST' && str_contains($request->url(), '/api/v1/payments')) {
+                $receivedEnvironment = $request['environment'] ?? null;
+
+                return Http::response([
+                    'data' => [
+                        'id' => '01JPRODTEST0000000000000001',
+                        'merchant_order_id' => $request['merchant_order_id'],
+                        'amount_minor' => $request['amount_minor'],
+                        'currency' => 'IDR',
+                        'status' => 'pending',
+                        'checkout_url' => 'https://checkout.production.test/pay/01JPRODTEST0000000000000001',
+                        'expires_at' => now()->addMinutes(15)->toIso8601String(),
+                        'metadata' => [
+                            'udev_sandbox_payment_instruction' => [
+                                'type' => 'redirect',
+                                'message' => 'Lanjutkan pembayaran pada DANA.',
+                            ],
+                        ],
+                    ],
+                ]);
+            }
+
+            return Http::response(['data' => []]);
+        });
+
+        $this->actingAdmin()
+            ->postJson("/api/v1/admin/invoices/{$invoice->id}/checkout", [
+                'payment_method' => 'dana_wallet',
+            ], ['Idempotency-Key' => 'test-idemp-env-check'])
+            ->assertOk();
+
+        $this->assertSame('production', $receivedEnvironment);
+    }
+
+    public function test_resolver_fail_closed_when_production_base_url_is_empty(): void
+    {
+        config()->set('services.dana_gateway.base_urls.production', '');
+
+        $resolver = app(DanaGatewayMerchantResolver::class);
+
+        $this->expectException(\RuntimeException::class);
+        $this->expectExceptionMessage('DANA_GATEWAY_PRODUCTION_BASE_URL');
+
+        $resolver->resolve('larissama', 'production');
+    }
+
+    public function test_resolver_production_uses_production_base_url_when_configured(): void
+    {
+        config()->set('services.dana_gateway.base_urls.production', 'https://dana.udumbara.my.id');
+
+        $resolver = app(DanaGatewayMerchantResolver::class);
+        $merchant = $resolver->resolve('larissama', 'production');
+
+        $this->assertSame('https://dana.udumbara.my.id', $merchant->baseUrl);
+        $this->assertSame('production', $merchant->environment);
+        $this->assertSame('larissama', $merchant->code);
+    }
+
+    public function test_checkout_rejects_environment_manipulation_from_customer_request(): void
+    {
+        $invoice = Invoice::factory()->create([
+            'amount' => '1000.00',
+            'currency' => 'IDR',
+            'status' => Invoice::StatusPending,
+            'due_at' => now()->addDay(),
+        ]);
+
+        $this->actingAdmin()
+            ->postJson("/api/v1/admin/invoices/{$invoice->id}/checkout", [
+                'payment_method' => 'dana_wallet',
+                'environment' => 'production',
+            ], ['Idempotency-Key' => 'test-prohibited-env'])
+            ->assertStatus(422)
+            ->assertJsonValidationErrors(['environment']);
+
+        $this->actingAdmin()
+            ->postJson("/api/v1/admin/invoices/{$invoice->id}/checkout", [
+                'payment_method' => 'dana_wallet',
+                'gateway_environment' => 'sandbox',
+            ], ['Idempotency-Key' => 'test-prohibited-gw-env'])
+            ->assertStatus(422)
+            ->assertJsonValidationErrors(['gateway_environment']);
     }
 
     private function mockProvisioningClientFind(string $code): void

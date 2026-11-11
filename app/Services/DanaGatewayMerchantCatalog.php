@@ -159,7 +159,9 @@ class DanaGatewayMerchantCatalog
         // 3. Check merchant active
         $merchantActive = false;
         if ($merchantConfigured) {
-            if ($hasLegacyMerchant && ! $hasDbRecord && ! $hasDbSecret) {
+            if ($hasLegacyMerchant && ! (bool) ($legacyMerchant['is_active'] ?? true)) {
+                $merchantActive = false;
+            } elseif ($hasLegacyMerchant && ! $hasDbRecord && ! $hasDbSecret) {
                 // If merchant only exists in legacy .env, respect its is_active flag
                 $merchantActive = (bool) ($legacyMerchant['is_active'] ?? false);
             } else {
