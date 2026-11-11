@@ -6,11 +6,11 @@ use App\Models\Application;
 use App\Models\ApplicationCustomer;
 use App\Models\ApplicationPaymentGateway;
 use App\Models\Invoice;
+use App\Models\PaymentAllocation;
 use App\Models\PaymentAttempt;
 use App\Models\SubscriptionPlan;
 use App\Models\User;
 use App\Services\DanaFeeService;
-use Carbon\CarbonImmutable;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\Client\Request as HttpRequest;
 use Illuminate\Support\Facades\Http;
@@ -240,20 +240,36 @@ class DanaInvoiceIntegrationTest extends TestCase
             'paid_at' => now()->toIso8601String(),
         ];
 
+        Http::fake([
+            'http://dana-gateway.test/api/v1/payments/*' => Http::response([
+                'data' => [
+                    'id' => '01JBK9Y8Z123456789ABCDEF04',
+                    'merchant_order_id' => $invoice->invoice_number.'-A1',
+                    'amount_minor' => 100000,
+                    'currency' => 'IDR',
+                    'status' => 'paid',
+                    'paid_at' => now()->toISOString(),
+                ],
+            ]),
+        ]);
+
+        $headers = ['Authorization' => 'Bearer test-key'];
+
         // 1st webhook call
-        $response1 = $this->postJson('/api/v1/payment-gateways/dana/webhook', $webhookPayload);
+        $response1 = $this->postJson('/api/v1/payment-gateways/dana/webhook', $webhookPayload, $headers);
         $response1->assertOk()
             ->assertJsonPath('status', 'OK');
 
         $this->assertSame(Invoice::StatusPaid, $invoice->fresh()->status);
         $this->assertSame(PaymentAttempt::StatusSucceeded, $attempt->fresh()->status);
+        $this->assertNotEmpty($attempt->fresh()->metadata['gateway_verification']['verified_at']);
 
         // 2nd webhook call (idempotent duplicate, zero double-settlement)
-        $response2 = $this->postJson('/api/v1/payment-gateways/dana/webhook', $webhookPayload);
+        $response2 = $this->postJson('/api/v1/payment-gateways/dana/webhook', $webhookPayload, $headers);
         $response2->assertOk()
             ->assertJsonPath('status', 'OK');
 
-        $this->assertSame(1, \App\Models\PaymentAllocation::query()->where('invoice_id', $invoice->id)->count());
+        $this->assertSame(1, PaymentAllocation::query()->where('invoice_id', $invoice->id)->count());
     }
 
     public function test_qr_image_endpoint_handles_dana_payment_attempt_gracefully_with_qr_content(): void

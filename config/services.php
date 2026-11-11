@@ -45,6 +45,7 @@ return [
         'connect_timeout' => (int) env('DANA_GATEWAY_CONNECT_TIMEOUT', 3),
         'merchant_api_keys' => json_decode((string) env('DANA_GATEWAY_MERCHANT_API_KEYS', '{}'), true) ?: [],
         'merchants' => json_decode((string) env('DANA_GATEWAY_MERCHANTS', '{}'), true) ?: [],
+        'webhook_secret' => env('DANA_GATEWAY_WEBHOOK_SECRET', env('DANA_GATEWAY_SERVICE_TOKEN', env('DANA_MERCHANT_PROVISIONING_SERVICE_TOKEN'))),
     ],
 
     // Deliberately unset by default. Operators must configure an existing,
