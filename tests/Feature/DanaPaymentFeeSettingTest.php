@@ -5,7 +5,6 @@ namespace Tests\Feature;
 use App\Models\Application;
 use App\Models\ApplicationCustomer;
 use App\Models\ApplicationPaymentGateway;
-use App\Models\DanaMerchantProvisioningAudit;
 use App\Models\DanaPaymentFeeSetting;
 use App\Models\Invoice;
 use App\Models\PaymentAllocation;
@@ -16,9 +15,11 @@ use App\Services\DanaFeeService;
 use App\Services\InvoiceSettlementService;
 use App\Services\VerifiedGatewayPayment;
 use Carbon\CarbonImmutable;
+use Illuminate\Database\QueryException;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\Client\Request as HttpRequest;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Validation\ValidationException;
 use Laravel\Sanctum\Sanctum;
 use Symfony\Component\HttpFoundation\Response;
 use Tests\TestCase;
@@ -71,60 +72,52 @@ class DanaPaymentFeeSettingTest extends TestCase
         $this->regularUser = User::factory()->create(['is_admin' => false]);
     }
 
-    public function test_index_fees_auto_seeds_official_defaults_and_returns_paginated_list(): void
+    public function test_index_fees_is_strictly_read_only_and_does_not_auto_seed_production(): void
     {
         Sanctum::actingAs($this->admin, ['admin:access']);
 
+        // Akses index Production saat database masih kosong
         $response = $this->getJson('/api/v1/admin/dana-gateway/fees?environment=production');
 
         $response->assertOk()
             ->assertJsonPath('status', 'success')
-            ->assertJsonStructure([
-                'status',
-                'data' => [
-                    '*' => [
-                        'id',
-                        'application_id',
-                        'payment_method',
-                        'environment',
-                        'fee_type',
-                        'fee_value',
-                        'fee_unit',
-                        'is_active',
-                    ],
-                ],
-                'meta' => ['current_page', 'total', 'per_page', 'has_more'],
-            ]);
+            ->assertJsonPath('data', [])
+            ->assertJsonPath('meta.total', 0);
 
-        // Verifikasi tarif resmi Production terisi (QRIS 0.70%, DANA Wallet 1.50%, VA Rp 4.000)
+        // Verifikasi tidak ada write-on-read atau auto-seeding ke database Production
+        $this->assertDatabaseEmpty('dana_payment_fee_settings');
+    }
+
+    public function test_production_fees_must_be_created_explicitly_by_admin(): void
+    {
+        Sanctum::actingAs($this->admin, ['admin:access']);
+
+        $payload = [
+            'payment_method' => 'qris',
+            'environment' => 'production',
+            'fee_type' => 'dana',
+            'fee_value' => 0.70,
+            'fee_unit' => 'percent',
+            'is_active' => true,
+            'notes' => 'Tarif resmi MDR QRIS DANA Production',
+        ];
+
+        $response = $this->postJson('/api/v1/admin/dana-gateway/fees', $payload);
+
+        $response->assertCreated()
+            ->assertJsonPath('status', 'success')
+            ->assertJsonPath('data.scope_key', 'global')
+            ->assertJsonPath('data.environment', 'production')
+            ->assertJsonPath('data.payment_method', 'qris')
+            ->assertJsonPath('data.fee_type', 'dana')
+            ->assertJsonPath('data.fee_value', '0.70');
+
         $this->assertDatabaseHas('dana_payment_fee_settings', [
+            'scope_key' => 'global',
             'environment' => 'production',
             'payment_method' => 'qris',
             'fee_type' => 'dana',
-            'fee_value' => '0.70',
-            'fee_unit' => 'percent',
-            'application_id' => null,
-            'is_active' => true,
-        ]);
-
-        $this->assertDatabaseHas('dana_payment_fee_settings', [
-            'environment' => 'production',
-            'payment_method' => 'dana_wallet',
-            'fee_type' => 'dana',
-            'fee_value' => '1.50',
-            'fee_unit' => 'percent',
-            'application_id' => null,
-            'is_active' => true,
-        ]);
-
-        $this->assertDatabaseHas('dana_payment_fee_settings', [
-            'environment' => 'production',
-            'payment_method' => 'va_bri',
-            'fee_type' => 'dana',
-            'fee_value' => '4000.00',
-            'fee_unit' => 'rupiah',
-            'application_id' => null,
-            'is_active' => true,
+            'fee_value' => 0.70,
         ]);
     }
 
@@ -136,13 +129,14 @@ class DanaPaymentFeeSettingTest extends TestCase
         $this->postJson('/api/v1/admin/dana-gateway/fees', [])->assertForbidden();
     }
 
-    public function test_store_fee_validates_and_creates_new_setting_with_audit_log(): void
+    public function test_store_fee_supports_merchant_code_and_application_scope(): void
     {
         Sanctum::actingAs($this->admin, ['admin:access']);
 
         $app = Application::factory()->create(['name' => 'Larissama App']);
 
         $payload = [
+            'gateway_merchant_code' => 'larissama',
             'application_id' => $app->id,
             'payment_method' => 'qris',
             'environment' => 'production',
@@ -157,33 +151,25 @@ class DanaPaymentFeeSettingTest extends TestCase
 
         $response->assertCreated()
             ->assertJsonPath('status', 'success')
+            ->assertJsonPath('data.gateway_merchant_code', 'larissama')
             ->assertJsonPath('data.application_id', $app->id)
-            ->assertJsonPath('data.payment_method', 'qris')
-            ->assertJsonPath('data.fee_type', 'udev')
-            ->assertJsonPath('data.fee_value', '1500.00')
-            ->assertJsonPath('data.fee_unit', 'rupiah');
+            ->assertJsonPath('data.scope_key', "app:{$app->id}:merchant:larissama");
 
         $this->assertDatabaseHas('dana_payment_fee_settings', [
+            'gateway_merchant_code' => 'larissama',
             'application_id' => $app->id,
-            'payment_method' => 'qris',
-            'environment' => 'production',
-            'fee_type' => 'udev',
-            'fee_value' => 1500.00,
+            'scope_key' => "app:{$app->id}:merchant:larissama",
             'is_active' => true,
-        ]);
-
-        // Verifikasi audit log tercatat
-        $this->assertDatabaseHas('dana_merchant_provisioning_audits', [
-            'operation' => 'dana_fee_setting.created',
-            'status' => 'succeeded',
         ]);
     }
 
-    public function test_duplicate_active_fee_setting_is_strictly_rejected(): void
+    public function test_global_duplicate_is_strictly_rejected_at_db_and_api_level(): void
     {
         Sanctum::actingAs($this->admin, ['admin:access']);
 
+        // Buat aturan global pertama
         DanaPaymentFeeSetting::query()->create([
+            'gateway_merchant_code' => null,
             'application_id' => null,
             'payment_method' => 'qris',
             'environment' => 'production',
@@ -193,8 +179,9 @@ class DanaPaymentFeeSettingTest extends TestCase
             'is_active' => true,
         ]);
 
-        // Coba buat tarif aktif kedua untuk kombinasi yang sama -> harus ditolak 422
+        // Coba buat aturan global aktif kedua via API -> harus ditolak 422
         $response = $this->postJson('/api/v1/admin/dana-gateway/fees', [
+            'gateway_merchant_code' => null,
             'application_id' => null,
             'payment_method' => 'qris',
             'environment' => 'production',
@@ -206,6 +193,103 @@ class DanaPaymentFeeSettingTest extends TestCase
 
         $response->assertStatus(Response::HTTP_UNPROCESSABLE_ENTITY)
             ->assertJsonValidationErrors(['payment_method']);
+
+        // Uji di layer database langsung: unique constraint pada scope_key='global'
+        $this->expectException(QueryException::class);
+        DanaPaymentFeeSetting::query()->create([
+            'gateway_merchant_code' => null,
+            'application_id' => null,
+            'payment_method' => 'qris',
+            'environment' => 'production',
+            'fee_type' => 'dana',
+            'fee_value' => 0.90,
+            'fee_unit' => 'percent',
+            'is_active' => true,
+        ]);
+    }
+
+    public function test_multi_merchant_fee_resolution_and_isolation(): void
+    {
+        Sanctum::actingAs($this->admin, ['admin:access']);
+
+        // 1. Tarif Global UDEV Central: QRIS DANA = 0.70%, UDEV = Rp 0
+        DanaPaymentFeeSetting::query()->create([
+            'gateway_merchant_code' => null,
+            'application_id' => null,
+            'payment_method' => 'qris',
+            'environment' => 'sandbox',
+            'fee_type' => 'dana',
+            'fee_value' => 0.70,
+            'fee_unit' => 'percent',
+            'is_active' => true,
+        ]);
+
+        // 2. Tarif Khusus Merchant Mandiri 'larissama': QRIS DANA = 0.50%, UDEV = Rp 1.500
+        DanaPaymentFeeSetting::query()->create([
+            'gateway_merchant_code' => 'larissama',
+            'application_id' => null,
+            'payment_method' => 'qris',
+            'environment' => 'sandbox',
+            'fee_type' => 'dana',
+            'fee_value' => 0.50,
+            'fee_unit' => 'percent',
+            'is_active' => true,
+        ]);
+        DanaPaymentFeeSetting::query()->create([
+            'gateway_merchant_code' => 'larissama',
+            'application_id' => null,
+            'payment_method' => 'qris',
+            'environment' => 'sandbox',
+            'fee_type' => 'udev',
+            'fee_value' => 1500.00,
+            'fee_unit' => 'rupiah',
+            'is_active' => true,
+        ]);
+
+        $service = app(DanaFeeService::class);
+
+        // Merchant Larissama harus menggunakan tarif 0.50% + Rp 1.500
+        $larisCalc = $service->calculateFee('larissama', 'qris', 100000, 'sandbox');
+        $this->assertSame(500.0, (float) $larisCalc['dana_fee_amount']);
+        $this->assertSame(1500.0, (float) $larisCalc['udev_fee_amount']);
+        $this->assertSame(102000.0, (float) $larisCalc['total_amount']);
+
+        // Central Merchant harus menggunakan tarif global 0.70%
+        $centralCalc = $service->calculateFee('udev-central', 'qris', 100000, 'sandbox');
+        $this->assertSame(700.0, (float) $centralCalc['dana_fee_amount']);
+        $this->assertSame(0.0, (float) $centralCalc['udev_fee_amount']);
+        $this->assertSame(100700.0, (float) $centralCalc['total_amount']);
+    }
+
+    public function test_merchant_mandiri_without_fee_fails_closed_without_fallback_to_udev(): void
+    {
+        // Pasang tarif global UDEV Central
+        DanaPaymentFeeSetting::query()->create([
+            'gateway_merchant_code' => 'udev-central',
+            'application_id' => null,
+            'payment_method' => 'qris',
+            'environment' => 'sandbox',
+            'fee_type' => 'dana',
+            'fee_value' => 0.70,
+            'fee_unit' => 'percent',
+            'is_active' => true,
+        ]);
+
+        $service = app(DanaFeeService::class);
+
+        // Merchant mandiri 'larissama' BELUM memiliki tarif yang dikonfigurasi
+        // Sistem HARUS fail-closed dan TIDAK BOLEH fallback ke udev-central
+        $this->expectException(ValidationException::class);
+        $service->calculateFee('larissama', 'qris', 100000, 'sandbox');
+    }
+
+    public function test_production_without_fee_fails_closed(): void
+    {
+        $service = app(DanaFeeService::class);
+
+        // Production tanpa tarif untuk udev-central harus fail-closed
+        $this->expectException(ValidationException::class);
+        $service->calculateFee('udev-central', 'qris', 100000, 'production');
     }
 
     public function test_admin_can_update_toggle_and_delete_fee_setting(): void
@@ -213,6 +297,7 @@ class DanaPaymentFeeSettingTest extends TestCase
         Sanctum::actingAs($this->admin, ['admin:access']);
 
         $fee = DanaPaymentFeeSetting::query()->create([
+            'gateway_merchant_code' => null,
             'application_id' => null,
             'payment_method' => 'dana_wallet',
             'environment' => 'sandbox',
@@ -254,6 +339,7 @@ class DanaPaymentFeeSettingTest extends TestCase
 
         // Set fee: QRIS DANA = 0.70%, UDEV = Rp 1.000
         DanaPaymentFeeSetting::query()->create([
+            'gateway_merchant_code' => null,
             'application_id' => null,
             'payment_method' => 'qris',
             'environment' => 'production',
@@ -264,6 +350,7 @@ class DanaPaymentFeeSettingTest extends TestCase
         ]);
 
         DanaPaymentFeeSetting::query()->create([
+            'gateway_merchant_code' => null,
             'application_id' => null,
             'payment_method' => 'qris',
             'environment' => 'production',
@@ -279,11 +366,6 @@ class DanaPaymentFeeSettingTest extends TestCase
             'environment' => 'production',
         ]);
 
-        // Tagihan pokok = 100.000
-        // Biaya DANA = 0.7% x 100.000 = 700
-        // Biaya UDEV = 1.000
-        // Total Bayar = 101.700
-        // Hak Pemilik Aplikasi = 100.000 (utuh)
         $response->assertOk()
             ->assertJsonPath('data.base_amount', 100000)
             ->assertJsonPath('data.dana_fee_amount', 700)
@@ -311,10 +393,11 @@ class DanaPaymentFeeSettingTest extends TestCase
             'is_active' => true,
         ]);
 
-        // Buat setting biaya khusus aplikasi:
+        // Buat setting biaya khusus aplikasi & merchant larissama:
         // DANA QRIS: 0.70% (Rp 700)
         // UDEV QRIS: Rp 1.500
         DanaPaymentFeeSetting::query()->create([
+            'gateway_merchant_code' => 'larissama',
             'application_id' => $application->id,
             'payment_method' => 'qris',
             'environment' => 'sandbox',
@@ -325,6 +408,7 @@ class DanaPaymentFeeSettingTest extends TestCase
         ]);
 
         DanaPaymentFeeSetting::query()->create([
+            'gateway_merchant_code' => 'larissama',
             'application_id' => $application->id,
             'payment_method' => 'qris',
             'environment' => 'sandbox',
@@ -429,50 +513,10 @@ class DanaPaymentFeeSettingTest extends TestCase
 
         $result = $settlementService->settle($attempt, $verification, 'settle-idemp-001');
 
-        // Hak pemilik aplikasi (PaymentAllocation::amount) adalah sebesar tagihan pokok (50.000.00), bukan nilai surcharge
+        // Hak pemilik aplikasi (PaymentAllocation::amount) adalah sebesar tagihan pokok (50.000.00)
         $allocation = PaymentAllocation::query()->where('invoice_id', $invoice->id)->sole();
         $this->assertSame('50000.00', (string) $allocation->amount);
         $this->assertSame(Invoice::StatusPaid, $invoice->fresh()->status);
-    }
-
-    public function test_app_specific_fee_overrides_global_default(): void
-    {
-        Sanctum::actingAs($this->admin, ['admin:access']);
-
-        $appSpecial = Application::factory()->create(['name' => 'Special App']);
-        $appNormal = Application::factory()->create(['name' => 'Normal App']);
-
-        // Global default UDEV fee = Rp 500
-        DanaPaymentFeeSetting::query()->create([
-            'application_id' => null,
-            'payment_method' => 'qris',
-            'environment' => 'sandbox',
-            'fee_type' => 'udev',
-            'fee_value' => 500.00,
-            'fee_unit' => 'rupiah',
-            'is_active' => true,
-        ]);
-
-        // Special App override UDEV fee = Rp 2.000
-        DanaPaymentFeeSetting::query()->create([
-            'application_id' => $appSpecial->id,
-            'payment_method' => 'qris',
-            'environment' => 'sandbox',
-            'fee_type' => 'udev',
-            'fee_value' => 2000.00,
-            'fee_unit' => 'rupiah',
-            'is_active' => true,
-        ]);
-
-        $service = app(DanaFeeService::class);
-
-        // Special App calculation uses Rp 2.000
-        $specialCalc = $service->calculateFee('udev-central', 'qris', 100000, 'sandbox', $appSpecial->id);
-        $this->assertSame(2000.0, (float) $specialCalc['udev_fee_amount']);
-
-        // Normal App calculation uses global default Rp 500
-        $normalCalc = $service->calculateFee('udev-central', 'qris', 100000, 'sandbox', $appNormal->id);
-        $this->assertSame(500.0, (float) $normalCalc['udev_fee_amount']);
     }
 
     private function fakeCheckoutGateway(string $paymentId = 'pay-001'): void

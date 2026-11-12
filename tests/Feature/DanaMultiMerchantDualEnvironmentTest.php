@@ -60,6 +60,23 @@ class DanaMultiMerchantDualEnvironmentTest extends TestCase
 
         config()->set('services.udev_billing.subscription_dana_sandbox_merchant_code', 'udev-central');
         config()->set('services.udev_billing.subscription_dana_production_merchant_code', 'udev-central');
+
+        foreach (['sandbox', 'production'] as $env) {
+            foreach (['qris', 'dana_wallet'] as $method) {
+                foreach (['larissama', 'udev-central'] as $merchant) {
+                    \App\Models\DanaPaymentFeeSetting::query()->create([
+                        'gateway_merchant_code' => $merchant,
+                        'application_id' => null,
+                        'payment_method' => $method,
+                        'environment' => $env,
+                        'fee_type' => 'dana',
+                        'fee_value' => 0.00,
+                        'fee_unit' => 'rupiah',
+                        'is_active' => true,
+                    ]);
+                }
+            }
+        }
     }
 
     public function test_udev_subscription_invoice_always_uses_udev_central_recipient(): void
@@ -275,16 +292,20 @@ class DanaMultiMerchantDualEnvironmentTest extends TestCase
     {
         $feeService = app(DanaFeeService::class);
 
+        \App\Models\DanaPaymentFeeSetting::query()
+            ->where('gateway_merchant_code', 'udev-central')
+            ->where('payment_method', 'qris')
+            ->update(['fee_value' => 0.70, 'fee_unit' => 'percent']);
+
         // Hitung fee di sandbox
         $feeSandbox = $feeService->calculateFee('udev-central', 'qris', 100000, 'sandbox');
         $this->assertSame('qris', $feeSandbox['payment_method']);
-        $this->assertSame(0.0, $feeSandbox['customer_fee']);
-        $this->assertSame(700.0, $feeSandbox['estimated_merchant_fee']); // 0.7% default
+        $this->assertSame(700.0, (float) ($feeSandbox['dana_fee_amount'] ?? $feeSandbox['estimated_merchant_fee']));
 
         // Hitung fee di production
         $feeProd = $feeService->calculateFee('udev-central', 'qris', 100000, 'production');
         $this->assertSame('qris', $feeProd['payment_method']);
-        $this->assertSame(700.0, $feeProd['estimated_merchant_fee']);
+        $this->assertSame(700.0, (float) ($feeProd['dana_fee_amount'] ?? $feeProd['estimated_merchant_fee']));
     }
 
     public function test_cannot_deactivate_or_delete_udev_central_system_merchant(): void

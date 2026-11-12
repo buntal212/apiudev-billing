@@ -56,6 +56,21 @@ class DanaDualEnvironmentMappingAndCheckoutTest extends TestCase
 
         config()->set('services.udev_billing.subscription_dana_sandbox_merchant_code', 'udev-central');
         config()->set('services.udev_billing.subscription_dana_production_merchant_code', 'udev-central');
+
+        foreach (['sandbox', 'production'] as $env) {
+            foreach (['qris', 'dana_wallet'] as $method) {
+                \App\Models\DanaPaymentFeeSetting::query()->create([
+                    'gateway_merchant_code' => 'larissama',
+                    'application_id' => null,
+                    'payment_method' => $method,
+                    'environment' => $env,
+                    'fee_type' => 'dana',
+                    'fee_value' => 0.00,
+                    'fee_unit' => 'rupiah',
+                    'is_active' => true,
+                ]);
+            }
+        }
     }
 
     public function test_admin_can_create_separate_dana_sandbox_and_production_mappings_for_single_application(): void

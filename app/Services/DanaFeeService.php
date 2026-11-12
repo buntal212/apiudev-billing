@@ -7,6 +7,7 @@ use App\Models\DanaPaymentFeeSetting;
 use App\Models\DanaPaymentMethodFee;
 use App\Models\Invoice;
 use Illuminate\Support\Facades\Schema;
+use Illuminate\Validation\ValidationException;
 
 class DanaFeeService
 {
@@ -163,34 +164,39 @@ class DanaFeeService
     ];
 
     /**
-     * Ensure official standard fee settings exist in database.
+     * Ensure official standard fee settings exist in database for sandbox testing.
+     * Production is NEVER auto-seeded.
      */
     public function ensureDefaultSettings(?string $environment = null): void
     {
+        // Production must NEVER be auto-seeded
+        if ($environment === 'production') {
+            return;
+        }
+
         if (! Schema::hasTable('dana_payment_fee_settings')) {
             return;
         }
 
-        $envs = $environment ? [$environment] : ['sandbox', 'production'];
-
-        foreach ($envs as $env) {
-            foreach (self::OfficialStandardFees as $method => $feeTypes) {
-                foreach ($feeTypes as $type => $def) {
-                    DanaPaymentFeeSetting::query()->firstOrCreate(
-                        [
-                            'application_id' => null,
-                            'environment' => $env,
-                            'payment_method' => $method,
-                            'fee_type' => $type,
-                        ],
-                        [
-                            'fee_value' => $def['fee_value'],
-                            'fee_unit' => $def['fee_unit'],
-                            'is_active' => true,
-                            'notes' => $def['notes'] ?? null,
-                        ]
-                    );
-                }
+        $env = 'sandbox';
+        foreach (self::OfficialStandardFees as $method => $feeTypes) {
+            foreach ($feeTypes as $type => $def) {
+                DanaPaymentFeeSetting::query()->firstOrCreate(
+                    [
+                        'scope_key' => 'global',
+                        'environment' => $env,
+                        'payment_method' => $method,
+                        'fee_type' => $type,
+                    ],
+                    [
+                        'gateway_merchant_code' => null,
+                        'application_id' => null,
+                        'fee_value' => $def['fee_value'],
+                        'fee_unit' => $def['fee_unit'],
+                        'is_active' => true,
+                        'notes' => $def['notes'] ?? null,
+                    ]
+                );
             }
         }
     }
@@ -199,6 +205,8 @@ class DanaFeeService
      * Calculate all fee components for a given subtotal, merchant, method, and application.
      *
      * @return array<string, mixed>
+     *
+     * @throws ValidationException
      */
     public function calculateFee(
         string $merchantCode,
@@ -210,41 +218,93 @@ class DanaFeeService
         $subtotalFloat = (float) $subtotal;
         $env = $environment ?: (string) config('services.dana_gateway.environment', 'sandbox');
 
+        $primaryMerchantCode = DanaEnvironmentSetting::getPrimaryMerchantCode($env);
+        $centralMerchantCodes = array_values(array_unique(array_filter([
+            $primaryMerchantCode,
+            'udev-central',
+            'udev-demo',
+            config('services.dana_gateway.merchant_id'),
+        ])));
+        $isMerchantMandiri = ! in_array($merchantCode, $centralMerchantCodes, true);
+
         // Check if modern fee settings table exists and has active rules
         $hasFeeSettingsTable = Schema::hasTable('dana_payment_fee_settings');
         $danaSetting = null;
         $udevSetting = null;
 
         if ($hasFeeSettingsTable) {
-            // 1. Resolve DANA Fee Setting (app-specific first, then global default)
-            $danaQuery = DanaPaymentFeeSetting::query()
-                ->where('environment', $env)
-                ->where('payment_method', $paymentMethod)
-                ->where('fee_type', DanaPaymentFeeSetting::FeeTypeDana)
-                ->where('is_active', true);
+            $resolveSetting = function (string $feeType) use ($env, $paymentMethod, $merchantCode, $applicationId, $isMerchantMandiri): ?DanaPaymentFeeSetting {
+                $baseQuery = DanaPaymentFeeSetting::query()
+                    ->where('environment', $env)
+                    ->where('payment_method', $paymentMethod)
+                    ->where('fee_type', $feeType)
+                    ->where('is_active', true);
 
-            if ($applicationId !== null) {
-                $danaSetting = (clone $danaQuery)->where('application_id', $applicationId)->first();
-            }
+                // 1. Most specific: application_id + gateway_merchant_code
+                if ($applicationId !== null && $merchantCode !== '') {
+                    $setting = (clone $baseQuery)
+                        ->where('application_id', $applicationId)
+                        ->where('gateway_merchant_code', $merchantCode)
+                        ->first();
+                    if ($setting !== null) {
+                        return $setting;
+                    }
+                }
 
-            if ($danaSetting === null) {
-                $danaSetting = (clone $danaQuery)->whereNull('application_id')->first();
-            }
+                // 2. Specific to gateway_merchant_code (where application_id IS NULL)
+                if ($merchantCode !== '') {
+                    $setting = (clone $baseQuery)
+                        ->where('gateway_merchant_code', $merchantCode)
+                        ->whereNull('application_id')
+                        ->first();
+                    if ($setting !== null) {
+                        return $setting;
+                    }
+                }
 
-            // 2. Resolve UDEV Fee Setting (app-specific first, then global default)
-            $udevQuery = DanaPaymentFeeSetting::query()
-                ->where('environment', $env)
-                ->where('payment_method', $paymentMethod)
-                ->where('fee_type', DanaPaymentFeeSetting::FeeTypeUdev)
-                ->where('is_active', true);
+                // 3. Specific to application_id (where gateway_merchant_code IS NULL)
+                if ($applicationId !== null) {
+                    $setting = (clone $baseQuery)
+                        ->where('application_id', $applicationId)
+                        ->whereNull('gateway_merchant_code')
+                        ->first();
+                    if ($setting !== null) {
+                        return $setting;
+                    }
+                }
 
-            if ($applicationId !== null) {
-                $udevSetting = (clone $udevQuery)->where('application_id', $applicationId)->first();
-            }
+                // 4. Global default (both application_id and gateway_merchant_code are NULL)
+                // Merchant mandiri WITHOUT valid fee MUST FAIL-CLOSED without fallback to UDEV Central!
+                if ($isMerchantMandiri) {
+                    return null;
+                }
 
-            if ($udevSetting === null) {
-                $udevSetting = (clone $udevQuery)->whereNull('application_id')->first();
-            }
+                return (clone $baseQuery)
+                    ->whereNull('application_id')
+                    ->whereNull('gateway_merchant_code')
+                    ->first();
+            };
+
+            $danaSetting = $resolveSetting(DanaPaymentFeeSetting::FeeTypeDana);
+            $udevSetting = $resolveSetting(DanaPaymentFeeSetting::FeeTypeUdev);
+        }
+
+        // FAIL-CLOSED CHECK 1: Merchant mandiri without valid fee configuration
+        if ($isMerchantMandiri && $danaSetting === null) {
+            throw ValidationException::withMessages([
+                'payment_method' => [
+                    "Tarif biaya DANA untuk merchant mandiri '{$merchantCode}' pada metode '{$paymentMethod}' ({$env}) belum dikonfigurasi. Checkout dibatalkan (fail-closed).",
+                ],
+            ]);
+        }
+
+        // FAIL-CLOSED CHECK 2: Production environment without fee configuration
+        if ($env === 'production' && $danaSetting === null) {
+            throw ValidationException::withMessages([
+                'payment_method' => [
+                    "Tarif biaya DANA Production untuk metode '{$paymentMethod}' belum dikonfigurasi. Checkout dibatalkan (fail-closed).",
+                ],
+            ]);
         }
 
         // If at least one active fee setting is found from dana_payment_fee_settings
@@ -439,6 +499,8 @@ class DanaFeeService
             'payment_method_label' => $calc['payment_method_name'],
             'provider' => 'dana',
             'environment' => $env,
+            'merchant_code' => $merchant,
+            'gateway_merchant_code' => $merchant,
             'application_id' => $appId,
             'dana_fee' => $calc['dana_fee_amount'] ?? 0.0,
             'dana_fee_amount' => $calc['dana_fee_amount'] ?? 0.0,

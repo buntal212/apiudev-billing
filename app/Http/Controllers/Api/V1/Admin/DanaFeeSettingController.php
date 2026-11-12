@@ -20,18 +20,24 @@ class DanaFeeSettingController extends Controller
 
     /**
      * List fee settings with filters, search, and pagination.
+     * Pure read-only (no write-on-read or auto-seeding).
      */
     public function index(Request $request): JsonResponse
     {
         $environment = (string) $request->query('environment', 'sandbox');
         $environment = in_array($environment, ['sandbox', 'production'], true) ? $environment : 'sandbox';
 
-        // Auto-seed official standard settings if empty for the selected environment
-        $this->feeService->ensureDefaultSettings($environment);
-
         $query = DanaPaymentFeeSetting::query()
             ->with('application:id,name,code')
             ->where('environment', $environment);
+
+        // Filter by merchant scope
+        $merchantFilter = $request->query('gateway_merchant_code');
+        if ($merchantFilter === 'default' || $merchantFilter === 'null') {
+            $query->whereNull('gateway_merchant_code');
+        } elseif (! empty($merchantFilter)) {
+            $query->where('gateway_merchant_code', $merchantFilter);
+        }
 
         // Filter by application scope
         $appFilter = $request->query('application_id');
@@ -61,11 +67,12 @@ class DanaFeeSettingController extends Controller
             $query->where('is_active', false);
         }
 
-        // Search in payment method or notes
+        // Search in payment method, notes, or merchant code
         $search = trim((string) $request->query('search', ''));
         if ($search !== '') {
             $query->where(function ($q) use ($search) {
                 $q->where('payment_method', 'like', "%{$search}%")
+                    ->orWhere('gateway_merchant_code', 'like', "%{$search}%")
                     ->orWhere('notes', 'like', "%{$search}%")
                     ->orWhereHas('application', function ($appQ) use ($search) {
                         $appQ->where('name', 'like', "%{$search}%")
@@ -81,6 +88,7 @@ class DanaFeeSettingController extends Controller
 
         $fees = $query->orderBy('payment_method')
             ->orderBy('fee_type')
+            ->orderByRaw('gateway_merchant_code IS NULL DESC')
             ->orderByRaw('application_id IS NULL DESC')
             ->orderBy('id')
             ->paginate($perPage);
@@ -104,6 +112,7 @@ class DanaFeeSettingController extends Controller
     public function store(Request $request): JsonResponse
     {
         $validated = $request->validate([
+            'gateway_merchant_code' => ['nullable', 'string', 'max:60'],
             'application_id' => ['nullable', 'integer', 'exists:applications,id'],
             'payment_method' => ['required', 'string', 'max:50'],
             'environment' => ['required', 'string', 'in:sandbox,production'],
@@ -122,6 +131,7 @@ class DanaFeeSettingController extends Controller
 
         $isActive = $validated['is_active'] ?? true;
         $appId = $validated['application_id'] ?? null;
+        $merchantCode = ! empty($validated['gateway_merchant_code']) ? trim($validated['gateway_merchant_code']) : null;
 
         // Check for duplicate active fee setting
         if ($isActive) {
@@ -129,11 +139,13 @@ class DanaFeeSettingController extends Controller
                 $validated['environment'],
                 $validated['payment_method'],
                 $validated['fee_type'],
-                $appId
+                $appId,
+                $merchantCode
             );
         }
 
         $fee = DanaPaymentFeeSetting::query()->create([
+            'gateway_merchant_code' => $merchantCode,
             'application_id' => $appId,
             'payment_method' => $validated['payment_method'],
             'environment' => $validated['environment'],
@@ -148,6 +160,7 @@ class DanaFeeSettingController extends Controller
 
         $this->recordAudit($request, 'dana_fee_setting.created', 'succeeded', [
             'id' => $fee->id,
+            'gateway_merchant_code' => $fee->gateway_merchant_code,
             'application_id' => $fee->application_id,
             'payment_method' => $fee->payment_method,
             'environment' => $fee->environment,
@@ -186,37 +199,54 @@ class DanaFeeSettingController extends Controller
         $fee = DanaPaymentFeeSetting::query()->findOrFail($id);
 
         $validated = $request->validate([
-            'fee_value' => ['sometimes', 'required', 'numeric', 'min:0'],
-            'fee_unit' => ['sometimes', 'required', 'string', 'in:rupiah,percent'],
+            'gateway_merchant_code' => ['nullable', 'string', 'max:60'],
+            'application_id' => ['nullable', 'integer', 'exists:applications,id'],
+            'fee_value' => ['sometimes', 'numeric', 'min:0'],
+            'fee_unit' => ['sometimes', 'string', 'in:rupiah,percent'],
             'is_active' => ['sometimes', 'boolean'],
             'notes' => ['nullable', 'string', 'max:255'],
         ]);
 
-        $unit = $validated['fee_unit'] ?? $fee->fee_unit;
-        $val = $validated['fee_value'] ?? $fee->fee_value;
-        if ($unit === 'percent' && (float) $val > 100) {
+        $targetUnit = $validated['fee_unit'] ?? $fee->fee_unit;
+        $targetValue = isset($validated['fee_value']) ? (float) $validated['fee_value'] : (float) $fee->fee_value;
+        $targetActive = isset($validated['is_active']) ? (bool) $validated['is_active'] : (bool) $fee->is_active;
+        $targetAppId = array_key_exists('application_id', $validated) ? $validated['application_id'] : $fee->application_id;
+        $targetMerchant = array_key_exists('gateway_merchant_code', $validated)
+            ? (! empty($validated['gateway_merchant_code']) ? trim($validated['gateway_merchant_code']) : null)
+            : $fee->gateway_merchant_code;
+
+        if ($targetUnit === 'percent' && $targetValue > 100) {
             throw ValidationException::withMessages([
                 'fee_value' => ['Nilai tarif persentase tidak boleh melebihi 100%.'],
             ]);
         }
 
-        $isActive = array_key_exists('is_active', $validated) ? (bool) $validated['is_active'] : $fee->is_active;
-
-        if ($isActive) {
+        if ($targetActive) {
             $this->assertNoActiveConflict(
                 $fee->environment,
                 $fee->payment_method,
                 $fee->fee_type,
-                $fee->application_id,
+                $targetAppId,
+                $targetMerchant,
                 $fee->id
             );
         }
 
-        $fee->update($validated);
+        $fee->fill([
+            'gateway_merchant_code' => $targetMerchant,
+            'application_id' => $targetAppId,
+            'fee_value' => $targetValue,
+            'fee_unit' => $targetUnit,
+            'is_active' => $targetActive,
+            'notes' => array_key_exists('notes', $validated) ? $validated['notes'] : $fee->notes,
+        ]);
+        $fee->save();
+
         $fee->load('application:id,name,code');
 
         $this->recordAudit($request, 'dana_fee_setting.updated', 'succeeded', [
             'id' => $fee->id,
+            'gateway_merchant_code' => $fee->gateway_merchant_code,
             'application_id' => $fee->application_id,
             'payment_method' => $fee->payment_method,
             'environment' => $fee->environment,
@@ -234,7 +264,7 @@ class DanaFeeSettingController extends Controller
     }
 
     /**
-     * Toggle fee status (active/inactive).
+     * Toggle the active status of a fee setting.
      */
     public function toggleStatus(Request $request, int $id): JsonResponse
     {
@@ -244,33 +274,38 @@ class DanaFeeSettingController extends Controller
             'is_active' => ['required', 'boolean'],
         ]);
 
-        $newActive = (bool) $validated['is_active'];
+        $newStatus = (bool) $validated['is_active'];
 
-        if ($newActive) {
+        if ($newStatus) {
             $this->assertNoActiveConflict(
                 $fee->environment,
                 $fee->payment_method,
                 $fee->fee_type,
                 $fee->application_id,
+                $fee->gateway_merchant_code,
                 $fee->id
             );
         }
 
-        $fee->update(['is_active' => $newActive]);
-        $fee->load('application:id,name,code');
+        $fee->is_active = $newStatus;
+        $fee->save();
 
-        $this->recordAudit($request, $newActive ? 'dana_fee_setting.activated' : 'dana_fee_setting.deactivated', 'succeeded', [
+        $this->recordAudit($request, 'dana_fee_setting.status_toggled', 'succeeded', [
             'id' => $fee->id,
+            'is_active' => $fee->is_active,
+            'gateway_merchant_code' => $fee->gateway_merchant_code,
+            'application_id' => $fee->application_id,
             'payment_method' => $fee->payment_method,
             'environment' => $fee->environment,
-            'fee_type' => $fee->fee_type,
-            'is_active' => $newActive,
         ]);
 
         return response()->json([
             'status' => 'success',
             'message' => 'Status biaya berhasil diperbarui.',
-            'data' => $fee,
+            'data' => [
+                'id' => $fee->id,
+                'is_active' => $fee->is_active,
+            ],
         ]);
     }
 
@@ -281,17 +316,19 @@ class DanaFeeSettingController extends Controller
     {
         $fee = DanaPaymentFeeSetting::query()->findOrFail($id);
 
-        $details = [
+        $backup = [
             'id' => $fee->id,
+            'gateway_merchant_code' => $fee->gateway_merchant_code,
             'application_id' => $fee->application_id,
             'payment_method' => $fee->payment_method,
             'environment' => $fee->environment,
             'fee_type' => $fee->fee_type,
+            'fee_value' => $fee->fee_value,
         ];
 
         $fee->delete();
 
-        $this->recordAudit($request, 'dana_fee_setting.deleted', 'succeeded', $details);
+        $this->recordAudit($request, 'dana_fee_setting.deleted', 'succeeded', $backup);
 
         return response()->json([
             'status' => 'success',
@@ -300,13 +337,14 @@ class DanaFeeSettingController extends Controller
     }
 
     /**
-     * Simulate fee calculation.
+     * Preview fee calculation for simulation card in frontend.
      */
     public function calculatePreview(Request $request): JsonResponse
     {
         $validated = $request->validate([
-            'payment_method' => ['required', 'string'],
             'amount' => ['required', 'numeric', 'min:1'],
+            'payment_method' => ['required', 'string'],
+            'gateway_merchant_code' => ['nullable', 'string', 'max:60'],
             'environment' => ['nullable', 'string', 'in:sandbox,production'],
             'application_id' => ['nullable', 'integer', 'exists:applications,id'],
         ]);
@@ -316,8 +354,11 @@ class DanaFeeSettingController extends Controller
         $amount = (float) $validated['amount'];
         $appId = isset($validated['application_id']) ? (int) $validated['application_id'] : null;
 
-        $primaryCode = DanaEnvironmentSetting::getPrimaryMerchantCode($env);
-        $result = $this->feeService->calculateFee($primaryCode, $method, $amount, $env, $appId);
+        $merchantCode = ! empty($validated['gateway_merchant_code'])
+            ? trim($validated['gateway_merchant_code'])
+            : DanaEnvironmentSetting::getPrimaryMerchantCode($env);
+
+        $result = $this->feeService->calculateFee($merchantCode, $method, $amount, $env, $appId);
 
         return response()->json([
             'status' => 'success',
@@ -335,29 +376,26 @@ class DanaFeeSettingController extends Controller
         string $paymentMethod,
         string $feeType,
         ?int $applicationId,
+        ?string $merchantCode = null,
         ?int $ignoreId = null,
     ): void {
+        $scopeKey = DanaPaymentFeeSetting::buildScopeKey($applicationId, $merchantCode);
+
         $query = DanaPaymentFeeSetting::query()
+            ->where('scope_key', $scopeKey)
             ->where('environment', $environment)
             ->where('payment_method', $paymentMethod)
             ->where('fee_type', $feeType)
             ->where('is_active', true);
-
-        if ($applicationId === null) {
-            $query->whereNull('application_id');
-        } else {
-            $query->where('application_id', $applicationId);
-        }
 
         if ($ignoreId !== null) {
             $query->where('id', '!=', $ignoreId);
         }
 
         if ($query->exists()) {
-            $scope = $applicationId ? 'aplikasi terpilih' : 'default global';
             throw ValidationException::withMessages([
                 'payment_method' => [
-                    "Tarif aktif untuk metode '{$paymentMethod}' tipe '{$feeType}' pada environment '{$environment}' ({$scope}) sudah ada. Nonaktifkan tarif sebelumnya terlebih dahulu.",
+                    "Tarif aktif untuk metode '{$paymentMethod}' tipe '{$feeType}' pada environment '{$environment}' (scope: '{$scopeKey}') sudah ada. Nonaktifkan tarif sebelumnya terlebih dahulu.",
                 ],
             ]);
         }
@@ -371,7 +409,7 @@ class DanaFeeSettingController extends Controller
         DanaMerchantProvisioningAudit::query()->create([
             'admin_user_id' => (int) $request->user()->getAuthIdentifier(),
             'operation' => $operation,
-            'merchant_code' => 'udev-central',
+            'merchant_code' => $safeDetails['gateway_merchant_code'] ?? 'udev-central',
             'gateway_merchant_id' => null,
             'environment' => $safeDetails['environment'] ?? 'sandbox',
             'idempotency_fingerprint' => hash('sha256', "{$operation}:".json_encode($safeDetails)),

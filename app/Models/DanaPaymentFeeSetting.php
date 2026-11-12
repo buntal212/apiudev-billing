@@ -31,7 +31,9 @@ class DanaPaymentFeeSetting extends Model
     protected $table = 'dana_payment_fee_settings';
 
     protected $fillable = [
+        'gateway_merchant_code',
         'application_id',
+        'scope_key',
         'payment_method',
         'environment',
         'fee_type',
@@ -48,6 +50,32 @@ class DanaPaymentFeeSetting extends Model
             'fee_value' => 'decimal:2',
             'is_active' => 'boolean',
         ];
+    }
+
+    protected static function booted(): void
+    {
+        static::saving(function (DanaPaymentFeeSetting $setting): void {
+            $setting->scope_key = self::buildScopeKey($setting->application_id, $setting->gateway_merchant_code);
+        });
+    }
+
+    /**
+     * Build deterministic scope key ensuring no duplicate null values in MySQL.
+     */
+    public static function buildScopeKey(?int $applicationId = null, ?string $merchantCode = null): string
+    {
+        $merchant = trim((string) $merchantCode);
+        if ($applicationId !== null && $merchant !== '') {
+            return "app:{$applicationId}:merchant:{$merchant}";
+        }
+        if ($applicationId !== null) {
+            return "app:{$applicationId}";
+        }
+        if ($merchant !== '') {
+            return "merchant:{$merchant}";
+        }
+
+        return 'global';
     }
 
     public function application(): BelongsTo

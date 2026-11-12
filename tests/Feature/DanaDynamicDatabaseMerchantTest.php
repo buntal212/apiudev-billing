@@ -170,6 +170,17 @@ class DanaDynamicDatabaseMerchantTest extends TestCase
             'is_active' => true,
         ]);
 
+        \App\Models\DanaPaymentFeeSetting::query()->create([
+            'gateway_merchant_code' => 'MRC-APP-MERCHANT',
+            'application_id' => null,
+            'payment_method' => 'dana_wallet',
+            'environment' => 'sandbox',
+            'fee_type' => 'dana',
+            'fee_value' => 0.00,
+            'fee_unit' => 'rupiah',
+            'is_active' => true,
+        ]);
+
         $invoice = Invoice::factory()->create([
             'application_customer_id' => $customer->id,
             'amount' => '50000.00',
