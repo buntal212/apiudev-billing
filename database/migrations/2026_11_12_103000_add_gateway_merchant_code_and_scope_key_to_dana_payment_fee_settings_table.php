@@ -14,7 +14,7 @@ return new class extends Migration
             return;
         }
 
-        // 1. Tambahkan kolom baru jika belum ada
+        // 1. Tambahkan kolom baru jika belum ada (idempoten terhadap kegagalan parsial)
         Schema::table('dana_payment_fee_settings', function (Blueprint $table): void {
             if (! Schema::hasColumn('dana_payment_fee_settings', 'gateway_merchant_code')) {
                 $table->string('gateway_merchant_code', 60)->nullable()->after('application_id');
@@ -45,9 +45,11 @@ return new class extends Migration
                 }
             }
 
-            DB::table('dana_payment_fee_settings')
-                ->where('id', $record->id)
-                ->update(['scope_key' => $scopeKey]);
+            if (($record->scope_key ?? null) !== $scopeKey) {
+                DB::table('dana_payment_fee_settings')
+                    ->where('id', $record->id)
+                    ->update(['scope_key' => $scopeKey]);
+            }
         }
 
         // 3. Deteksi duplikasi sebelum membuat unique index baru (fail-safe tanpa menghapus data)
@@ -71,17 +73,17 @@ return new class extends Migration
         // 4. Periksa dan sesuaikan index
         $existingIndexes = collect(Schema::getIndexes('dana_payment_fee_settings'))->pluck('name')->filter()->all();
 
+        // Drop unique constraint lama jika masih ada (pada kegagalan parsial sebelumnya, unique index ini mungkin sudah terhapus)
         if (in_array('dana_fee_settings_app_env_method_type_uq', $existingIndexes, true)) {
             Schema::table('dana_payment_fee_settings', function (Blueprint $table): void {
                 $table->dropUnique('dana_fee_settings_app_env_method_type_uq');
             });
         }
 
-        if (in_array('dana_fee_lookup_idx', $existingIndexes, true)) {
-            Schema::table('dana_payment_fee_settings', function (Blueprint $table): void {
-                $table->dropIndex('dana_fee_lookup_idx');
-            });
-        }
+        // PERHATIAN: JANGAN drop index 'dana_fee_lookup_idx'.
+        // Index ini meng-index kolom 'application_id' dan dibutuhkan oleh foreign key constraint
+        // 'dana_payment_fee_settings_application_id_foreign'. Menghapusnya menyebabkan MySQL error 1553.
+        // Index ini dipertahankan sebagai indeks penopang foreign key.
 
         Schema::table('dana_payment_fee_settings', function (Blueprint $table) use ($existingIndexes): void {
             if (! in_array('dana_setting_scope_lookup_idx', $existingIndexes, true)) {
@@ -123,9 +125,6 @@ return new class extends Migration
 
             if (! in_array('dana_fee_settings_app_env_method_type_uq', $existingIndexes, true)) {
                 $table->unique(['application_id', 'environment', 'payment_method', 'fee_type'], 'dana_fee_settings_app_env_method_type_uq');
-            }
-            if (! in_array('dana_fee_lookup_idx', $existingIndexes, true)) {
-                $table->index(['application_id', 'environment', 'payment_method', 'fee_type'], 'dana_fee_lookup_idx');
             }
 
             if (Schema::hasColumn('dana_payment_fee_settings', 'gateway_merchant_code')) {

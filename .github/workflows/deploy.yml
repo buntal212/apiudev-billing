@@ -178,6 +178,41 @@ jobs:
           }
 
           # Never touch persistent storage or modify production cache during staging.
+          ensure_storage_permissions() {
+            local storage_root="$1"
+            mkdir -p "$storage_root/logs" \
+                     "$storage_root/framework/cache/data" \
+                     "$storage_root/framework/sessions" \
+                     "$storage_root/framework/views" \
+                     "$storage_root/app"
+
+            # Gunakan permission 0775 (u=rwx,g=rwx,o=rx) pada direktori storage - JANGAN chmod 777
+            chmod 775 "$storage_root/logs" \
+                      "$storage_root/framework" \
+                      "$storage_root/framework/cache" \
+                      "$storage_root/framework/cache/data" \
+                      "$storage_root/framework/sessions" \
+                      "$storage_root/framework/views" \
+                      "$storage_root/app" 2>/dev/null || true
+
+            # Pastikan laravel.log ada dan memiliki permission 0664 (u=rw,g=rw,o=r) - JANGAN chmod 777
+            if [[ ! -e "$storage_root/logs/laravel.log" ]]; then
+              touch "$storage_root/logs/laravel.log"
+            fi
+            chmod 664 "$storage_root/logs/laravel.log" 2>/dev/null || true
+
+            # Jika POSIX ACL tersedia, terapkan ACL khusus user web tanpa chmod 777
+            if command -v setfacl >/dev/null 2>&1; then
+              for web_user in www www-data nginx; do
+                if id "$web_user" >/dev/null 2>&1; then
+                  setfacl -R -m "u:$web_user:rwX" -m "g:$web_user:rwX" "$storage_root/logs" 2>/dev/null || true
+                  setfacl -d -R -m "u:$web_user:rwX" -m "g:$web_user:rwX" "$storage_root/logs" 2>/dev/null || true
+                  break
+                fi
+              done
+            fi
+          }
+
           ensure_storage_link() {
             [[ -d "$SHARED_STORAGE" && ! -L "$SHARED_STORAGE" ]] || \
               fail "Shared storage missing or unsafe: $SHARED_STORAGE"
@@ -193,6 +228,7 @@ jobs:
                 fail 'Cannot create production storage symlink; check runner permissions'
             fi
             [[ -d "$APP_DIR/storage" ]] || fail 'Production storage link is not usable'
+            ensure_storage_permissions "$SHARED_STORAGE"
             echo '=== Shared storage verified ==='
           }
 
@@ -354,6 +390,9 @@ jobs:
               --internal \
               --no-interaction
           )
+
+          echo '=== Menyelaraskan permission storage/logs/laravel.log (0664) ==='
+          ensure_storage_permissions "$SHARED_STORAGE"
 
           ACTIVATION_STARTED=0
           DEPLOY_OK=1

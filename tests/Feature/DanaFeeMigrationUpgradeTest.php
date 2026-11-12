@@ -2,6 +2,7 @@
 
 namespace Tests\Feature;
 
+use App\Models\Application;
 use App\Models\DanaPaymentFeeSetting;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
@@ -12,7 +13,7 @@ class DanaFeeMigrationUpgradeTest extends TestCase
 {
     use RefreshDatabase;
 
-    public function test_migration_upgrades_legacy_schema_backfills_scope_key_and_sets_unique_index(): void
+    public function test_migration_upgrades_legacy_schema_backfills_scope_key_and_preserves_fk_index(): void
     {
         // 1. Verifikasi tabel saat ini sudah memiliki kolom baru dari migration lengkap
         $this->assertTrue(Schema::hasTable('dana_payment_fee_settings'));
@@ -28,7 +29,7 @@ class DanaFeeMigrationUpgradeTest extends TestCase
         $this->assertFalse(Schema::hasColumn('dana_payment_fee_settings', 'scope_key'));
 
         // 3. Buat aplikasi dan masukkan data legacy
-        $app = \App\Models\Application::factory()->create();
+        $app = Application::factory()->create();
         $now = now();
         DB::table('dana_payment_fee_settings')->insert([
             [
@@ -80,7 +81,12 @@ class DanaFeeMigrationUpgradeTest extends TestCase
         $this->assertNotNull($appRecord);
         $this->assertSame("app:{$app->id}", $appRecord->scope_key);
 
-        // 6. Verifikasi unique constraint baru mencegah duplikasi scope_key
+        // 6. Verifikasi index penopang foreign key 'dana_fee_lookup_idx' tetap dipertahankan
+        $indexes = collect(Schema::getIndexes('dana_payment_fee_settings'))->pluck('name')->all();
+        $this->assertContains('dana_fee_lookup_idx', $indexes, 'Index dana_fee_lookup_idx harus tetap ada untuk menopang foreign key application_id');
+        $this->assertContains('dana_setting_scope_env_method_type_uq', $indexes, 'Unique index dana_setting_scope_env_method_type_uq harus terpasang');
+
+        // 7. Verifikasi unique constraint baru mencegah duplikasi scope_key
         $this->expectException(\Illuminate\Database\QueryException::class);
         DB::table('dana_payment_fee_settings')->insert([
             'scope_key' => 'global',
@@ -97,6 +103,54 @@ class DanaFeeMigrationUpgradeTest extends TestCase
         ]);
     }
 
+    public function test_migration_is_safe_for_partial_ddl_failure_rerun(): void
+    {
+        $newMigration = require database_path('migrations/2026_11_12_103000_add_gateway_merchant_code_and_scope_key_to_dana_payment_fee_settings_table.php');
+        $newMigration->down();
+
+        $app = Application::factory()->create();
+        $now = now();
+        DB::table('dana_payment_fee_settings')->insert([
+            'application_id' => $app->id,
+            'payment_method' => 'qris',
+            'environment' => 'sandbox',
+            'fee_type' => 'dana',
+            'fee_value' => 0.70,
+            'fee_unit' => 'percent',
+            'is_active' => 1,
+            'notes' => 'Existing fee',
+            'created_at' => $now,
+            'updated_at' => $now,
+        ]);
+
+        // Simulasikan status pasca kegagalan parsial di Production:
+        // 1. Kolom gateway_merchant_code dan scope_key sudah terlanjur dibuat
+        Schema::table('dana_payment_fee_settings', function ($table) {
+            $table->string('gateway_merchant_code', 60)->nullable();
+            $table->string('scope_key', 120)->default('global');
+        });
+
+        // 2. Unique index lama sudah terlanjur di-drop
+        $indexes = collect(Schema::getIndexes('dana_payment_fee_settings'))->pluck('name')->all();
+        if (in_array('dana_fee_settings_app_env_method_type_uq', $indexes, true)) {
+            Schema::table('dana_payment_fee_settings', function ($table) {
+                $table->dropUnique('dana_fee_settings_app_env_method_type_uq');
+            });
+        }
+
+        // Sekarang jalankan migration up() (re-run setelah crash 1553)
+        // Migration TIDAK BOLEH error karena duplicate column atau missing index
+        $newMigration->up();
+
+        // Verifikasi hasil akhir tetap valid dan lengkap
+        $updatedIndexes = collect(Schema::getIndexes('dana_payment_fee_settings'))->pluck('name')->all();
+        $this->assertContains('dana_setting_scope_env_method_type_uq', $updatedIndexes);
+        $this->assertContains('dana_fee_lookup_idx', $updatedIndexes);
+
+        $row = DB::table('dana_payment_fee_settings')->where('application_id', $app->id)->first();
+        $this->assertSame("app:{$app->id}", $row->scope_key);
+    }
+
     public function test_migration_detects_duplicates_before_creating_unique_index_and_does_not_delete_data(): void
     {
         $newMigration = require database_path('migrations/2026_11_12_103000_add_gateway_merchant_code_and_scope_key_to_dana_payment_fee_settings_table.php');
@@ -104,8 +158,6 @@ class DanaFeeMigrationUpgradeTest extends TestCase
 
         $now = now();
 
-        // Buat 2 record legacy dengan application_id = null yang sama
-        // Pada MySQL/SQLite lama tanpa scope_key unik, ini bisa terjadi jika null tidak dianggap unik
         DB::table('dana_payment_fee_settings')->insert([
             [
                 'application_id' => null,
@@ -139,7 +191,6 @@ class DanaFeeMigrationUpgradeTest extends TestCase
         try {
             $newMigration->up();
         } finally {
-            // Pastikan data tidak dihapus otomatis
             $count = DB::table('dana_payment_fee_settings')->count();
             $this->assertSame(2, $count, 'Migration tidak boleh menghapus data existing secara otomatis saat ada duplikasi.');
         }
