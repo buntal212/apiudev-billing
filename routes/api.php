@@ -10,6 +10,7 @@ use App\Http\Controllers\Api\V1\Admin\ApplicationIntegrationTokenController;
 use App\Http\Controllers\Api\V1\Admin\ApplicationPaymentGatewayController;
 use App\Http\Controllers\Api\V1\Admin\BillingGatewayTransactionController;
 use App\Http\Controllers\Api\V1\Admin\DanaFeeController;
+use App\Http\Controllers\Api\V1\Admin\DanaFeeSettingController;
 use App\Http\Controllers\Api\V1\Admin\DanaGatewayMerchantProvisioningController;
 use App\Http\Controllers\Api\V1\Admin\DokuGatewayAdminController;
 use App\Http\Controllers\Api\V1\Admin\InvoiceCheckoutController;
@@ -241,6 +242,15 @@ Route::prefix('v1/admin')
             ->only(['index', 'show']);
         Route::get('payment-gateways/dana/fee', [DanaFeeController::class, 'preview']);
         Route::get('payment-gateways/dana/fees', [DanaFeeController::class, 'index']);
+        Route::prefix('dana-gateway')->group(function (): void {
+            Route::get('fees', [DanaFeeSettingController::class, 'index'])->name('dana.fees.index');
+            Route::post('fees', [DanaFeeSettingController::class, 'store'])->name('dana.fees.store');
+            Route::get('fees/{id}', [DanaFeeSettingController::class, 'show'])->name('dana.fees.show');
+            Route::put('fees/{id}', [DanaFeeSettingController::class, 'update'])->name('dana.fees.update');
+            Route::patch('fees/{id}/status', [DanaFeeSettingController::class, 'toggleStatus'])->name('dana.fees.status');
+            Route::delete('fees/{id}', [DanaFeeSettingController::class, 'destroy'])->name('dana.fees.destroy');
+            Route::post('calculate-fee', [DanaFeeSettingController::class, 'calculatePreview'])->name('dana.fees.calculate');
+        });
         Route::apiResource('invoices', InvoiceController::class)
             ->only(['index', 'store', 'show']);
         Route::post('invoices/{invoice}/reconcile', [InvoiceController::class, 'reconcile'])

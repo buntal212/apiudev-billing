@@ -379,6 +379,7 @@ class CheckoutService
                     paymentMethod: $paymentMethod,
                     merchantCode: $recipientMerchantCode,
                     environment: $chosenEnvironment,
+                    applicationId: $appId,
                 );
                 $attemptAmount = $feeSnapshot['total_amount'];
 
