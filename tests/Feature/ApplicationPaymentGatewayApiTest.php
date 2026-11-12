@@ -30,6 +30,9 @@ class ApplicationPaymentGatewayApiTest extends TestCase
                     'merchant-bersama' => 'sandbox-secret',
                     'merchant-nonaktif' => 'inactive-secret',
                 ],
+                'production' => [
+                    'merchant-produksi' => 'production-secret',
+                ],
             ],
             'merchants' => [
                 'sandbox' => [
@@ -292,6 +295,121 @@ class ApplicationPaymentGatewayApiTest extends TestCase
 
         $codes = collect($response->json('data'))->pluck('code')->all();
         $this->assertContains('doku-opt-test', $codes);
+    }
+
+    public function test_one_application_can_have_both_dana_sandbox_and_production_mappings_concurrently(): void
+    {
+        $application = Application::factory()->create(['name' => 'Dual Env App', 'code' => 'dual-env-app']);
+        $this->actingAdmin();
+
+        // 1. Create Sandbox mapping
+        $resSbx = $this->postJson('/api/v1/admin/payment-gateways', $this->payload($application, [
+            'environment' => 'sandbox',
+            'gateway_merchant_code' => 'merchant-bersama',
+            'is_active' => true,
+        ]))->assertCreated()
+            ->assertJsonPath('data.application_id', $application->id)
+            ->assertJsonPath('data.environment', 'sandbox')
+            ->assertJsonPath('data.gateway_merchant_code', 'merchant-bersama');
+
+        // 2. Create Production mapping on the same application
+        $resProd = $this->postJson('/api/v1/admin/payment-gateways', $this->payload($application, [
+            'environment' => 'production',
+            'gateway_merchant_code' => 'merchant-produksi',
+            'is_active' => true,
+        ]))->assertCreated()
+            ->assertJsonPath('data.application_id', $application->id)
+            ->assertJsonPath('data.environment', 'production')
+            ->assertJsonPath('data.gateway_merchant_code', 'merchant-produksi');
+
+        $this->assertDatabaseCount('application_payment_gateways', 2);
+
+        // 3. List mappings for this application shows both rows
+        $listRes = $this->getJson("/api/v1/admin/payment-gateways?application_id={$application->id}&provider=dana")
+            ->assertOk()
+            ->assertJsonCount(2, 'data');
+
+        $envs = collect($listRes->json('data'))->pluck('environment')->all();
+        $this->assertContains('sandbox', $envs);
+        $this->assertContains('production', $envs);
+    }
+
+    public function test_duplicate_dana_mapping_for_same_environment_is_rejected_with_descriptive_error(): void
+    {
+        $application = Application::factory()->create();
+        $this->actingAdmin();
+
+        // First mapping
+        $this->postJson('/api/v1/admin/payment-gateways', $this->payload($application, [
+            'environment' => 'sandbox',
+            'gateway_merchant_code' => 'merchant-bersama',
+        ]))->assertCreated();
+
+        // Duplicate mapping for same application + provider + sandbox
+        $this->postJson('/api/v1/admin/payment-gateways', $this->payload($application, [
+            'environment' => 'sandbox',
+            'gateway_merchant_code' => 'merchant-bersama',
+        ]))->assertUnprocessable()
+            ->assertJsonValidationErrors(['application_id'])
+            ->assertJsonPath('errors.application_id.0', 'Aplikasi sudah memiliki mapping untuk provider dan environment ini.');
+    }
+
+    public function test_updating_mapping_environment_to_existing_environment_is_rejected(): void
+    {
+        $application = Application::factory()->create();
+        $this->actingAdmin();
+
+        $sbx = ApplicationPaymentGateway::query()->create($this->payload($application, [
+            'environment' => 'sandbox',
+            'gateway_merchant_code' => 'merchant-bersama',
+        ]));
+
+        $prod = ApplicationPaymentGateway::query()->create($this->payload($application, [
+            'environment' => 'production',
+            'gateway_merchant_code' => 'merchant-produksi',
+        ]));
+
+        // Try to update prod to sandbox (which already exists)
+        $this->patchJson("/api/v1/admin/payment-gateways/{$prod->id}", [
+            'environment' => 'sandbox',
+        ])->assertUnprocessable()
+            ->assertJsonValidationErrors(['environment'])
+            ->assertJsonPath('errors.environment.0', 'Aplikasi sudah memiliki mapping untuk provider dan environment ini.');
+    }
+
+    public function test_updating_merchant_code_or_status_operates_independently_across_environments(): void
+    {
+        $application = Application::factory()->create();
+        $this->actingAdmin();
+
+        $sbx = ApplicationPaymentGateway::query()->create($this->payload($application, [
+            'environment' => 'sandbox',
+            'gateway_merchant_code' => 'merchant-bersama',
+            'is_active' => true,
+        ]));
+
+        $prod = ApplicationPaymentGateway::query()->create($this->payload($application, [
+            'environment' => 'production',
+            'gateway_merchant_code' => 'merchant-produksi',
+            'is_active' => true,
+        ]));
+
+        // Update sandbox active state to false
+        $this->patchJson("/api/v1/admin/payment-gateways/{$sbx->id}", [
+            'is_active' => false,
+        ])->assertOk()->assertJsonPath('data.is_active', false);
+
+        // Prod remains active and intact
+        $this->assertDatabaseHas('application_payment_gateways', [
+            'id' => $sbx->id,
+            'environment' => 'sandbox',
+            'is_active' => false,
+        ]);
+        $this->assertDatabaseHas('application_payment_gateways', [
+            'id' => $prod->id,
+            'environment' => 'production',
+            'is_active' => true,
+        ]);
     }
 
     /** @return array<string, mixed> */

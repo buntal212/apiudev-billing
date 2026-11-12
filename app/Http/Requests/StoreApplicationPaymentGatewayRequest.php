@@ -40,4 +40,14 @@ class StoreApplicationPaymentGatewayRequest extends ApiFormRequest
 
         return $rules;
     }
+
+    /**
+     * @return array<string, string>
+     */
+    public function messages(): array
+    {
+        return [
+            'application_id.unique' => 'Aplikasi sudah memiliki mapping untuk provider dan environment ini.',
+        ];
+    }
 }

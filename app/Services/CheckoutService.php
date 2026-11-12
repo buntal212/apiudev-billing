@@ -55,8 +55,9 @@ class CheckoutService
         string $paymentMethod = 'dana_wallet',
         ?string $provider = null,
         ?string $bank = null,
+        ?string $environment = null,
     ): PaymentAttempt {
-        $outbox = $this->prepareCheckout($invoice, $requestIdempotencyKey, $paymentMethod, $provider, $bank);
+        $outbox = $this->prepareCheckout($invoice, $requestIdempotencyKey, $paymentMethod, $provider, $bank, $environment);
         $this->dispatch($outbox->getKey());
 
         return PaymentAttempt::query()->findOrFail($outbox->payment_attempt_id);
@@ -115,9 +116,10 @@ class CheckoutService
         string $paymentMethod = 'dana_wallet',
         ?string $provider = null,
         ?string $bank = null,
+        ?string $environment = null,
     ): CheckoutOutboxMessage {
         try {
-            return DB::transaction(function () use ($invoice, $requestIdempotencyKey, $paymentMethod, $provider, $bank): CheckoutOutboxMessage {
+            return DB::transaction(function () use ($invoice, $requestIdempotencyKey, $paymentMethod, $provider, $bank, $environment): CheckoutOutboxMessage {
                 $lockedInvoice = Invoice::query()
                     ->with('plan')
                     ->lockForUpdate()
@@ -209,7 +211,7 @@ class CheckoutService
                 $merchantReference = $lockedInvoice->invoice_number.'-A'.$attemptNumber;
 
                 if ($resolvedProvider === 'midtrans') {
-                    $activeEnvironment = app(MidtransEnvironmentService::class)->getActiveEnvironment();
+                    $activeEnvironment = $environment ?: app(MidtransEnvironmentService::class)->getActiveEnvironment();
                     $appId = $lockedInvoice->plan?->application_id ?? $lockedInvoice->customer?->application_id;
                     $mapping = ApplicationPaymentGateway::query()
                         ->where('application_id', $appId)
@@ -289,6 +291,9 @@ class CheckoutService
                 }
 
                 $appId = $lockedInvoice->plan?->application_id ?? $lockedInvoice->customer?->application_id;
+                $targetEnv = $environment ?: $this->danaEnvironmentService->getActiveEnvironment();
+                $primaryMerchantCode = $this->danaEnvironmentService->getPrimaryMerchantCode($targetEnv);
+                $centralMerchantCodes = array_values(array_unique([$primaryMerchantCode, 'udev-central', 'udev-demo']));
 
                 $prodDanaMapping = $appId !== null
                     ? ApplicationPaymentGateway::query()
@@ -308,10 +313,6 @@ class CheckoutService
                         ->first()
                     : null;
 
-                $activeDanaEnv = $this->danaEnvironmentService->getActiveEnvironment();
-                $primaryMerchantCode = $this->danaEnvironmentService->getPrimaryMerchantCode($activeDanaEnv);
-                $centralMerchantCodes = array_values(array_unique([$primaryMerchantCode, 'udev-central', 'udev-demo']));
-
                 // Application mappings pointing to primary merchant, 'udev-central', or legacy 'udev-demo' are central/legacy
                 // fallbacks for UDEV subscriptions; only distinct tenant merchants represent customer applications.
                 $hasCustomerTenantMapping = ($prodDanaMapping !== null && ! in_array($prodDanaMapping->gateway_merchant_code, $centralMerchantCodes, true))
@@ -320,45 +321,44 @@ class CheckoutService
                 $isCustomerAppInvoice = $hasCustomerTenantMapping;
 
                 if ($isCustomerAppInvoice) {
-                    $chosenEnvironment = null;
+                    $chosenEnvironment = $targetEnv;
                     $recipientMerchantCode = null;
 
-                    // Prioritaskan Production jika ada mapping aktif, approved, dan credential lengkap/terverifikasi
-                    if ($prodDanaMapping !== null && ! in_array($prodDanaMapping->gateway_merchant_code, $centralMerchantCodes, true)) {
-                        $prodReadiness = $this->merchantCatalog->readiness($prodDanaMapping->gateway_merchant_code, 'production');
-                        if ($prodReadiness['ready']) {
-                            $chosenEnvironment = 'production';
-                            $recipientMerchantCode = $prodDanaMapping->gateway_merchant_code;
-                        }
-                    }
-
-                    if ($recipientMerchantCode === null) {
-                        if ($activeDanaEnv === 'production') {
+                    if ($targetEnv === 'production') {
+                        if ($prodDanaMapping === null || in_array($prodDanaMapping->gateway_merchant_code, $centralMerchantCodes, true)) {
                             throw ValidationException::withMessages([
                                 'invoice' => ['Merchant DANA Production untuk aplikasi ini belum siap digunakan. Transaksi live tidak dapat dialihkan ke Sandbox.'],
                             ]);
                         }
 
-                        if ($sandboxDanaMapping !== null && ! in_array($sandboxDanaMapping->gateway_merchant_code, $centralMerchantCodes, true)) {
-                            $sandboxReadiness = $this->merchantCatalog->readiness($sandboxDanaMapping->gateway_merchant_code, 'sandbox');
-                            if ($sandboxReadiness['ready']) {
-                                $chosenEnvironment = 'sandbox';
-                                $recipientMerchantCode = $sandboxDanaMapping->gateway_merchant_code;
-                            } else {
-                                throw ValidationException::withMessages([
-                                    'invoice' => ['Merchant DANA Sandbox aplikasi belum siap digunakan.'],
-                                ]);
-                            }
-                        } else {
+                        $prodReadiness = $this->merchantCatalog->readiness($prodDanaMapping->gateway_merchant_code, 'production');
+                        if (! $prodReadiness['ready']) {
                             throw ValidationException::withMessages([
-                                'invoice' => ['Aplikasi invoice belum memiliki mapping merchant DANA yang siap digunakan.'],
+                                'invoice' => ['Merchant DANA Production untuk aplikasi ini belum siap digunakan. Transaksi live tidak dapat dialihkan ke Sandbox.'],
                             ]);
                         }
+
+                        $recipientMerchantCode = $prodDanaMapping->gateway_merchant_code;
+                    } else {
+                        if ($sandboxDanaMapping === null || in_array($sandboxDanaMapping->gateway_merchant_code, $centralMerchantCodes, true)) {
+                            throw ValidationException::withMessages([
+                                'invoice' => ['Merchant DANA Sandbox aplikasi belum siap digunakan.'],
+                            ]);
+                        }
+
+                        $sandboxReadiness = $this->merchantCatalog->readiness($sandboxDanaMapping->gateway_merchant_code, 'sandbox');
+                        if (! $sandboxReadiness['ready']) {
+                            throw ValidationException::withMessages([
+                                'invoice' => ['Merchant DANA Sandbox aplikasi belum siap digunakan.'],
+                            ]);
+                        }
+
+                        $recipientMerchantCode = $sandboxDanaMapping->gateway_merchant_code;
                     }
 
                     $isCentral = false;
                 } else {
-                    $chosenEnvironment = $activeDanaEnv;
+                    $chosenEnvironment = $targetEnv;
                     if ($chosenEnvironment === 'production') {
                         $setting = $this->danaEnvironmentService->getSetting();
                         $centralProdReadiness = $this->merchantCatalog->readiness($primaryMerchantCode, 'production');
@@ -685,20 +685,13 @@ class CheckoutService
                 ->where('is_active', true)
                 ->first();
 
+            $danaEnv = $this->danaEnvironmentService->getActiveEnvironment();
             $danaMapping = ApplicationPaymentGateway::query()
                 ->where('application_id', $appId)
                 ->where('provider', 'dana')
-                ->where('environment', $activeEnvironment)
+                ->where('environment', $danaEnv)
                 ->where('is_active', true)
                 ->first();
-
-            if ($danaMapping === null) {
-                $danaMapping = ApplicationPaymentGateway::query()
-                    ->where('application_id', $appId)
-                    ->where('provider', 'dana')
-                    ->where('is_active', true)
-                    ->first();
-            }
 
             if ($paymentMethod === 'va_bri') {
                 if ($danaMapping !== null && $midtransMapping === null) {

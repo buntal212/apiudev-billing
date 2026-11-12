@@ -116,6 +116,15 @@ class DanaMultiMerchantDualEnvironmentTest extends TestCase
             'is_active' => true,
         ]);
 
+        // Activate Production
+        DanaEnvironmentSetting::query()->updateOrCreate(
+            ['gateway' => 'dana'],
+            [
+                'active_environment' => 'production',
+                'is_production_ready' => true,
+            ]
+        );
+
         $this->fakeGateway('gateway-pay-prod', 'production');
 
         $this->actingAdmin()
@@ -127,6 +136,50 @@ class DanaMultiMerchantDualEnvironmentTest extends TestCase
         $attempt = PaymentAttempt::query()->where('invoice_id', $invoice->id)->sole();
         $this->assertSame('larissama', $attempt->gateway_merchant_code);
         $this->assertSame('production', $attempt->gateway_environment);
+        $this->assertSame('application_customer', $attempt->metadata['billing_recipient'] ?? null);
+    }
+
+    public function test_customer_application_with_dual_mapping_selects_sandbox_when_environment_is_sandbox(): void
+    {
+        $application = Application::factory()->create(['code' => 'APP-DUAL', 'name' => 'Dual App']);
+        $customer = ApplicationCustomer::factory()->create(['application_id' => $application->id]);
+        $plan = SubscriptionPlan::factory()->create(['application_id' => $application->id, 'price' => 50000]);
+
+        $invoice = Invoice::factory()->create([
+            'application_customer_id' => $customer->id,
+            'subscription_plan_id' => $plan->id,
+            'amount' => '50000.00',
+            'currency' => 'IDR',
+            'due_at' => now()->addDay(),
+        ]);
+
+        ApplicationPaymentGateway::query()->create([
+            'application_id' => $application->id,
+            'provider' => 'dana',
+            'environment' => 'production',
+            'gateway_merchant_code' => 'larissama',
+            'is_active' => true,
+        ]);
+
+        ApplicationPaymentGateway::query()->create([
+            'application_id' => $application->id,
+            'provider' => 'dana',
+            'environment' => 'sandbox',
+            'gateway_merchant_code' => 'larissama',
+            'is_active' => true,
+        ]);
+
+        $this->fakeGateway('gateway-pay-sbx', 'sandbox');
+
+        $this->actingAdmin()
+            ->postJson("/api/v1/admin/invoices/{$invoice->id}/checkout", [
+                'payment_method' => 'qris',
+            ], ['Idempotency-Key' => 'test-idemp-dual-sbx'])
+            ->assertOk();
+
+        $attempt = PaymentAttempt::query()->where('invoice_id', $invoice->id)->sole();
+        $this->assertSame('larissama', $attempt->gateway_merchant_code);
+        $this->assertSame('sandbox', $attempt->gateway_environment);
         $this->assertSame('application_customer', $attempt->metadata['billing_recipient'] ?? null);
     }
 
@@ -187,6 +240,15 @@ class DanaMultiMerchantDualEnvironmentTest extends TestCase
             'gateway_merchant_code' => 'larissama',
             'is_active' => true,
         ]);
+
+        // Activate Production
+        DanaEnvironmentSetting::query()->updateOrCreate(
+            ['gateway' => 'dana'],
+            [
+                'active_environment' => 'production',
+                'is_production_ready' => true,
+            ]
+        );
 
         // Simulasi Production Gateway 500 Internal Server Error
         Http::fake(function (HttpRequest $request) {
@@ -588,6 +650,15 @@ class DanaMultiMerchantDualEnvironmentTest extends TestCase
             'gateway_merchant_code' => 'larissama',
             'is_active' => true,
         ]);
+
+        // Activate Production
+        DanaEnvironmentSetting::query()->updateOrCreate(
+            ['gateway' => 'dana'],
+            [
+                'active_environment' => 'production',
+                'is_production_ready' => true,
+            ]
+        );
 
         $receivedEnvironment = null;
         Http::fake(function (HttpRequest $request) use (&$receivedEnvironment) {

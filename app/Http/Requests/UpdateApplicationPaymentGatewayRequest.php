@@ -20,34 +20,33 @@ class UpdateApplicationPaymentGatewayRequest extends ApiFormRequest
     {
         /** @var ApplicationPaymentGateway $gateway */
         $gateway = $this->route('payment_gateway');
-        $environment = $this->input('environment', $gateway->environment);
 
         $envRules = [
             'sometimes',
             'in:sandbox,production',
-            Rule::unique('application_payment_gateways', 'application_id')
+            Rule::unique('application_payment_gateways', 'environment')
+                ->where('application_id', $gateway->application_id)
                 ->where('provider', $gateway->provider)
-                ->where('environment', $environment)
-                ->ignore($gateway),
+                ->ignore($gateway->id),
         ];
 
         if ($gateway->provider === 'doku') {
             $envRules = [
                 'sometimes',
                 'in:sandbox',
-                Rule::unique('application_payment_gateways', 'application_id')
+                Rule::unique('application_payment_gateways', 'environment')
+                    ->where('application_id', $gateway->application_id)
                     ->where('provider', $gateway->provider)
-                    ->where('environment', 'sandbox')
-                    ->ignore($gateway),
+                    ->ignore($gateway->id),
             ];
         } elseif ($gateway->provider === 'midtrans') {
             $envRules = [
                 'sometimes',
                 'in:sandbox,production',
-                Rule::unique('application_payment_gateways', 'application_id')
+                Rule::unique('application_payment_gateways', 'environment')
+                    ->where('application_id', $gateway->application_id)
                     ->where('provider', $gateway->provider)
-                    ->where('environment', $environment)
-                    ->ignore($gateway),
+                    ->ignore($gateway->id),
             ];
         }
 
@@ -57,6 +56,16 @@ class UpdateApplicationPaymentGatewayRequest extends ApiFormRequest
             'environment' => $envRules,
             'gateway_merchant_code' => ['sometimes', 'required', 'string', 'max:60'],
             'is_active' => ['sometimes', 'boolean'],
+        ];
+    }
+
+    /**
+     * @return array<string, string>
+     */
+    public function messages(): array
+    {
+        return [
+            'environment.unique' => 'Aplikasi sudah memiliki mapping untuk provider dan environment ini.',
         ];
     }
 }
