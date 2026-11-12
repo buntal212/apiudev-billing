@@ -44,21 +44,21 @@ class DanaInvoiceIntegrationTest extends TestCase
     {
         $service = app(DanaFeeService::class);
 
-        // QRIS: MDR 0.7%, absorbed by merchant, customer fee Rp0
+        // Tanpa tarif: customer fee Rp0, hak pemilik aplikasi tetap utuh Rp100.000
         $qrisFee = $service->calculateFee('udev-central', 'qris', 100_000);
         $this->assertSame(0.0, $qrisFee['customer_fee']);
         $this->assertSame(100_000.0, $qrisFee['total_amount']);
-        $this->assertSame(700.0, $qrisFee['estimated_merchant_fee']);
-        $this->assertSame(99_300.0, $qrisFee['estimated_net_settlement']);
-        $this->assertSame('absorbed_by_merchant', $qrisFee['customer_fee_policy']);
+        $this->assertSame(0.0, $qrisFee['estimated_merchant_fee']);
+        $this->assertSame(100_000.0, $qrisFee['estimated_net_settlement']);
+        $this->assertSame('customer_surcharge', $qrisFee['customer_fee_policy']);
 
-        // DANA Wallet: 1.5%, customer fee default Rp0
+        // DANA Wallet tanpa tarif: customer fee Rp0, hak pemilik aplikasi tetap utuh Rp100.000
         $walletFee = $service->calculateFee('udev-central', 'dana_wallet', 100_000);
         $this->assertSame(0.0, $walletFee['customer_fee']);
         $this->assertSame(100_000.0, $walletFee['total_amount']);
-        $this->assertSame(1500.0, $walletFee['estimated_merchant_fee']);
-        $this->assertSame(98_500.0, $walletFee['estimated_net_settlement']);
-        $this->assertSame('zero_surcharge_policy', $walletFee['customer_fee_policy']);
+        $this->assertSame(0.0, $walletFee['estimated_merchant_fee']);
+        $this->assertSame(100_000.0, $walletFee['estimated_net_settlement']);
+        $this->assertSame('customer_surcharge', $walletFee['customer_fee_policy']);
     }
 
     public function test_admin_can_preview_fee_breakdown_via_api(): void
@@ -70,8 +70,8 @@ class DanaInvoiceIntegrationTest extends TestCase
             ->assertJsonPath('data.payment_method', 'qris')
             ->assertJsonPath('data.customer_fee', 0)
             ->assertJsonPath('data.total_amount', 200000)
-            ->assertJsonPath('data.estimated_merchant_fee', 1400)
-            ->assertJsonPath('data.estimated_net_settlement', 198600);
+            ->assertJsonPath('data.estimated_merchant_fee', 0)
+            ->assertJsonPath('data.estimated_net_settlement', 200000);
     }
 
     public function test_checkout_dana_wallet_captures_fee_snapshot_and_returns_checkout_url(): void
@@ -122,8 +122,8 @@ class DanaInvoiceIntegrationTest extends TestCase
         $attempt = PaymentAttempt::query()->where('invoice_id', $invoice->id)->firstOrFail();
         $this->assertNotNull($attempt->metadata['fee_breakdown']);
         $this->assertSame(0.0, (float) $attempt->metadata['fee_breakdown']['customer_fee']);
-        $this->assertSame(2250.0, (float) $attempt->metadata['fee_breakdown']['estimated_merchant_fee']);
-        $this->assertSame(147750.0, (float) $attempt->metadata['fee_breakdown']['estimated_net_settlement']);
+        $this->assertSame(0.0, (float) $attempt->metadata['fee_breakdown']['estimated_merchant_fee']);
+        $this->assertSame(150000.0, (float) $attempt->metadata['fee_breakdown']['estimated_net_settlement']);
     }
 
     public function test_checkout_qris_dana_renders_mpm_and_captures_mdr_snapshot(): void
@@ -174,8 +174,8 @@ class DanaInvoiceIntegrationTest extends TestCase
 
         $attempt = PaymentAttempt::query()->where('invoice_id', $invoice->id)->firstOrFail();
         $this->assertSame(0.0, (float) $attempt->metadata['fee_breakdown']['customer_fee']);
-        $this->assertSame(350.0, (float) $attempt->metadata['fee_breakdown']['estimated_merchant_fee']);
-        $this->assertSame(49650.0, (float) $attempt->metadata['fee_breakdown']['estimated_net_settlement']);
+        $this->assertSame(0.0, (float) $attempt->metadata['fee_breakdown']['estimated_merchant_fee']);
+        $this->assertSame(50000.0, (float) $attempt->metadata['fee_breakdown']['estimated_net_settlement']);
     }
 
     public function test_admin_can_cancel_active_checkout_and_it_cancels_gateway_order(): void

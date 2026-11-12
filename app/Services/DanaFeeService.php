@@ -307,8 +307,8 @@ class DanaFeeService
             ]);
         }
 
-        // If at least one active fee setting is found from dana_payment_fee_settings
-        if ($danaSetting !== null || $udevSetting !== null) {
+        // If modern fee settings table exists, resolve fees (or zero fee if no active rule configured)
+        if ($hasFeeSettingsTable) {
             $danaFeeAmount = $danaSetting !== null ? $danaSetting->computeAmount($subtotalFloat) : 0.0;
             $danaFeeValue = $danaSetting !== null ? (float) $danaSetting->fee_value : 0.0;
             $danaFeeUnit = $danaSetting !== null ? $danaSetting->fee_unit : DanaPaymentFeeSetting::FeeUnitRupiah;
@@ -331,10 +331,18 @@ class DanaFeeService
                 'dana_fee_amount' => $danaFeeAmount,
                 'dana_fee_value' => $danaFeeValue,
                 'dana_fee_unit' => $danaFeeUnit,
+                'dana_fee_details' => [
+                    'fee_value' => $danaFeeValue,
+                    'fee_unit' => $danaFeeUnit,
+                ],
                 'udev_fee' => $udevFeeAmount,
                 'udev_fee_amount' => $udevFeeAmount,
                 'udev_fee_value' => $udevFeeValue,
                 'udev_fee_unit' => $udevFeeUnit,
+                'udev_fee_details' => [
+                    'fee_value' => $udevFeeValue,
+                    'fee_unit' => $udevFeeUnit,
+                ],
                 'total_fee' => $totalCustomerFee,
                 'customer_fee' => $totalCustomerFee,
                 'fee_amount' => $totalCustomerFee,

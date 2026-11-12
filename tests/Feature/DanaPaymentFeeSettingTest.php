@@ -587,6 +587,71 @@ class DanaPaymentFeeSettingTest extends TestCase
         $this->assertSame(Invoice::StatusPaid, $invoice->fresh()->status);
     }
 
+    public function test_fee_calculator_regression_100k_without_fee_and_with_dana_qris_and_udev_fee(): void
+    {
+        Sanctum::actingAs($this->admin, ['admin:access']);
+
+        // SKENARIO 1: Tagihan Rp100.000 TANPA TARIF
+        // Temuan UAT sebelumnya: menghasilkan estimated_net_settlement 99.300 karena MDR legacy absorbed_by_merchant.
+        // Sekarang: Hak pemilik aplikasi HARUS tetap utuh Rp100.000 dan customer fee Rp0.
+        $resWithoutFee = $this->postJson('/api/v1/admin/dana-gateway/calculate-fee', [
+            'payment_method' => 'qris',
+            'amount' => 100000,
+            'environment' => 'sandbox',
+        ]);
+
+        $resWithoutFee->assertOk()
+            ->assertJsonPath('status', 'success')
+            ->assertJsonPath('data.base_amount', 100000)
+            ->assertJsonPath('data.dana_fee', 0)
+            ->assertJsonPath('data.dana_fee_amount', 0)
+            ->assertJsonPath('data.udev_fee', 0)
+            ->assertJsonPath('data.udev_fee_amount', 0)
+            ->assertJsonPath('data.total_fee', 0)
+            ->assertJsonPath('data.total_amount', 100000)
+            ->assertJsonPath('data.estimated_net_settlement', 100000); // 100% hak pemilik aplikasi utuh, BUKAN 99.300!
+
+        // SKENARIO 2: Tagihan Rp100.000 DENGAN TARIF DANA 0,7% + UDEV Rp500
+        DanaPaymentFeeSetting::query()->create([
+            'gateway_merchant_code' => null,
+            'application_id' => null,
+            'payment_method' => 'qris',
+            'environment' => 'sandbox',
+            'fee_type' => 'dana',
+            'fee_value' => 0.70,
+            'fee_unit' => 'percent',
+            'is_active' => true,
+        ]);
+
+        DanaPaymentFeeSetting::query()->create([
+            'gateway_merchant_code' => null,
+            'application_id' => null,
+            'payment_method' => 'qris',
+            'environment' => 'sandbox',
+            'fee_type' => 'udev',
+            'fee_value' => 500.00,
+            'fee_unit' => 'rupiah',
+            'is_active' => true,
+        ]);
+
+        $resWithFee = $this->postJson('/api/v1/admin/dana-gateway/calculate-fee', [
+            'payment_method' => 'qris',
+            'amount' => 100000,
+            'environment' => 'sandbox',
+        ]);
+
+        $resWithFee->assertOk()
+            ->assertJsonPath('status', 'success')
+            ->assertJsonPath('data.base_amount', 100000)
+            ->assertJsonPath('data.dana_fee_amount', 700)
+            ->assertJsonPath('data.dana_fee_unit', 'percent')
+            ->assertJsonPath('data.udev_fee_amount', 500)
+            ->assertJsonPath('data.udev_fee_unit', 'rupiah')
+            ->assertJsonPath('data.total_fee', 1200)
+            ->assertJsonPath('data.total_amount', 101200) // 100.000 pokok + 700 DANA + 500 UDEV
+            ->assertJsonPath('data.estimated_net_settlement', 100000); // Hak pemilik aplikasi tetap utuh 100%!
+    }
+
     private function fakeCheckoutGateway(string $paymentId = 'pay-001'): void
     {
         Http::fake([
