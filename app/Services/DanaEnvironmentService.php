@@ -10,7 +10,8 @@ use Illuminate\Validation\ValidationException;
 
 class DanaEnvironmentService
 {
-    public const string ConfirmationPhrase = 'AKTIFKAN PRODUCTION';
+    public const string ConfirmationPhrase = 'AKTIFKAN-DANA-PRODUCTION';
+    public const string LegacyConfirmationPhrase = 'AKTIFKAN PRODUCTION';
 
     public function __construct(
         private readonly DanaGatewayMerchantCatalog $merchantCatalog,
@@ -137,10 +138,10 @@ class DanaEnvironmentService
                 'merchant' => [
                     'configured' => $isConfigured,
                     'active' => $isActive,
-                    'merchant_code' => $primaryMerchantCode,
+                    'merchant_code' => $primaryCode,
                     'message' => $isConfigured
-                        ? ($isActive ? "Merchant {$primaryMerchantCode} aktif di Production." : "Merchant {$primaryMerchantCode} non-aktif.")
-                        : "Merchant {$primaryMerchantCode} belum terdaftar di Production.",
+                        ? ($isActive ? "Merchant {$primaryCode} aktif di Production." : "Merchant {$primaryCode} non-aktif.")
+                        : "Merchant {$primaryCode} belum terdaftar di Production.",
                 ],
                 'credentials' => [
                     'configured' => $isCredentialConfigured,
@@ -177,7 +178,7 @@ class DanaEnvironmentService
         }
 
         $trimmedPhrase = trim(strtoupper($confirmationPhrase));
-        if ($trimmedPhrase !== self::ConfirmationPhrase) {
+        if ($trimmedPhrase !== self::ConfirmationPhrase && $trimmedPhrase !== self::LegacyConfirmationPhrase) {
             throw ValidationException::withMessages([
                 'confirmation' => ['Frasa konfirmasi aktivasi Production tidak cocok. Ketik tepat: '.self::ConfirmationPhrase],
                 'confirmation_phrase' => ['Frasa konfirmasi aktivasi Production tidak cocok. Ketik tepat: '.self::ConfirmationPhrase],
