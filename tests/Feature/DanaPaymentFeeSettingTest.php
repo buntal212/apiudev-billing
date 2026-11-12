@@ -652,6 +652,92 @@ class DanaPaymentFeeSettingTest extends TestCase
             ->assertJsonPath('data.estimated_net_settlement', 100000); // Hak pemilik aplikasi tetap utuh 100%!
     }
 
+    public function test_production_temporary_zero_fee_fee_not_found_and_nonzero_fee_regression(): void
+    {
+        Sanctum::actingAs($this->admin, ['admin:access']);
+
+        // --- SKENARIO 1: TARIF DANA Rp0 SEMENTARA UNTUK UAT PRODUCTION ---
+        // 1. Simpan tarif DANA Rp0 via API
+        $createRes = $this->postJson('/api/v1/admin/dana-gateway/fees', [
+            'payment_method' => 'qris',
+            'environment' => 'production',
+            'fee_type' => 'dana',
+            'fee_value' => 0.00,
+            'fee_unit' => 'rupiah',
+            'is_active' => true,
+        ]);
+
+        $createRes->assertCreated()
+            ->assertJsonPath('data.fee_value', '0.00')
+            ->assertJsonPath('data.notes', 'Tarif DANA Rp0 sementara untuk UAT');
+
+        // 2. Kalkulator simulasi: DANA Rp0 diizinkan, fail-closed tidak terpicu, hak utuh Rp100.000
+        $calcRes = $this->postJson('/api/v1/admin/dana-gateway/calculate-fee', [
+            'payment_method' => 'qris',
+            'amount' => 100000,
+            'environment' => 'production',
+        ]);
+
+        $calcRes->assertOk()
+            ->assertJsonPath('data.dana_fee', 0)
+            ->assertJsonPath('data.total_fee', 0)
+            ->assertJsonPath('data.total_amount', 100000)
+            ->assertJsonPath('data.is_temporary_zero_fee', true)
+            ->assertJsonPath('data.estimated_net_settlement', 100000);
+
+        // --- SKENARIO 2: TARIF TIDAK DITEMUKAN / TIDAK AKTIF DI PRODUCTION (FAIL-CLOSED) ---
+        // Metode 'dana_wallet' belum dikonfigurasi di Production -> harus fail-closed 422
+        $this->expectException(ValidationException::class);
+        $service = app(DanaFeeService::class);
+        $service->calculateFee('udev-central', 'dana_wallet', 100000, 'production');
+    }
+
+    public function test_production_nonzero_fee_charges_customer_without_reducing_app_owner_share(): void
+    {
+        Sanctum::actingAs($this->admin, ['admin:access']);
+
+        // --- SKENARIO 3: TARIF NONZERO RESMI DI PRODUCTION ---
+        // DANA Wallet: 1.50% (Rp 1.500)
+        DanaPaymentFeeSetting::query()->create([
+            'gateway_merchant_code' => null,
+            'application_id' => null,
+            'payment_method' => 'dana_wallet',
+            'environment' => 'production',
+            'fee_type' => 'dana',
+            'fee_value' => 1.50,
+            'fee_unit' => 'percent',
+            'is_active' => true,
+            'notes' => 'Tarif resmi DANA Wallet Production',
+        ]);
+
+        // UDEV Platform: Rp 1.000
+        DanaPaymentFeeSetting::query()->create([
+            'gateway_merchant_code' => null,
+            'application_id' => null,
+            'payment_method' => 'dana_wallet',
+            'environment' => 'production',
+            'fee_type' => 'udev',
+            'fee_value' => 1000.00,
+            'fee_unit' => 'rupiah',
+            'is_active' => true,
+        ]);
+
+        $res = $this->postJson('/api/v1/admin/dana-gateway/calculate-fee', [
+            'payment_method' => 'dana_wallet',
+            'amount' => 100000,
+            'environment' => 'production',
+        ]);
+
+        $res->assertOk()
+            ->assertJsonPath('data.base_amount', 100000)
+            ->assertJsonPath('data.dana_fee_amount', 1500)
+            ->assertJsonPath('data.udev_fee_amount', 1000)
+            ->assertJsonPath('data.total_fee', 2500)
+            ->assertJsonPath('data.total_amount', 102500) // 100.000 pokok + 1.500 DANA + 1.000 UDEV
+            ->assertJsonPath('data.is_temporary_zero_fee', false)
+            ->assertJsonPath('data.estimated_net_settlement', 100000); // Hak pemilik aplikasi tetap utuh 100%!
+    }
+
     private function fakeCheckoutGateway(string $paymentId = 'pay-001'): void
     {
         Http::fake([

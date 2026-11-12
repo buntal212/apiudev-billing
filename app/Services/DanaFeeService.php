@@ -354,6 +354,7 @@ class DanaFeeService
                 'merchant_fixed_amount' => $danaFeeUnit === DanaPaymentFeeSetting::FeeUnitRupiah ? $danaFeeValue : 0.0,
                 'estimated_merchant_fee' => $danaFeeAmount,
                 'estimated_net_settlement' => $subtotalFloat, // Hak pemilik aplikasi tetap utuh sebesar tagihan pokok
+                'is_temporary_zero_fee' => $danaSetting !== null && (float) $danaSetting->fee_value === 0.0,
                 'rule_id' => $danaSetting?->id ?? $udevSetting?->id,
                 'dana_setting_id' => $danaSetting?->id,
                 'udev_setting_id' => $udevSetting?->id,
@@ -530,6 +531,7 @@ class DanaFeeService
             'merchant_fixed_amount' => $calc['merchant_fixed_amount'],
             'estimated_merchant_fee' => $calc['estimated_merchant_fee'],
             'estimated_net_settlement' => $calc['estimated_net_settlement'], // Hak pemilik aplikasi sebesar tagihan pokok
+            'is_temporary_zero_fee' => (bool) ($calc['is_temporary_zero_fee'] ?? false),
             'currency' => (string) ($invoice->currency ?? 'IDR'),
             'calculated_at' => now()->toIso8601String(),
         ];

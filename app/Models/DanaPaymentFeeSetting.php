@@ -103,4 +103,12 @@ class DanaPaymentFeeSetting extends Model
 
         return (float) round((float) $this->fee_value);
     }
+
+    /**
+     * Check if this setting is a temporary zero fee (e.g. for UAT testing).
+     */
+    public function isTemporaryZeroFee(): bool
+    {
+        return $this->fee_type === self::FeeTypeDana && (float) $this->fee_value === 0.0;
+    }
 }

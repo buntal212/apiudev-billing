@@ -145,6 +145,11 @@ class DanaFeeSettingController extends Controller
             );
         }
 
+        $notes = $validated['notes'] ?? null;
+        if ($validated['fee_type'] === DanaPaymentFeeSetting::FeeTypeDana && (float) $validated['fee_value'] === 0.0 && empty($notes)) {
+            $notes = 'Tarif DANA Rp0 sementara untuk UAT';
+        }
+
         $fee = DanaPaymentFeeSetting::query()->create([
             'gateway_merchant_code' => $merchantCode,
             'application_id' => $appId,
@@ -154,7 +159,7 @@ class DanaFeeSettingController extends Controller
             'fee_value' => $validated['fee_value'],
             'fee_unit' => $validated['fee_unit'],
             'is_active' => $isActive,
-            'notes' => $validated['notes'] ?? null,
+            'notes' => $notes,
         ]);
 
         $fee->load('application:id,name,code');
@@ -233,13 +238,18 @@ class DanaFeeSettingController extends Controller
             );
         }
 
+        $targetNotes = array_key_exists('notes', $validated) ? $validated['notes'] : $fee->notes;
+        if ($fee->fee_type === DanaPaymentFeeSetting::FeeTypeDana && $targetValue === 0.0 && empty($targetNotes)) {
+            $targetNotes = 'Tarif DANA Rp0 sementara untuk UAT';
+        }
+
         $fee->fill([
             'gateway_merchant_code' => $targetMerchant,
             'application_id' => $targetAppId,
             'fee_value' => $targetValue,
             'fee_unit' => $targetUnit,
             'is_active' => $targetActive,
-            'notes' => array_key_exists('notes', $validated) ? $validated['notes'] : $fee->notes,
+            'notes' => $targetNotes,
         ]);
         $fee->save();
 
