@@ -88,6 +88,74 @@ class DanaPaymentFeeSettingTest extends TestCase
         $this->assertDatabaseEmpty('dana_payment_fee_settings');
     }
 
+    public function test_index_fees_supports_all_environments_and_production_merchant_filter(): void
+    {
+        Sanctum::actingAs($this->admin, ['admin:access']);
+
+        // 1. Buat 1 aturan Sandbox global
+        $sandboxFee = DanaPaymentFeeSetting::query()->create([
+            'gateway_merchant_code' => null,
+            'application_id' => null,
+            'payment_method' => 'qris',
+            'environment' => 'sandbox',
+            'fee_type' => 'dana',
+            'fee_value' => 0.70,
+            'fee_unit' => 'percent',
+            'is_active' => true,
+        ]);
+
+        // 2. Buat 1 aturan Production khusus merchant MRC-0002 (sesuai fakta Production)
+        $prodFee = DanaPaymentFeeSetting::query()->create([
+            'gateway_merchant_code' => 'MRC-0002',
+            'application_id' => null,
+            'payment_method' => 'qris',
+            'environment' => 'production',
+            'fee_type' => 'udev',
+            'fee_value' => 500.00,
+            'fee_unit' => 'rupiah',
+            'is_active' => true,
+        ]);
+
+        // A. Filter Semua / Default (tanpa parameter environment): kedua aturan harus tampil
+        $resAll = $this->getJson('/api/v1/admin/dana-gateway/fees');
+        $resAll->assertOk()
+            ->assertJsonPath('status', 'success')
+            ->assertJsonPath('meta.total', 2);
+        $allIds = collect($resAll->json('data'))->pluck('id')->all();
+        $this->assertContains($sandboxFee->id, $allIds);
+        $this->assertContains($prodFee->id, $allIds);
+
+        // B. Filter Semua via environment=all: kedua aturan harus tampil
+        $resAllExplicit = $this->getJson('/api/v1/admin/dana-gateway/fees?environment=all');
+        $resAllExplicit->assertOk()
+            ->assertJsonPath('status', 'success')
+            ->assertJsonPath('meta.total', 2);
+
+        // C. Filter Production: aturan MRC-0002 harus tampil, Sandbox tidak tampil
+        $resProd = $this->getJson('/api/v1/admin/dana-gateway/fees?environment=production');
+        $resProd->assertOk()
+            ->assertJsonPath('status', 'success')
+            ->assertJsonPath('meta.total', 1)
+            ->assertJsonPath('data.0.id', $prodFee->id)
+            ->assertJsonPath('data.0.gateway_merchant_code', 'MRC-0002')
+            ->assertJsonPath('data.0.environment', 'production');
+
+        // D. Filter Sandbox: aturan MRC-0002 TIDAK tampil, hanya Sandbox yang tampil
+        $resSandbox = $this->getJson('/api/v1/admin/dana-gateway/fees?environment=sandbox');
+        $resSandbox->assertOk()
+            ->assertJsonPath('status', 'success')
+            ->assertJsonPath('meta.total', 1)
+            ->assertJsonPath('data.0.id', $sandboxFee->id)
+            ->assertJsonPath('data.0.environment', 'sandbox');
+
+        // E. Filter Production + Merchant MRC-0002: aturan ditemukan
+        $resProdMerchant = $this->getJson('/api/v1/admin/dana-gateway/fees?environment=production&gateway_merchant_code=MRC-0002');
+        $resProdMerchant->assertOk()
+            ->assertJsonPath('status', 'success')
+            ->assertJsonPath('meta.total', 1)
+            ->assertJsonPath('data.0.gateway_merchant_code', 'MRC-0002');
+    }
+
     public function test_production_fees_must_be_created_explicitly_by_admin(): void
     {
         Sanctum::actingAs($this->admin, ['admin:access']);

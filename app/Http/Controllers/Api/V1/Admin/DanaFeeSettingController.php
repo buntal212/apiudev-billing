@@ -24,12 +24,13 @@ class DanaFeeSettingController extends Controller
      */
     public function index(Request $request): JsonResponse
     {
-        $environment = (string) $request->query('environment', 'sandbox');
-        $environment = in_array($environment, ['sandbox', 'production'], true) ? $environment : 'sandbox';
-
         $query = DanaPaymentFeeSetting::query()
-            ->with('application:id,name,code')
-            ->where('environment', $environment);
+            ->with('application:id,name,code');
+
+        $environment = $request->query('environment');
+        if (! empty($environment) && $environment !== 'all' && in_array($environment, ['sandbox', 'production'], true)) {
+            $query->where('environment', $environment);
+        }
 
         // Filter by merchant scope
         $merchantFilter = $request->query('gateway_merchant_code');
