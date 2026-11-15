@@ -25,8 +25,18 @@ class InvoiceCheckoutController extends Controller
             ->where('payment_attempt_id', $attempt->getKey())
             ->first();
 
-        if ($outbox?->status === CheckoutOutboxMessage::StatusFailed) {
-            abort(Response::HTTP_BAD_GATEWAY, 'Checkout gateway tidak dapat diproses.');
+        $attemptMetadata = is_array($attempt->metadata) ? $attempt->metadata : [];
+        $isUncertain = ($attempt->failure_code === 'gateway_uncertain_status')
+            || ($attemptMetadata['uncertain'] ?? false)
+            || ($attemptMetadata['is_uncertain'] ?? false)
+            || ($outbox?->status === CheckoutOutboxMessage::StatusFailed && $outbox?->error_code === 'transaction_already_registered');
+
+        if ($isUncertain) {
+            abort(Response::HTTP_CONFLICT, $attempt->failure_message ?: 'Transaksi telah terdaftar di DANA (status 01) tetapi instruksi pembayaran tidak tersedia. Pembuatan order baru diblokir demi keamanan.');
+        }
+
+        if ($outbox?->status === CheckoutOutboxMessage::StatusFailed || $attempt->status === \App\Models\PaymentAttempt::StatusFailed) {
+            abort(Response::HTTP_BAD_GATEWAY, $attempt->failure_message ?: 'Checkout gateway tidak dapat diproses.');
         }
 
         $resource = new InvoiceCheckoutResource($attempt, $outbox);

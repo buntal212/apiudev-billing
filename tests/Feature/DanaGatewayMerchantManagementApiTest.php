@@ -600,6 +600,41 @@ class DanaGatewayMerchantManagementApiTest extends TestCase
         $this->assertStringNotContainsString('secret-token-12345', $auditPayload);
     }
 
+    public function test_production_configuration_can_clear_client_secret_explicitly(): void
+    {
+        $merchant = $this->sandboxProvisionedMerchant();
+        Http::fake([
+            "https://dana-gateway.test/api/v1/internal/merchants/{$merchant->gateway_merchant_id}/dana-configuration" => function (HttpRequest $request): mixed {
+                $data = $request->data();
+                $this->assertSame('production', $data['environment']);
+                $this->assertTrue($data['clear_client_secret']);
+                $this->assertNull($data['client_secret']);
+
+                return Http::response([
+                    'data' => [
+                        'merchant_code' => 'udev-salon',
+                        'environment' => 'production',
+                        'dana_configuration' => ['available' => true, 'enabled' => true, 'ready' => true],
+                    ],
+                ]);
+            },
+        ]);
+        $this->actingAdmin();
+
+        $payload = $this->configurationPayload([
+            'environment' => 'production',
+            'partner_id' => 'partner-prod-001',
+            'client_secret' => null,
+            'clear_client_secret' => true,
+            'channel_id' => 'channel-prod-001',
+            'enabled' => true,
+        ]);
+
+        $this->putJson($this->configurationUrl($merchant->gateway_merchant_id), $payload)
+            ->assertOk()
+            ->assertJsonPath('data.environment', 'production');
+    }
+
     public function test_rsa_validation_failure_message_is_passed_to_admin_without_leaking_key_material(): void
     {
         $merchant = $this->sandboxProvisionedMerchant();

@@ -22,6 +22,7 @@ class StoreDanaGatewayMerchantDanaConfigurationRequest extends ApiFormRequest
             'partner_id' => ['required', 'string', 'max:150'],
             'client_id' => ['nullable', 'string', 'max:150'],
             'client_secret' => ['nullable', 'string', 'max:255'],
+            'clear_client_secret' => ['nullable', 'boolean'],
             'merchant_id' => ['required', 'string', 'max:150'],
             'private_key' => ['nullable', 'string', 'max:65535'],
             'dana_webhook_public_key' => ['nullable', 'string', 'max:65535'],

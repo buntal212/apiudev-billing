@@ -129,7 +129,7 @@ class DanaGatewayMerchantProvisioningController extends Controller
             return $this->merchantNotFound();
         }
 
-        /** @var array{environment: string, partner_id: string, merchant_id: string, private_key: string, dana_webhook_public_key: string, origin: string, channel_id: string, notification_url: string, callback_url: string, mcc: string, enabled: bool} $attributes */
+        /** @var array{environment: string, partner_id: string, merchant_id: string, private_key?: string|null, dana_webhook_public_key?: string|null, client_id?: string|null, client_secret?: string|null, clear_client_secret?: bool|null, origin: string, channel_id: string, external_store_id?: string|null, clear_external_store_id?: bool|null, sub_merchant_id?: string|null, clear_sub_merchant_id?: bool|null, notification_url: string, callback_url: string, mcc: string, enabled: bool} $attributes */
         $attributes = $request->validated();
         $idempotencyKey = $client->stableDanaConfigurationIdempotencyKey($merchantId, $attributes);
 

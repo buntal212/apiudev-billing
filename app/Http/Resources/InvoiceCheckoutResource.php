@@ -31,11 +31,20 @@ class InvoiceCheckoutResource extends JsonResource
         $isExpired = ($this->status === \App\Models\PaymentAttempt::StatusExpired)
             || ($this->checkout_expires_at?->isPast() ?? false);
 
+        $isUncertain = ($this->failure_code === 'gateway_uncertain_status')
+            || ($metadata['uncertain'] ?? false)
+            || ($metadata['is_uncertain'] ?? false)
+            || ($this->outbox?->status === CheckoutOutboxMessage::StatusFailed && $this->outbox?->error_code === 'transaction_already_registered');
+
         $checkoutStatus = $isExpired
             ? 'expired'
             : (($this->checkout_url !== null || $qrContent !== null || $qrUrl !== null || $paymentCode !== null)
                 ? 'ready'
-                : ($this->outbox?->status === CheckoutOutboxMessage::StatusFailed ? 'failed' : 'processing'));
+                : ($isUncertain
+                    ? 'uncertain'
+                    : (($this->status === \App\Models\PaymentAttempt::StatusFailed || $this->outbox?->status === CheckoutOutboxMessage::StatusFailed)
+                        ? 'failed'
+                        : 'processing')));
 
         $qrImageUrl = $this->provider === 'midtrans' && ! empty($this->id) && ! $isExpired
             ? url("/api/v1/admin/payment-attempts/{$this->id}/qr-image")
@@ -47,12 +56,17 @@ class InvoiceCheckoutResource extends JsonResource
             'gateway_payment_id' => $this->gateway_payment_id,
             'transaction_id' => $metadata['transaction_id'] ?? $this->gateway_payment_id,
             'status' => $this->status,
+            'gateway_environment' => $this->gateway_environment ?? 'sandbox',
+            'environment' => $this->gateway_environment ?? 'sandbox',
             'payment_method' => $metadata['payment_method'] ?? 'dana_wallet',
             'amount' => $this->amount,
             'subtotal_amount' => (float) ($metadata['fee_breakdown']['subtotal_amount'] ?? $this->amount),
             'admin_fee' => (float) ($metadata['fee_breakdown']['fee_amount'] ?? 0.0),
             'fee_breakdown' => $metadata['fee_breakdown'] ?? null,
             'checkout_status' => $checkoutStatus,
+            'failure_code' => $this->failure_code ?? $this->outbox?->error_code,
+            'failure_message' => $this->failure_message,
+            'is_uncertain' => $isUncertain,
             'checkout_url' => $this->checkout_url,
             'qr_content' => $qrContent,
             'qr_string' => $qrContent,

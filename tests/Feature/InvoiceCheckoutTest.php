@@ -499,6 +499,73 @@ class InvoiceCheckoutTest extends TestCase
         return [$invoice->fresh(), $subscription];
     }
 
+    public function test_checkout_gateway_circuit_breaker_stops_infinite_retry_after_max_attempts(): void
+    {
+        [$invoice] = $this->invoiceWithGateway();
+        Http::fake([
+            'https://gateway.test/api/v1/payments*' => Http::response([
+                'message' => 'Checkout sementara tidak tersedia.',
+            ], 503),
+        ]);
+
+        $this->actingAdmin()
+            ->postJson("/api/v1/admin/invoices/{$invoice->id}/checkout", [], ['Idempotency-Key' => 'circuit-breaker-001'])
+            ->assertStatus(202);
+
+        $outbox = CheckoutOutboxMessage::query()->sole();
+        $this->assertSame(1, $outbox->attempts);
+        $this->assertSame(CheckoutOutboxMessage::StatusPending, $outbox->status);
+
+        // Manually simulate dispatch retries up to MaxDispatchAttempts
+        $outbox->update(['attempts' => 4, 'available_at' => now()->subMinute()]);
+        app(CheckoutService::class)->dispatchPending(1);
+
+        $outbox->refresh();
+        $attempt = PaymentAttempt::query()->sole();
+
+        $this->assertSame(5, $outbox->attempts);
+        $this->assertSame(CheckoutOutboxMessage::StatusFailed, $outbox->status);
+        $this->assertSame('checkout_retry_exhausted', $outbox->error_code);
+        $this->assertSame(PaymentAttempt::StatusFailed, $attempt->status);
+        $this->assertSame('checkout_retry_exhausted', $attempt->failure_code);
+    }
+
+    public function test_checkout_when_inquiry_reports_status_01_marks_uncertain_and_blocks_new_order(): void
+    {
+        [$invoice] = $this->invoiceWithGateway();
+        Http::fake([
+            'https://gateway.test/api/v1/payments*' => Http::response([
+                'message' => 'DANA melaporkan transaksi sudah terdaftar dengan status 01; pembuatan order baru diblokir.',
+                'error_code' => 'transaction_already_registered',
+            ], 409),
+        ]);
+
+        $response = $this->actingAdmin()
+            ->postJson("/api/v1/admin/invoices/{$invoice->id}/checkout", [], ['Idempotency-Key' => 'uncertain-001']);
+
+        $response->assertStatus(409);
+        $response->assertJsonFragment([
+            'message' => 'DANA melaporkan transaksi sudah terdaftar dengan status 01; pembuatan order baru diblokir.',
+        ]);
+
+        $outbox = CheckoutOutboxMessage::query()->sole();
+        $attempt = PaymentAttempt::query()->sole();
+
+        $this->assertSame(CheckoutOutboxMessage::StatusFailed, $outbox->status);
+        $this->assertSame('transaction_already_registered', $outbox->error_code);
+        $this->assertSame('gateway_uncertain_status', $attempt->failure_code);
+        $this->assertTrue($attempt->metadata['uncertain'] ?? false);
+        $this->assertSame('01', $attempt->metadata['gateway_status'] ?? null);
+
+        // Attempting to create a new checkout on the same invoice must be blocked (no new attempt created)
+        $subsequentResponse = $this->actingAdmin()
+            ->postJson("/api/v1/admin/invoices/{$invoice->id}/checkout", [], ['Idempotency-Key' => 'new-attempt-blocked-002']);
+
+        $subsequentResponse->assertStatus(409);
+        $this->assertStringContainsString('berstatus tidak pasti', (string) $subsequentResponse->json('message'));
+        $this->assertDatabaseCount('payment_attempts', 1);
+    }
+
     private function actingAdmin(): self
     {
         Sanctum::actingAs(User::factory()->create(['is_admin' => true]), ['admin:access']);

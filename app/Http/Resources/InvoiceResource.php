@@ -56,12 +56,12 @@ class InvoiceResource extends JsonResource
             ]),
             'application_payment_gateways' => $this->customer?->relationLoaded('application') && $this->customer?->application?->relationLoaded('paymentGateways')
                 ? $this->customer->application->paymentGateways
-                    ->where('environment', 'sandbox')
                     ->where('is_active', true)
                     ->map(fn ($g): array => [
                         'id' => $g->id,
                         'provider' => $g->provider,
                         'gateway_merchant_code' => $g->gateway_merchant_code,
+                        'environment' => $g->environment,
                         'is_active' => $g->is_active,
                     ])
                     ->values()
@@ -69,9 +69,8 @@ class InvoiceResource extends JsonResource
                 : (($appId = $this->customer?->application_id ?? $this->plan?->application_id)
                     ? \App\Models\ApplicationPaymentGateway::query()
                         ->where('application_id', $appId)
-                        ->where('environment', 'sandbox')
                         ->where('is_active', true)
-                        ->get(['id', 'provider', 'gateway_merchant_code', 'is_active'])
+                        ->get(['id', 'provider', 'gateway_merchant_code', 'environment', 'is_active'])
                         ->all()
                     : []),
             'subscription' => $this->whenLoaded('subscription', fn (): ?array => $this->subscription ? [

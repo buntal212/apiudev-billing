@@ -108,15 +108,32 @@ class DanaGatewayClient
         if (! $response->successful()) {
             $status = $response->status();
             $retryAfterSeconds = $this->retryAfterSeconds($response);
+            $body = $response->json();
+            $message = is_array($body) && is_string($body['message'] ?? null) && trim($body['message']) !== ''
+                ? trim($body['message'])
+                : 'Gateway DANA menolak atau belum dapat memproses permintaan.';
+            $responseErrorCode = is_array($body) && is_string($body['error_code'] ?? null) && trim($body['error_code']) !== ''
+                ? trim($body['error_code'])
+                : null;
+
+            $isBlockedOrConflict = str_contains($message, 'transaksi sudah terdaftar')
+                || str_contains($message, 'pembuatan order baru diblokir')
+                || $status === 409
+                || $responseErrorCode === 'transaction_already_registered';
+
+            $retryable = ! $isBlockedOrConflict && ($status === 429 || $response->serverError());
+            $errorCode = $responseErrorCode ?: ($isBlockedOrConflict
+                ? 'transaction_already_registered'
+                : ($status === 429
+                    ? 'gateway_rate_limited'
+                    : ($response->serverError() ? 'gateway_unavailable' : 'gateway_request_rejected')));
 
             throw new DanaGatewayException(
-                'Gateway DANA menolak atau belum dapat memproses permintaan.',
-                $status === 429 || $response->serverError(),
+                $message,
+                $retryable,
                 $status,
                 $retryAfterSeconds,
-                $status === 429
-                    ? 'gateway_rate_limited'
-                    : ($response->serverError() ? 'gateway_unavailable' : 'gateway_request_rejected'),
+                $errorCode,
             );
         }
 

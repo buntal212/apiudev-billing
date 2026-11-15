@@ -85,6 +85,17 @@ class CheckoutService
 
             $this->assertRetryAllowed($attempt, $invoice, $outbox);
 
+            if ($attempt->status === PaymentAttempt::StatusFailed) {
+                $attempt->update(['status' => PaymentAttempt::StatusInitiated]);
+            }
+            if ($outbox->status === CheckoutOutboxMessage::StatusFailed) {
+                $outbox->update([
+                    'status' => CheckoutOutboxMessage::StatusPending,
+                    'available_at' => null,
+                    'locked_at' => null,
+                ]);
+            }
+
             return (int) $outbox->getKey();
         });
         $this->dispatch($outboxId);
@@ -198,6 +209,18 @@ class CheckoutService
                 }
 
                 if ($activeAttempt !== null && ! in_array($activeAttempt->status, [PaymentAttempt::StatusFailed, PaymentAttempt::StatusExpired, PaymentAttempt::StatusCancelled], true)) {
+                    $activeMetadata = is_array($activeAttempt->metadata) ? $activeAttempt->metadata : [];
+                    $isUncertain = ($activeAttempt->failure_code === 'gateway_uncertain_status')
+                        || ($activeMetadata['uncertain'] ?? false)
+                        || ($activeMetadata['is_uncertain'] ?? false);
+
+                    if ($isUncertain) {
+                        abort(
+                            Response::HTTP_CONFLICT,
+                            "Transaksi untuk invoice {$lockedInvoice->invoice_number} berstatus tidak pasti di gateway DANA (terdaftar dengan status 01). Pembuatan order baru diblokir demi mencegah pembayaran ganda. Mohon hubungi admin atau lakukan rekonsiliasi status."
+                        );
+                    }
+
                     return CheckoutOutboxMessage::query()
                         ->where('payment_attempt_id', $activeAttempt->getKey())
                         ->lockForUpdate()
@@ -518,11 +541,11 @@ class CheckoutService
 
             $this->storeCheckout($claimed, $gatewayPayment, $amountMinor);
         } catch (ConnectionException $exception) {
-            $this->markDispatchFailure($claimed, true, 'network_timeout');
+            $this->markDispatchFailure($claimed, true, 'network_timeout', $exception->getMessage());
         } catch (DanaGatewayException $exception) {
-            $this->markDispatchFailure($claimed, $exception->retryable, $exception->retryable ? 'gateway_unavailable' : 'gateway_response_invalid');
-        } catch (\Throwable) {
-            $this->markDispatchFailure($claimed, false, 'checkout_processing_failed');
+            $this->markDispatchFailure($claimed, $exception->retryable, $exception->errorCode, $exception->getMessage());
+        } catch (\Throwable $exception) {
+            $this->markDispatchFailure($claimed, false, 'checkout_processing_failed', $exception->getMessage());
         }
     }
 
@@ -621,20 +644,66 @@ class CheckoutService
                 || (is_string($paymentCode) && $paymentCode !== ''));
     }
 
-    private function markDispatchFailure(CheckoutOutboxMessage $claimed, bool $retryable, string $errorCode): void
+    public const int MaxDispatchAttempts = 5;
+
+    private function markDispatchFailure(CheckoutOutboxMessage $claimed, bool $retryable, string $errorCode, ?string $failureMessage = null): void
     {
-        DB::transaction(function () use ($claimed, $retryable, $errorCode): void {
+        DB::transaction(function () use ($claimed, $retryable, $errorCode, $failureMessage): void {
             $outbox = CheckoutOutboxMessage::query()->lockForUpdate()->findOrFail($claimed->getKey());
             if ($outbox->status === CheckoutOutboxMessage::StatusCompleted) {
                 return;
             }
 
+            $effectiveRetryable = $retryable && $outbox->attempts < self::MaxDispatchAttempts;
+            $effectiveErrorCode = (! $effectiveRetryable && $retryable)
+                ? 'checkout_retry_exhausted'
+                : $errorCode;
+
             $outbox->update([
-                'status' => $retryable ? CheckoutOutboxMessage::StatusPending : CheckoutOutboxMessage::StatusFailed,
+                'status' => $effectiveRetryable ? CheckoutOutboxMessage::StatusPending : CheckoutOutboxMessage::StatusFailed,
                 'locked_at' => null,
-                'available_at' => $retryable ? now()->addSeconds(5) : null,
-                'error_code' => $errorCode,
+                'available_at' => $effectiveRetryable ? now()->addSeconds(5) : null,
+                'error_code' => $effectiveErrorCode,
             ]);
+
+            $attempt = PaymentAttempt::query()->lockForUpdate()->find($outbox->payment_attempt_id);
+            if ($attempt !== null && ! in_array($attempt->status, [PaymentAttempt::StatusSucceeded, PaymentAttempt::StatusCancelled], true)) {
+                $isUncertain = $effectiveErrorCode === 'transaction_already_registered'
+                    || str_contains((string) $failureMessage, 'transaksi sudah terdaftar')
+                    || str_contains((string) $failureMessage, 'pembuatan order baru diblokir');
+
+                $currentMetadata = is_array($attempt->metadata) ? $attempt->metadata : [];
+                $currentMetadata['last_dispatch_error'] = [
+                    'error_code' => $effectiveErrorCode,
+                    'message' => $failureMessage,
+                    'failed_at' => now()->toIso8601String(),
+                    'attempts' => $outbox->attempts,
+                ];
+
+                if ($isUncertain) {
+                    $currentMetadata['uncertain'] = true;
+                    $currentMetadata['is_uncertain'] = true;
+                    $currentMetadata['gateway_status'] = '01';
+                    $currentMetadata['failure_reason'] = $failureMessage;
+
+                    $attempt->update([
+                        'failure_code' => 'gateway_uncertain_status',
+                        'failure_message' => $failureMessage ?: 'Transaksi telah terdaftar di DANA (status 01) tetapi instruksi pembayaran tidak tersedia. Pembuatan order baru diblokir demi keamanan.',
+                        'metadata' => $currentMetadata,
+                    ]);
+                } elseif (! $effectiveRetryable) {
+                    $attempt->update([
+                        'status' => PaymentAttempt::StatusFailed,
+                        'failure_code' => $effectiveErrorCode,
+                        'failure_message' => $failureMessage ?: 'Pembuatan checkout gateway gagal setelah batas percobaan tercapai.',
+                        'metadata' => $currentMetadata,
+                    ]);
+                } else {
+                    $attempt->update([
+                        'metadata' => $currentMetadata,
+                    ]);
+                }
+            }
         });
     }
 
@@ -1192,7 +1261,7 @@ class CheckoutService
         Invoice $invoice,
         ?CheckoutOutboxMessage $outbox,
     ): void {
-        if (! in_array($attempt->status, [PaymentAttempt::StatusInitiated, PaymentAttempt::StatusPending], true)) {
+        if (! in_array($attempt->status, [PaymentAttempt::StatusInitiated, PaymentAttempt::StatusPending, PaymentAttempt::StatusFailed], true)) {
             throw ValidationException::withMessages([
                 'payment_attempt' => ['Payment attempt dengan status saat ini tidak dapat diulang.'],
             ]);
