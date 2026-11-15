@@ -530,6 +530,7 @@ class CheckoutService
                     merchantOrderId: $attempt->merchant_reference,
                     amountMinor: $amountMinor,
                     metadata: [
+                        'payment_method' => $paymentMethod,
                         'udev_invoice_id' => $attempt->invoice_id,
                         'udev_payment_attempt_id' => $attempt->getKey(),
                         'invoice_number' => $attempt->invoice->invoice_number,
@@ -586,7 +587,7 @@ class CheckoutService
             throw new DanaGatewayException('Checkout gateway sudah tidak valid.', false);
         }
 
-        DB::transaction(function () use ($claimed, $gatewayPaymentId, $merchantOrderId, $gatewayAmount, $currency, $checkoutUrl, $hasValidCheckoutUrl, $paymentCode, $instruction, $checkoutExpiresAt, $amountMinor): void {
+        DB::transaction(function () use ($claimed, $gatewayPaymentId, $merchantOrderId, $gatewayAmount, $currency, $checkoutUrl, $hasValidCheckoutUrl, $paymentCode, $instruction, $checkoutExpiresAt, $amountMinor, $gatewayPayment): void {
             $outbox = CheckoutOutboxMessage::query()->lockForUpdate()->findOrFail($claimed->getKey());
             $attempt = PaymentAttempt::query()->lockForUpdate()->findOrFail($outbox->payment_attempt_id);
             $invoice = Invoice::query()->lockForUpdate()->findOrFail($attempt->invoice_id);
@@ -612,13 +613,21 @@ class CheckoutService
                 }
             }
 
-            $attempt->update([
+            $attemptUpdates = [
                 'gateway_payment_id' => $gatewayPaymentId,
                 'checkout_url' => $hasValidCheckoutUrl ? $checkoutUrl : null,
                 'checkout_expires_at' => $checkoutExpiresAt,
                 'status' => PaymentAttempt::StatusPending,
                 'metadata' => $currentMetadata,
-            ]);
+            ];
+            $partnerRef = $gatewayPayment['partner_reference_no'] ?? null;
+            if (is_string($partnerRef) && $partnerRef !== '') {
+                $attemptUpdates['provider_reference'] = $partnerRef;
+                $currentMetadata['partner_reference_no'] = $partnerRef;
+                $attemptUpdates['metadata'] = $currentMetadata;
+            }
+
+            $attempt->update($attemptUpdates);
             $outbox->update([
                 'status' => CheckoutOutboxMessage::StatusCompleted,
                 'locked_at' => null,
@@ -668,9 +677,10 @@ class CheckoutService
 
             $attempt = PaymentAttempt::query()->lockForUpdate()->find($outbox->payment_attempt_id);
             if ($attempt !== null && ! in_array($attempt->status, [PaymentAttempt::StatusSucceeded, PaymentAttempt::StatusCancelled], true)) {
-                $isUncertain = $effectiveErrorCode === 'transaction_already_registered'
+                $isDana = strtolower((string) $attempt->provider) === 'dana';
+                $isUncertain = $isDana && ($effectiveErrorCode === 'transaction_already_registered'
                     || str_contains((string) $failureMessage, 'transaksi sudah terdaftar')
-                    || str_contains((string) $failureMessage, 'pembuatan order baru diblokir');
+                    || str_contains((string) $failureMessage, 'pembuatan order baru diblokir'));
 
                 $currentMetadata = is_array($attempt->metadata) ? $attempt->metadata : [];
                 $currentMetadata['last_dispatch_error'] = [
@@ -691,7 +701,7 @@ class CheckoutService
                         'failure_message' => $failureMessage ?: 'Transaksi telah terdaftar di DANA (status 01) tetapi instruksi pembayaran tidak tersedia. Pembuatan order baru diblokir demi keamanan.',
                         'metadata' => $currentMetadata,
                     ]);
-                } elseif (! $effectiveRetryable) {
+                } elseif (! $effectiveRetryable && $isDana) {
                     $attempt->update([
                         'status' => PaymentAttempt::StatusFailed,
                         'failure_code' => $effectiveErrorCode,

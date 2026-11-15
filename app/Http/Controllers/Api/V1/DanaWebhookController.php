@@ -48,9 +48,14 @@ class DanaWebhookController extends Controller
 
         $attempt = PaymentAttempt::query()
             ->where('provider', 'dana')
-            ->where(function ($query) use ($merchantReference, $gatewayPaymentId): void {
+            ->where(function ($query) use ($merchantReference, $gatewayPaymentId, $payload): void {
                 if (! empty($merchantReference)) {
-                    $query->where('merchant_reference', $merchantReference);
+                    $query->where('merchant_reference', $merchantReference)
+                        ->orWhere('provider_reference', $merchantReference);
+                }
+                $partnerRef = $payload['partner_reference_no'] ?? $payload['partnerReferenceNo'] ?? $payload['originalPartnerReferenceNo'] ?? null;
+                if (! empty($partnerRef) && $partnerRef !== $merchantReference) {
+                    $query->orWhere('provider_reference', $partnerRef);
                 }
                 if (! empty($gatewayPaymentId)) {
                     $query->orWhere('gateway_payment_id', $gatewayPaymentId);

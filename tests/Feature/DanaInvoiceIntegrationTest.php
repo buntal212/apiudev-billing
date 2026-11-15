@@ -302,6 +302,138 @@ class DanaInvoiceIntegrationTest extends TestCase
             ->assertJsonPath('qr_content', '00020101021226570011ID.DANA.WWW01189360091500029570755405750005802ID');
     }
 
+    public function test_new_invoice_number_produces_attempt_merchant_reference_at_most_25_chars(): void
+    {
+        $app = Application::factory()->create();
+        $customer = ApplicationCustomer::factory()->for($app)->create();
+        $plan = SubscriptionPlan::factory()->for($app)->create(['price' => 100_000]);
+
+        $invoiceService = app(\App\Services\InvoiceService::class);
+        $invoice = $invoiceService->createInvoice($customer->id, $plan->id, null, now()->addDays(3), 'idemp-inv-001');
+
+        // Invoice number format is INV-YYYYMMDD-XXXXXXXX (21 characters)
+        $this->assertSame(21, strlen($invoice->invoice_number));
+        $this->assertMatchesRegularExpression('/\AINV-\d{8}-[A-Z0-9]{8}\z/', $invoice->invoice_number);
+
+        // Attempt 1 reference is INV-YYYYMMDD-XXXXXXXX-A1 (24 characters, <= 25)
+        $attempt1Ref = $invoice->invoice_number.'-A1';
+        $this->assertSame(24, strlen($attempt1Ref));
+        $this->assertLessThanOrEqual(25, strlen($attempt1Ref));
+
+        // Attempt 10 reference is INV-YYYYMMDD-XXXXXXXX-A10 (25 characters, <= 25)
+        $attempt10Ref = $invoice->invoice_number.'-A10';
+        $this->assertSame(25, strlen($attempt10Ref));
+        $this->assertLessThanOrEqual(25, strlen($attempt10Ref));
+    }
+
+    public function test_checkout_qris_stores_provider_reference_from_gateway(): void
+    {
+        $invoice = $this->createPendingInvoice(60_000);
+        $qrisProviderRef = 'Q'.str_repeat('9', 24);
+
+        Http::fake([
+            'http://dana-gateway.test/api/v1/payments*' => function (HttpRequest $request) use ($invoice, $qrisProviderRef) {
+                if ($request->method() === 'GET') {
+                    return Http::response(['data' => []]);
+                }
+
+                return Http::response([
+                    'data' => [
+                        'id' => '01JBK9Y8Z123456789ABCDEF99',
+                        'partner_reference_no' => $qrisProviderRef,
+                        'merchant_order_id' => $invoice->invoice_number.'-A1',
+                        'amount_minor' => 60000,
+                        'currency' => 'IDR',
+                        'status' => 'pending',
+                        'checkout_url' => null,
+                        'expires_at' => now()->addMinutes(30)->toISOString(),
+                        'metadata' => [
+                            'partner_reference_no' => $qrisProviderRef,
+                            'udev_sandbox_payment_instruction' => [
+                                'method' => 'qris',
+                                'label' => 'QRIS',
+                                'type' => 'qris_mpm',
+                                'qr_content' => '00020101021226570011ID.DANA.WWW',
+                                'payment_code' => '00020101021226570011ID.DANA.WWW',
+                            ],
+                        ],
+                    ],
+                ]);
+            },
+        ]);
+
+        Sanctum::actingAs(User::factory()->create(['is_admin' => true]), ['admin:access']);
+
+        $response = $this->postJson("/api/v1/admin/invoices/{$invoice->id}/checkout", [
+            'payment_method' => 'qris',
+            'provider' => 'dana',
+        ], ['Idempotency-Key' => 'test-checkout-qris-provider-ref']);
+
+        $response->assertOk()
+            ->assertJsonPath('data.payment_method', 'qris')
+            ->assertJsonPath('data.checkout_status', 'ready');
+
+        $attempt = PaymentAttempt::query()->where('invoice_id', $invoice->id)->firstOrFail();
+        $this->assertSame($qrisProviderRef, $attempt->provider_reference);
+        $this->assertSame($qrisProviderRef, $attempt->metadata['partner_reference_no'] ?? null);
+    }
+
+    public function test_legacy_26_char_reference_can_be_retried_safely(): void
+    {
+        $invoice = $this->createPendingInvoice(75_000);
+        // Force legacy 26-character reference: INV-YYYYMMDD-XXXXXXXXXX-A1
+        $legacyRef = 'INV-20261115-CTDP60KWY7-A1';
+        $invoice->update(['invoice_number' => 'INV-20261115-CTDP60KWY7']);
+
+        $attempt = PaymentAttempt::factory()->for($invoice)->create([
+            'attempt_number' => 1,
+            'provider' => 'dana',
+            'gateway_merchant_code' => 'udev-central',
+            'gateway_environment' => 'sandbox',
+            'gateway_payment_id' => '01JBK9Y8Z123456789ABCDEF88',
+            'merchant_reference' => $legacyRef,
+            'status' => PaymentAttempt::StatusInitiated,
+            'amount' => 75_000,
+            'currency' => 'IDR',
+        ]);
+
+        \App\Models\CheckoutOutboxMessage::query()->create([
+            'payment_attempt_id' => $attempt->id,
+            'idempotency_key' => 'dana-checkout-attempt-'.$attempt->id,
+            'status' => \App\Models\CheckoutOutboxMessage::StatusPending,
+            'attempts' => 1,
+        ]);
+
+        Http::fake([
+            'http://dana-gateway.test/api/v1/payments*' => Http::response([
+                'data' => [
+                    'id' => '01JBK9Y8Z123456789ABCDEF88',
+                    'merchant_order_id' => $legacyRef,
+                    'amount_minor' => 75000,
+                    'currency' => 'IDR',
+                    'status' => 'pending',
+                    'checkout_url' => 'https://checkout.sandbox.dana.id/order/legacy',
+                    'expires_at' => now()->addMinutes(30)->toISOString(),
+                    'metadata' => [
+                        'udev_sandbox_payment_instruction' => [
+                            'method' => 'dana_wallet',
+                            'label' => 'DANA Wallet',
+                            'type' => 'redirect',
+                        ],
+                    ],
+                ],
+            ]),
+        ]);
+
+        Sanctum::actingAs(User::factory()->create(['is_admin' => true]), ['admin:access']);
+
+        $retryResponse = $this->postJson("/api/v1/admin/payment-attempts/{$attempt->id}/checkout/retry");
+        $retryResponse->assertOk()
+            ->assertJsonPath('data.status', PaymentAttempt::StatusPending);
+
+        $this->assertSame($legacyRef, $attempt->fresh()->merchant_reference);
+    }
+
     private function createPendingInvoice(float $amount = 100_000): Invoice
     {
         $app = Application::factory()->create();

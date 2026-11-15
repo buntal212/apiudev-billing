@@ -161,7 +161,7 @@ class InvoiceService
     private function makeInvoiceNumber(): string
     {
         do {
-            $invoiceNumber = 'INV-'.now()->format('Ymd').'-'.Str::upper(Str::random(10));
+            $invoiceNumber = 'INV-'.now()->format('Ymd').'-'.Str::upper(Str::random(8));
         } while (Invoice::query()->where('invoice_number', $invoiceNumber)->exists());
 
         return $invoiceNumber;
