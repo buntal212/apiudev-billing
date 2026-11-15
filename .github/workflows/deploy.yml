@@ -424,6 +424,8 @@ jobs:
             echo '--- Verifikasi limit scheduler pada bootstrap/app.php ---'
             grep -F 'payments:reconcile-pending --limit=25' "$APP_DIR/bootstrap/app.php"
             grep -F 'checkouts:dispatch-pending --limit=50' "$APP_DIR/bootstrap/app.php"
+            echo '--- Diagnosis lock scheduler & cache_locks ---'
+            "$PHP_BIN" artisan schedule:diagnose-locks --no-interaction
           )
 
           echo '=== Menyelaraskan permission storage/logs/laravel.log (0664) ==='
