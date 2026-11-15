@@ -600,6 +600,60 @@ class DanaGatewayMerchantManagementApiTest extends TestCase
         $this->assertStringNotContainsString('secret-token-12345', $auditPayload);
     }
 
+    public function test_rsa_validation_failure_message_is_passed_to_admin_without_leaking_key_material(): void
+    {
+        $merchant = $this->sandboxProvisionedMerchant();
+        Http::fake([
+            "https://dana-gateway.test/api/v1/internal/merchants/{$merchant->gateway_merchant_id}/dana-configuration" => Http::response([
+                'message' => 'Public key DANA harus berukuran RSA-2048 sesuai skema autentikasi DANA.',
+            ], 422),
+        ]);
+        $this->actingAdmin();
+
+        $this->putJson($this->configurationUrl($merchant->gateway_merchant_id), $this->configurationPayload())
+            ->assertStatus(422)
+            ->assertJsonPath('message', 'Public key DANA harus berukuran RSA-2048 sesuai skema autentikasi DANA.');
+    }
+
+    public function test_unsafe_validation_failure_message_is_masked_with_safe_generic_message(): void
+    {
+        $merchant = $this->sandboxProvisionedMerchant();
+        Http::fake([
+            "https://dana-gateway.test/api/v1/internal/merchants/{$merchant->gateway_merchant_id}/dana-configuration" => Http::response([
+                'message' => 'Internal database error revealing sensitive key material: MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8A',
+            ], 422),
+        ]);
+        $this->actingAdmin();
+
+        $this->putJson($this->configurationUrl($merchant->gateway_merchant_id), $this->configurationPayload())
+            ->assertStatus(422)
+            ->assertJsonPath('message', 'Data provisioning merchant ditolak oleh gateway.')
+            ->assertDontSee('MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8A');
+    }
+
+    public function test_partial_configuration_with_clear_flags_is_forwarded_to_gateway(): void
+    {
+        $merchant = $this->sandboxProvisionedMerchant();
+        Http::fake([
+            "https://dana-gateway.test/api/v1/internal/merchants/{$merchant->gateway_merchant_id}/dana-configuration" => function (HttpRequest $request): mixed {
+                $data = $request->data();
+                $this->assertTrue($data['clear_external_store_id']);
+                $this->assertTrue($data['clear_sub_merchant_id']);
+
+                return Http::response(['data' => $this->configuration()]);
+            },
+        ]);
+        $this->actingAdmin();
+
+        $payload = $this->configurationPayload([
+            'clear_external_store_id' => true,
+            'clear_sub_merchant_id' => true,
+        ]);
+
+        $this->putJson($this->configurationUrl($merchant->gateway_merchant_id), $payload)
+            ->assertOk();
+    }
+
     /** @return array{gateway_merchant_id: int, merchant_code: string} */
     private function sandboxProvisionedMerchant(array $overrides = []): DanaMerchantProvisioningAudit
     {

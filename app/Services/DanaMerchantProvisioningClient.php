@@ -611,7 +611,7 @@ class DanaMerchantProvisioningClient
         return match ($response->status()) {
             404 => new DanaMerchantProvisioningException('Merchant gateway tidak ditemukan.', 404, false, 404),
             409 => new DanaMerchantProvisioningException($this->safeProvisioningConflictMessage($response) ?? 'Permintaan provisioning merchant berkonflik dengan data yang sudah ada.', 409, false, 409),
-            422 => new DanaMerchantProvisioningException($this->safeSandboxTesterValidationMessage($response) ?? 'Data provisioning merchant ditolak oleh gateway.', 422, false, 422),
+            422 => new DanaMerchantProvisioningException($this->safeValidationMessage($response) ?? 'Data provisioning merchant ditolak oleh gateway.', 422, false, 422),
             401, 403 => new DanaMerchantProvisioningException('Autentikasi provisioning merchant gateway gagal.', 502, false, $response->status()),
             429 => new DanaMerchantProvisioningException('Gateway provisioning merchant sedang membatasi permintaan. Coba lagi nanti.', 503, true, 429, $response->header('Retry-After')),
             default => new DanaMerchantProvisioningException('Gateway provisioning merchant sedang mengalami gangguan.', 503, true, $response->status()),
@@ -629,7 +629,7 @@ class DanaMerchantProvisioningClient
                 409,
             ),
             422 => new DanaMerchantProvisioningException(
-                $this->safeSandboxTesterValidationMessage($response) ?? 'Data transaksi Sandbox ditolak oleh gateway.',
+                $this->safeValidationMessage($response) ?? 'Data transaksi Sandbox ditolak oleh gateway.',
                 422,
                 false,
                 422,
@@ -640,16 +640,43 @@ class DanaMerchantProvisioningClient
 
     private function safeSandboxTesterValidationMessage(Response $response): ?string
     {
+        return $this->safeValidationMessage($response);
+    }
+
+    private function safeValidationMessage(Response $response): ?string
+    {
         $message = $response->json('message');
         if (! is_string($message)) {
             return null;
         }
 
-        return in_array($message, [
+        $safeMessages = [
             'Konfigurasi DANA Sandbox belum siap untuk membuat transaksi uji.',
             'QRIS Sandbox memerlukan External Store ID pada konfigurasi merchant.',
             'Idempotency-Key sudah digunakan untuk transaksi Sandbox yang berbeda.',
-        ], true) ? $message : null;
+            'Private key dan DANA webhook public key wajib tersedia sebelum konfigurasi disimpan.',
+            'Private key tidak dapat dibaca. Tempelkan key dari Portal DANA dalam format PEM atau Base64 DER yang utuh.',
+            'Private key tidak dapat digunakan untuk signature RSA-SHA256. Gunakan private key merchant yang valid dari Portal DANA.',
+            'Public key DANA tidak dapat dibaca. Tempelkan public key dari Portal DANA dalam format PEM atau Base64 DER yang utuh.',
+            'Private key wajib diisi untuk konfigurasi baru.',
+            'Public key DANA wajib diisi untuk konfigurasi baru.',
+            'Format key tidak dikenali. Tempelkan PEM lengkap atau Base64 DER dari Portal DANA.',
+            'Base64 key tidak valid. Salin ulang seluruh key dari Portal DANA.',
+            'Base64 yang ditempel bukan struktur private key PKCS#8 atau PKCS#1 yang didukung.',
+            'Base64 yang ditempel bukan struktur public key SPKI atau PKCS#1 yang didukung.',
+            'Base64 key bukan DER ASN.1 yang utuh.',
+            'Base64 key bukan DER ASN.1 yang valid.',
+            'Struktur PEM key tidak lengkap. Salin seluruh key dari Portal DANA tanpa mengubah isinya.',
+            'Format PEM bukan private key PKCS#8 atau PKCS#1 yang didukung.',
+            'Format PEM bukan public key SPKI atau PKCS#1 yang didukung.',
+            'Public key DANA harus berupa RSA-2048.',
+            'Private key harus berupa RSA-2048.',
+            'Public key DANA harus berukuran RSA-2048 sesuai skema autentikasi DANA.',
+            'Private key harus berukuran RSA-2048 sesuai skema autentikasi DANA.',
+            'Merchant tidak aktif.',
+        ];
+
+        return in_array($message, $safeMessages, true) ? $message : null;
     }
 
     private function safeSandboxTesterConflictMessage(Response $response): ?string
