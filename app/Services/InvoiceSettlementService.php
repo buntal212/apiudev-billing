@@ -277,8 +277,8 @@ class InvoiceSettlementService
     ): void {
         $this->assertVerificationMatchesAttempt($attempt, $invoice, $verification);
 
-        if ($verification->provider === 'dana' && $verification->environment !== 'sandbox') {
-            $this->reject('gateway_environment_not_allowed', 'Settlement DANA hanya diizinkan pada Sandbox.');
+        if ($verification->provider === 'dana' && ! in_array($verification->environment, ['sandbox', 'production'], true)) {
+            $this->reject('gateway_environment_not_allowed', 'Settlement DANA hanya diizinkan pada Sandbox atau Production.');
         }
 
         if ($verification->provider === 'midtrans' && ! in_array($verification->environment, ['sandbox', 'production'], true)) {

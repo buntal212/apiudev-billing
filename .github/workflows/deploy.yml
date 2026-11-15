@@ -32,8 +32,8 @@ jobs:
           awk '
             $0 == "      - name: Deploy source Laravel" { in_step=1; next }
             in_step && $0 == "        run: |" { in_run=1; next }
-            in_run && /^          / { sub(/^          /, ""); print; next }
-            in_run { exit }
+            in_run && /^      - / { exit }
+            in_run { sub(/^          /, ""); print }
           ' "$GITHUB_WORKSPACE/.github/workflows/deploy.yml" | bash -n
 
       - name: Deploy source Laravel
@@ -307,6 +307,28 @@ jobs:
             fail 'Production bootstrap/cache missing or symlinked'
           [[ -w "$APP_DIR/bootstrap/cache" ]] || \
             fail 'Runner cannot write production bootstrap/cache; adjust narrowly scoped ACL before deploying'
+
+          # Sinkronisasikan permission & ACL bootstrap/cache agar runner dan web user dapat mengelola cache
+          chmod 775 "$APP_DIR/bootstrap/cache" 2>/dev/null || true
+          chmod 664 "$APP_DIR/bootstrap/cache"/*.php 2>/dev/null || true
+          if command -v setfacl >/dev/null 2>&1; then
+            setfacl -m "u:$USER:rwX" -m "g::rwX" "$APP_DIR/bootstrap/cache" 2>/dev/null || true
+            setfacl -d -m "u:$USER:rwX" -m "g::rwX" "$APP_DIR/bootstrap/cache" 2>/dev/null || true
+            for web_user in www www-data nginx; do
+              if id "$web_user" >/dev/null 2>&1; then
+                setfacl -m "u:$web_user:rwX" "$APP_DIR/bootstrap/cache" 2>/dev/null || true
+                setfacl -d -m "u:$web_user:rwX" "$APP_DIR/bootstrap/cache" 2>/dev/null || true
+                break
+              fi
+            done
+          fi
+
+          # Jika masih ada file cache lama yang dibuat proses web (0644) dan tidak writable bagi runner,
+          # bersihkan file cache tersebut karena direktori bootstrap/cache sudah terverifikasi writable.
+          if find "$APP_DIR/bootstrap/cache" -maxdepth 1 -type f ! -writable -print -quit | grep -q .; then
+            rm -f "$APP_DIR/bootstrap/cache"/*.php 2>/dev/null || true
+          fi
+
           if find "$APP_DIR/bootstrap/cache" -maxdepth 1 -type f ! -writable -print -quit | grep -q .; then
             fail 'Runner cannot modify existing generated cache files; adjust narrowly scoped ACL before deploying'
           fi
@@ -393,6 +415,10 @@ jobs:
 
           echo '=== Menyelaraskan permission storage/logs/laravel.log (0664) ==='
           ensure_storage_permissions "$SHARED_STORAGE"
+
+          echo '=== Menyelaraskan permission bootstrap/cache (0775 / 0664) ==='
+          chmod 775 "$APP_DIR/bootstrap/cache" 2>/dev/null || true
+          chmod 664 "$APP_DIR/bootstrap/cache"/*.php 2>/dev/null || true
 
           ACTIVATION_STARTED=0
           DEPLOY_OK=1

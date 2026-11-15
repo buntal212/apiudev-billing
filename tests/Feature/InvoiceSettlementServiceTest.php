@@ -345,7 +345,7 @@ class InvoiceSettlementServiceTest extends TestCase
         ]);
     }
 
-    public function test_dana_production_environment_is_not_settled_by_this_stage(): void
+    public function test_dana_production_environment_is_settled_when_verified(): void
     {
         [$invoice, $attempt] = $this->settleableInvoice();
         $attempt->update(['gateway_environment' => 'production']);
@@ -357,12 +357,26 @@ class InvoiceSettlementServiceTest extends TestCase
             'is_active' => true,
         ]);
 
+        $result = app(InvoiceSettlementService::class)->settle(
+            $attempt,
+            $this->verification($attempt),
+        );
+
+        $this->assertSame(Invoice::StatusPaid, $invoice->fresh()->status);
+        $this->assertSame(Invoice::StatusPaid, $result->invoice->status);
+    }
+
+    public function test_dana_unsupported_environment_is_rejected(): void
+    {
+        [$invoice, $attempt] = $this->settleableInvoice();
+        $attempt->update(['gateway_environment' => 'staging']);
+
         try {
             app(InvoiceSettlementService::class)->settle(
                 $attempt,
                 $this->verification($attempt),
             );
-            self::fail('Settlement DANA Production seharusnya ditolak.');
+            self::fail('Settlement DANA environment selain sandbox dan production seharusnya ditolak.');
         } catch (SettlementRejectedException $exception) {
             self::assertSame('gateway_environment_not_allowed', $exception->safeCode);
         }

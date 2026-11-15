@@ -387,6 +387,56 @@ class PaymentReconciliationServiceTest extends TestCase
         $this->assertStringNotContainsString('test-api-key', json_encode($audit));
     }
 
+    public function test_dana_production_payment_reconciliation_settles_invoice_correctly(): void
+    {
+        config()->set('services.dana_gateway.base_urls.production', 'https://dana-prod.test');
+        config()->set('services.dana_gateway.merchant_api_keys.production', [
+            'udev-prod' => 'prod-api-key-12345',
+        ]);
+        config()->set('services.dana_gateway.merchants.production', [
+            'udev-prod' => ['name' => 'UDEV Production', 'is_active' => true],
+        ]);
+
+        $attempt = $this->attempt([
+            'gateway_environment' => 'production',
+            'gateway_merchant_code' => 'udev-prod',
+        ]);
+
+        ApplicationPaymentGateway::query()->create([
+            'application_id' => $attempt->invoice->plan->application_id,
+            'provider' => 'dana',
+            'environment' => 'production',
+            'gateway_merchant_code' => 'udev-prod',
+            'is_active' => true,
+        ]);
+
+        Http::fake([
+            "https://dana-prod.test/api/v1/payments/{$attempt->gateway_payment_id}/status" => Http::response([
+                'data' => [
+                    'id' => $attempt->gateway_payment_id,
+                    'merchant_order_id' => $attempt->merchant_reference,
+                    'amount_minor' => 10000,
+                    'currency' => 'IDR',
+                    'status' => 'paid',
+                    'paid_at' => now()->toISOString(),
+                    'provider_order_id' => 'DANA-PROD-ORD-999',
+                ],
+            ], 200),
+        ]);
+
+        $processed = app(PaymentReconciliationService::class)->reconcilePending(10);
+
+        $this->assertSame(1, $processed, 'Pembayaran DANA Production harus diproses oleh reconcilePending.');
+        $this->assertSame(PaymentAttempt::StatusSucceeded, $attempt->fresh()->status);
+        $this->assertSame(Invoice::StatusPaid, $attempt->invoice->fresh()->status);
+        $this->assertSame('DANA-PROD-ORD-999', $attempt->fresh()->provider_reference);
+
+        Http::assertSent(function (HttpRequest $request) use ($attempt): bool {
+            return $request->url() === "https://dana-prod.test/api/v1/payments/{$attempt->gateway_payment_id}/status"
+                && $request->hasHeader('Authorization', 'Bearer prod-api-key-12345');
+        });
+    }
+
     private function attempt(array $overrides = []): PaymentAttempt
     {
         $attempt = PaymentAttempt::factory()->create(array_merge([

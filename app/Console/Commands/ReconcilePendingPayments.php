@@ -8,7 +8,7 @@ use Illuminate\Console\Attributes\Signature;
 use Illuminate\Console\Command;
 
 #[Signature('payments:reconcile-pending {--limit=25 : Jumlah maksimum payment attempt yang diperiksa}')]
-#[Description('Merekonsiliasi payment attempt DANA Sandbox yang masih pending')]
+#[Description('Merekonsiliasi payment attempt DANA (Sandbox & Production) dan Midtrans yang masih pending')]
 class ReconcilePendingPayments extends Command
 {
     public function handle(PaymentReconciliationService $reconciliationService): int
