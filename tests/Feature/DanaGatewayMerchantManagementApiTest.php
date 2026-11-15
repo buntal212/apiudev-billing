@@ -97,7 +97,7 @@ class DanaGatewayMerchantManagementApiTest extends TestCase
     {
         $merchant = $this->sandboxProvisionedMerchant();
         Http::fake([
-            "https://dana-gateway.test/api/v1/internal/merchants/{$merchant->gateway_merchant_id}/dana-configuration" => Http::response([
+            "https://dana-gateway.test/api/v1/internal/merchants/{$merchant->gateway_merchant_id}/dana-configuration*" => Http::response([
                 'data' => [
                     'merchant_code' => $merchant->merchant_code,
                     'environment' => 'sandbox',
@@ -684,6 +684,89 @@ class DanaGatewayMerchantManagementApiTest extends TestCase
             'clear_external_store_id' => true,
             'clear_sub_merchant_id' => true,
         ]);
+
+        $this->putJson($this->configurationUrl($merchant->gateway_merchant_id), $payload)
+            ->assertOk();
+    }
+
+    public function test_stored_dana_configuration_returns_all_ten_non_secret_fields_and_secret_status(): void
+    {
+        $merchant = $this->sandboxProvisionedMerchant();
+        Http::fake([
+            "https://dana-gateway.test/api/v1/internal/merchants/{$merchant->gateway_merchant_id}/dana-configuration*" => Http::response([
+                'data' => [
+                    'merchant_code' => $merchant->merchant_code,
+                    'environment' => 'production',
+                    'configuration_exists' => true,
+                    'dana_configuration' => ['available' => true, 'enabled' => true, 'ready' => true],
+                    'configuration' => [
+                        'partner_id' => 'partner-prod-1',
+                        'client_id' => 'client-prod-1',
+                        'merchant_id' => 'mid-prod-1',
+                        'origin' => 'https://udev.production',
+                        'channel_id' => 'prod-channel',
+                        'external_store_id' => 'EXT-001',
+                        'sub_merchant_id' => 'SUB-001',
+                        'notification_url' => 'https://dana.production/webhook',
+                        'callback_url' => 'https://udev.production/callback',
+                        'mcc' => '5411',
+                        'enabled' => true,
+                        'private_key_configured' => true,
+                        'dana_webhook_public_key_configured' => true,
+                        'client_secret_configured' => true,
+                    ],
+                ],
+            ]),
+        ]);
+        $this->actingAdmin();
+
+        $this->getJson($this->storedConfigurationUrl($merchant->gateway_merchant_id).'?environment=production')
+            ->assertOk()
+            ->assertHeader('Cache-Control')
+            ->assertJsonPath('data.configuration_exists', true)
+            ->assertJsonPath('data.configuration.partner_id', 'partner-prod-1')
+            ->assertJsonPath('data.configuration.client_id', 'client-prod-1')
+            ->assertJsonPath('data.configuration.merchant_id', 'mid-prod-1')
+            ->assertJsonPath('data.configuration.origin', 'https://udev.production')
+            ->assertJsonPath('data.configuration.channel_id', 'prod-channel')
+            ->assertJsonPath('data.configuration.external_store_id', 'EXT-001')
+            ->assertJsonPath('data.configuration.sub_merchant_id', 'SUB-001')
+            ->assertJsonPath('data.configuration.notification_url', 'https://dana.production/webhook')
+            ->assertJsonPath('data.configuration.callback_url', 'https://udev.production/callback')
+            ->assertJsonPath('data.configuration.mcc', '5411')
+            ->assertJsonPath('data.configuration.enabled', true)
+            ->assertJsonPath('data.configuration.private_key_configured', true)
+            ->assertJsonPath('data.configuration.dana_webhook_public_key_configured', true)
+            ->assertJsonPath('data.configuration.client_secret_configured', true)
+            ->assertJsonMissingPath('data.configuration.client_secret')
+            ->assertJsonMissingPath('data.configuration.private_key')
+            ->assertJsonMissingPath('data.configuration.dana_webhook_public_key');
+    }
+
+    public function test_clear_secret_flags_and_omitted_secrets_are_forwarded_to_gateway(): void
+    {
+        $merchant = $this->sandboxProvisionedMerchant();
+        Http::fake([
+            "https://dana-gateway.test/api/v1/internal/merchants/{$merchant->gateway_merchant_id}/dana-configuration" => function (HttpRequest $request): mixed {
+                $data = $request->data();
+                $this->assertTrue($data['clear_client_secret']);
+                $this->assertTrue($data['clear_private_key']);
+                $this->assertTrue($data['clear_dana_webhook_public_key']);
+                $this->assertArrayNotHasKey('client_secret', $data);
+                $this->assertArrayNotHasKey('private_key', $data);
+                $this->assertArrayNotHasKey('dana_webhook_public_key', $data);
+
+                return Http::response(['data' => $this->configuration()]);
+            },
+        ]);
+        $this->actingAdmin();
+
+        $payload = $this->configurationPayload([
+            'clear_client_secret' => true,
+            'clear_private_key' => true,
+            'clear_dana_webhook_public_key' => true,
+        ]);
+        unset($payload['private_key'], $payload['dana_webhook_public_key'], $payload['client_secret']);
 
         $this->putJson($this->configurationUrl($merchant->gateway_merchant_id), $payload)
             ->assertOk();
