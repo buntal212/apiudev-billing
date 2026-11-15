@@ -413,6 +413,18 @@ jobs:
               --no-interaction
           )
 
+          echo '=== Verifikasi server HOMELAB: Scheduler & Commands ==='
+          (
+            cd "$APP_DIR"
+            echo '--- php artisan schedule:list ---'
+            "$PHP_BIN" artisan schedule:list --no-interaction
+            echo '--- php artisan list checkouts:dispatch-pending ---'
+            "$PHP_BIN" artisan list --raw --no-interaction | grep -F 'checkouts:dispatch-pending'
+            echo '--- Verifikasi limit scheduler pada bootstrap/app.php ---'
+            grep -F 'payments:reconcile-pending --limit=25' "$APP_DIR/bootstrap/app.php"
+            grep -F 'checkouts:dispatch-pending --limit=50' "$APP_DIR/bootstrap/app.php"
+          )
+
           echo '=== Menyelaraskan permission storage/logs/laravel.log (0664) ==='
           ensure_storage_permissions "$SHARED_STORAGE"
 
