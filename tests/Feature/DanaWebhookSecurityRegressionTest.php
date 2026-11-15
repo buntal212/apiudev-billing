@@ -317,6 +317,108 @@ class DanaWebhookSecurityRegressionTest extends TestCase
         $this->assertSame(PaymentAttempt::StatusSucceeded, $attempt->fresh()->status);
     }
 
+    public function test_expired_webhook_marks_attempt_expired_and_never_settles_invoice(): void
+    {
+        $invoice = $this->createPendingInvoice(125_000);
+        $attempt = PaymentAttempt::factory()->for($invoice)->create([
+            'attempt_number' => 1,
+            'provider' => 'dana',
+            'merchant_reference' => $invoice->invoice_number.'-A1',
+            'gateway_merchant_code' => 'udev-central',
+            'gateway_environment' => 'sandbox',
+            'gateway_payment_id' => '01JBK9Y8Z123456789ABCDEF07',
+            'status' => PaymentAttempt::StatusPending,
+            'amount' => 125_000,
+            'currency' => 'IDR',
+        ]);
+
+        $payload = [
+            'merchant_order_id' => $invoice->invoice_number.'-A1',
+            'originalReferenceNo' => '01JBK9Y8Z123456789ABCDEF07',
+            'status' => 'expired',
+            'latestTransactionStatus' => '05',
+        ];
+
+        $response = $this->postJson('/api/v1/payment-gateways/dana/webhook', $payload, [
+            'X-Webhook-Secret' => 'configured-webhook-secret-token-64char',
+        ]);
+
+        $response->assertOk()
+            ->assertJsonPath('status', 'OK')
+            ->assertJsonPath('message', 'Transaksi DANA ditandai sebagai kedaluwarsa.');
+
+        // 1. PaymentAttempt berubah menjadi expired
+        $this->assertSame(PaymentAttempt::StatusExpired, $attempt->fresh()->status);
+        $this->assertSame('dana_expired', $attempt->fresh()->failure_code);
+
+        // 2. Invoice TETAP pending, tidak pernah berubah menjadi paid
+        $this->assertSame(Invoice::StatusPending, $invoice->fresh()->status);
+        $this->assertNull($invoice->fresh()->paid_at);
+
+        // 3. Settlement TIDAK PERNAH terjadi (PaymentAllocation = 0)
+        $this->assertSame(0, PaymentAllocation::query()->where('invoice_id', $invoice->id)->count());
+    }
+
+    public function test_duplicate_paid_webhook_is_idempotent_and_does_not_duplicate_settlement(): void
+    {
+        $invoice = $this->createPendingInvoice(175_000);
+        $attempt = PaymentAttempt::factory()->for($invoice)->create([
+            'attempt_number' => 1,
+            'provider' => 'dana',
+            'merchant_reference' => $invoice->invoice_number.'-A1',
+            'gateway_merchant_code' => 'udev-central',
+            'gateway_environment' => 'sandbox',
+            'gateway_payment_id' => '01JBK9Y8Z123456789ABCDEF08',
+            'status' => PaymentAttempt::StatusPending,
+            'amount' => 175_000,
+            'currency' => 'IDR',
+        ]);
+
+        Http::fake([
+            'http://dana-gateway.test/api/v1/payments/*' => Http::response([
+                'data' => [
+                    'id' => '01JBK9Y8Z123456789ABCDEF08',
+                    'merchant_order_id' => $invoice->invoice_number.'-A1',
+                    'amount_minor' => 175000,
+                    'currency' => 'IDR',
+                    'status' => 'paid',
+                    'paid_at' => now()->toISOString(),
+                ],
+            ], 200),
+        ]);
+
+        $payload = [
+            'merchant_order_id' => $invoice->invoice_number.'-A1',
+            'originalReferenceNo' => '01JBK9Y8Z123456789ABCDEF08',
+            'status' => 'paid',
+            'latestTransactionStatus' => '00',
+        ];
+
+        // 1. Webhook pertama: memicu settlement
+        $firstResponse = $this->postJson('/api/v1/payment-gateways/dana/webhook', $payload, [
+            'X-Webhook-Secret' => 'configured-webhook-secret-token-64char',
+        ]);
+
+        $firstResponse->assertOk()
+            ->assertJsonPath('status', 'OK');
+
+        $this->assertSame(Invoice::StatusPaid, $invoice->fresh()->status);
+        $this->assertSame(PaymentAttempt::StatusSucceeded, $attempt->fresh()->status);
+        $this->assertSame(1, PaymentAllocation::query()->where('invoice_id', $invoice->id)->count());
+
+        // 2. Webhook kedua (duplikat): ditangani secara idempoten tanpa duplikasi settlement
+        $duplicateResponse = $this->postJson('/api/v1/payment-gateways/dana/webhook', $payload, [
+            'X-Webhook-Secret' => 'configured-webhook-secret-token-64char',
+        ]);
+
+        $duplicateResponse->assertOk()
+            ->assertJsonPath('status', 'OK')
+            ->assertJsonPath('message', 'Payment attempt sudah diselesaikan sebelumnya (idempoten).');
+
+        // Pastikan alokasi tetap persis 1
+        $this->assertSame(1, PaymentAllocation::query()->where('invoice_id', $invoice->id)->count());
+    }
+
     private function createPendingInvoice(float $amount): Invoice
     {
         $application = Application::factory()->create();
