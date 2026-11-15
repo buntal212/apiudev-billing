@@ -434,6 +434,132 @@ class DanaInvoiceIntegrationTest extends TestCase
         $this->assertSame($legacyRef, $attempt->fresh()->merchant_reference);
     }
 
+    public function test_end_to_end_qris_production_flow_from_create_order_to_webhook_and_settlement(): void
+    {
+        $app = Application::factory()->create();
+        $customer = ApplicationCustomer::factory()->for($app)->create();
+        $plan = SubscriptionPlan::factory()->for($app)->create(['price' => 150_000]);
+
+        ApplicationPaymentGateway::query()->create([
+            'application_id' => $app->id,
+            'provider' => 'dana',
+            'environment' => 'sandbox',
+            'gateway_merchant_code' => 'udev-central',
+            'is_active' => true,
+        ]);
+
+        $invoiceService = app(\App\Services\InvoiceService::class);
+        $invoice = $invoiceService->createInvoice($customer->id, $plan->id, null, now()->addDays(3), 'idemp-e2e-inv-001');
+
+        // 1. Verify invoice number format is 21 characters, attempt 1 reference is 24 characters (<= 25)
+        $this->assertSame(21, strlen($invoice->invoice_number));
+        $attempt1Ref = $invoice->invoice_number.'-A1';
+        $this->assertSame(24, strlen($attempt1Ref));
+        $this->assertLessThanOrEqual(25, strlen($attempt1Ref));
+
+        // 2. Mock DANA gateway: Create Order returns pending status with 25-char partner_reference_no
+        $qrisHashRef = 'Q'.substr(hash('sha256', 'e2e-gateway-payment-001'), 0, 24);
+        $this->assertSame(25, strlen($qrisHashRef));
+
+        $gatewayPaymentPayload = [
+            'id' => '01JE2EGATEWAYPAYMENT00000000',
+            'partner_reference_no' => $qrisHashRef,
+            'merchant_order_id' => $attempt1Ref,
+            'amount_minor' => 150000,
+            'currency' => 'IDR',
+            'status' => 'pending',
+            'checkout_url' => null,
+            'expires_at' => now()->addMinutes(30)->toISOString(),
+            'metadata' => [
+                'partner_reference_no' => $qrisHashRef,
+                'payment_method' => 'qris',
+                'udev_sandbox_payment_instruction' => [
+                    'method' => 'qris',
+                    'label' => 'QRIS',
+                    'type' => 'qris_mpm',
+                    'qr_content' => '00020101021226570011ID.DANA.WWW01189360091500029570755405750005802ID',
+                    'payment_code' => '00020101021226570011ID.DANA.WWW01189360091500029570755405750005802ID',
+                ],
+            ],
+        ];
+
+        $isGatewayPaid = false;
+        Http::fake([
+            'http://dana-gateway.test/api/v1/payments*' => function (HttpRequest $request) use (&$gatewayPaymentPayload, &$isGatewayPaid) {
+                $payload = $gatewayPaymentPayload;
+                if ($isGatewayPaid) {
+                    $payload['status'] = 'paid';
+                    $payload['paid_at'] = now()->toISOString();
+                }
+
+                return Http::response(['data' => $payload]);
+            },
+        ]);
+
+        Sanctum::actingAs(User::factory()->create(['is_admin' => true]), ['admin:access']);
+
+        // 3. Request Checkout (POST /checkout)
+        $checkoutResponse = $this->postJson("/api/v1/admin/invoices/{$invoice->id}/checkout", [
+            'payment_method' => 'qris',
+            'provider' => 'dana',
+        ], ['Idempotency-Key' => 'idemp-checkout-e2e-001']);
+
+        $checkoutResponse->assertOk()
+            ->assertJsonPath('data.payment_method', 'qris')
+            ->assertJsonPath('data.checkout_status', 'ready')
+            ->assertJsonPath('data.qr_content', '00020101021226570011ID.DANA.WWW01189360091500029570755405750005802ID');
+
+        $attempt = PaymentAttempt::query()->where('invoice_id', $invoice->id)->firstOrFail();
+        $this->assertSame(PaymentAttempt::StatusPending, $attempt->status);
+        $this->assertSame($attempt1Ref, $attempt->merchant_reference);
+        $this->assertSame($qrisHashRef, $attempt->provider_reference);
+        $this->assertSame('01JE2EGATEWAYPAYMENT00000000', $attempt->gateway_payment_id);
+
+        // 4. Retry with identical Idempotency-Key must not duplicate attempt
+        $retryCheckoutResponse = $this->postJson("/api/v1/admin/invoices/{$invoice->id}/checkout", [
+            'payment_method' => 'qris',
+            'provider' => 'dana',
+        ], ['Idempotency-Key' => 'idemp-checkout-e2e-001']);
+
+        $retryCheckoutResponse->assertOk();
+        $this->assertSame(1, PaymentAttempt::query()->where('invoice_id', $invoice->id)->count());
+
+        // 5. Simulate DANA sending Finish Notify Webhook with originalPartnerReferenceNo
+        $webhookPayload = [
+            'merchant_order_id' => $attempt1Ref,
+            'partnerReferenceNo' => $qrisHashRef,
+            'originalPartnerReferenceNo' => $qrisHashRef,
+            'id' => '01JE2EGATEWAYPAYMENT00000000',
+            'status' => 'paid',
+            'latestTransactionStatus' => '00',
+            'amount_minor' => 150000,
+            'currency' => 'IDR',
+            'paid_at' => now()->toIso8601String(),
+        ];
+
+        // Mark gateway mock as paid for status verification during webhook processing
+        $isGatewayPaid = true;
+
+        $headers = ['Authorization' => 'Bearer test-key'];
+
+        $webhookResponse = $this->postJson('/api/v1/payment-gateways/dana/webhook', $webhookPayload, $headers);
+        $webhookResponse->assertOk()
+            ->assertJsonPath('status', 'OK')
+            ->assertJsonPath('merchant_reference', $attempt1Ref);
+
+        // 6. Verify UDEV Settlement
+        $freshAttempt = $attempt->fresh();
+        $this->assertSame(PaymentAttempt::StatusSucceeded, $freshAttempt->status);
+        $this->assertSame(Invoice::StatusPaid, $invoice->fresh()->status);
+        $this->assertSame(1, PaymentAllocation::query()->where('invoice_id', $invoice->id)->count());
+        $this->assertNotEmpty($freshAttempt->metadata['gateway_verification']['verified_at']);
+
+        // 7. Duplicate Webhook delivery is idempotent and does not double-settle
+        $duplicateWebhookResponse = $this->postJson('/api/v1/payment-gateways/dana/webhook', $webhookPayload, $headers);
+        $duplicateWebhookResponse->assertOk();
+        $this->assertSame(1, PaymentAllocation::query()->where('invoice_id', $invoice->id)->count());
+    }
+
     private function createPendingInvoice(float $amount = 100_000): Invoice
     {
         $app = Application::factory()->create();
