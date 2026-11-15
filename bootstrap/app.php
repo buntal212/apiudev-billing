@@ -28,7 +28,12 @@ return Application::configure(basePath: dirname(__DIR__))
         health: '/up',
     )
     ->withSchedule(function (Schedule $schedule): void {
-        $schedule->command('payments:reconcile-pending')
+        $schedule->command('payments:reconcile-pending --limit=25')
+            ->everyMinute()
+            ->withoutOverlapping(1)
+            ->onOneServer();
+
+        $schedule->command('checkouts:dispatch-pending --limit=50')
             ->everyMinute()
             ->withoutOverlapping(1)
             ->onOneServer();

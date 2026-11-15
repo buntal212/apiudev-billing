@@ -11,6 +11,11 @@ use Illuminate\Console\Command;
 #[Description('Memproses ulang checkout DANA pending dari outbox secara aman')]
 class DispatchPendingCheckouts extends Command
 {
+    /**
+     * @var array<int, string>
+     */
+    protected $aliases = ['checkouts:dispatch-pending'];
+
     public function handle(CheckoutService $checkoutService): int
     {
         $limit = max(1, min(100, (int) $this->option('limit')));
