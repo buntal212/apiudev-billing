@@ -18,6 +18,12 @@ class InvoiceResource extends JsonResource
         $referral = $this->relationLoaded('customer') && $this->customer?->relationLoaded('referral')
             ? $this->customer->referral
             : null;
+        $latestAttempt = $this->relationLoaded('paymentAttempts')
+            ? $this->paymentAttempts->sortByDesc('attempt_number')->first()
+            : null;
+        $latestEnv = $latestAttempt
+            ? ($latestAttempt->gateway_environment ?: ($latestAttempt->metadata['gateway_environment'] ?? $latestAttempt->metadata['environment'] ?? 'sandbox'))
+            : null;
 
         return [
             'id' => $this->id,
@@ -27,6 +33,8 @@ class InvoiceResource extends JsonResource
             'subscription_id' => $this->subscription_id,
             'amount' => $this->amount,
             'currency' => $this->currency,
+            'gateway_environment' => $latestEnv,
+            'environment' => $latestEnv,
             'pricing' => [
                 'normal_price' => $metadata['normal_price'] ?? $this->amount,
                 'discount_amount' => $metadata['referral_discount'] ?? '0.00',

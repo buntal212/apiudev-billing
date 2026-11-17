@@ -50,7 +50,8 @@ class BillingGatewayTransactionResource extends JsonResource
             ],
             'gateway' => [
                 'provider' => strtolower($attempt->provider),
-                'environment' => $attempt->gateway_environment,
+                'environment' => $attempt->gateway_environment ?: ($attempt->metadata['gateway_environment'] ?? $attempt->metadata['environment'] ?? 'sandbox'),
+                'gateway_environment' => $attempt->gateway_environment ?: ($attempt->metadata['gateway_environment'] ?? $attempt->metadata['environment'] ?? 'sandbox'),
                 'merchant_code' => $attempt->gateway_merchant_code,
                 'transaction_id' => $attempt->gateway_payment_id,
                 'status' => $run?->gateway_status,

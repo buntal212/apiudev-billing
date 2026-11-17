@@ -50,14 +50,17 @@ class InvoiceCheckoutResource extends JsonResource
             ? url("/api/v1/admin/payment-attempts/{$this->id}/qr-image")
             : null;
 
+        $env = $this->gateway_environment
+            ?: ($metadata['gateway_environment'] ?? $metadata['environment'] ?? 'sandbox');
+
         return [
             'invoice_id' => $this->invoice_id,
             'payment_attempt_id' => $this->id,
             'gateway_payment_id' => $this->gateway_payment_id,
             'transaction_id' => $metadata['transaction_id'] ?? $this->gateway_payment_id,
             'status' => $this->status,
-            'gateway_environment' => $this->gateway_environment ?? 'sandbox',
-            'environment' => $this->gateway_environment ?? 'sandbox',
+            'gateway_environment' => $env,
+            'environment' => $env,
             'payment_method' => $metadata['payment_method'] ?? 'dana_wallet',
             'amount' => $this->amount,
             'subtotal_amount' => (float) ($metadata['fee_breakdown']['subtotal_amount'] ?? $this->amount),

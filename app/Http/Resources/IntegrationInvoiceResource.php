@@ -47,6 +47,8 @@ class IntegrationInvoiceResource extends JsonResource
             'payment' => $attempt ? [
                 'status' => $attempt->status,
                 'provider' => $attempt->provider,
+                'gateway_environment' => $attempt->gateway_environment ?: ($attempt->metadata['gateway_environment'] ?? $attempt->metadata['environment'] ?? 'sandbox'),
+                'environment' => $attempt->gateway_environment ?: ($attempt->metadata['gateway_environment'] ?? $attempt->metadata['environment'] ?? 'sandbox'),
                 'payment_method' => $attempt->metadata['payment_method'] ?? ($attempt->provider === 'midtrans' ? 'qris' : 'dana_wallet'),
                 'bank' => $attempt->metadata['bank'] ?? null,
                 'amount' => $attempt->amount,
@@ -72,6 +74,8 @@ class IntegrationInvoiceResource extends JsonResource
                     ->map(fn ($att): array => [
                         'attempt_number' => $att->attempt_number,
                         'provider' => $att->provider,
+                        'gateway_environment' => $att->gateway_environment ?: ($att->metadata['gateway_environment'] ?? $att->metadata['environment'] ?? 'sandbox'),
+                        'environment' => $att->gateway_environment ?: ($att->metadata['gateway_environment'] ?? $att->metadata['environment'] ?? 'sandbox'),
                         'status' => $att->status,
                         'payment_method' => $att->metadata['payment_method'] ?? ($att->provider === 'midtrans' ? 'qris' : 'dana_wallet'),
                         'bank' => $att->metadata['bank'] ?? null,

@@ -17,6 +17,9 @@ class PaymentAttemptResource extends JsonResource
             $isExpired = ($this->status === \App\Models\PaymentAttempt::StatusExpired)
                 || ($this->checkout_expires_at?->isPast() ?? false);
 
+            $env = $this->gateway_environment
+                ?: ($this->metadata['gateway_environment'] ?? $this->metadata['environment'] ?? 'sandbox');
+
             return [
                 'id' => $this->id,
                 'invoice_id' => $this->invoice_id,
@@ -29,8 +32,8 @@ class PaymentAttemptResource extends JsonResource
                 'amount' => $this->amount,
                 'currency' => $this->currency,
                 'status' => $this->status,
-                'gateway_environment' => $this->gateway_environment ?? 'sandbox',
-                'environment' => $this->gateway_environment ?? 'sandbox',
+                'gateway_environment' => $env,
+                'environment' => $env,
                 'is_uncertain' => ($this->failure_code === 'gateway_uncertain_status') || ($this->metadata['uncertain'] ?? false),
                 'requested_at' => $this->requested_at?->toISOString(),
                 'completed_at' => $this->completed_at?->toISOString(),
