@@ -240,13 +240,22 @@ Accept: application/json
     "available_gateways": [
       {
         "provider": "midtrans",
-        "merchant_code": "larissama"
+        "merchant_code": "larissama",
+        "environment": "sandbox"
+      },
+      {
+        "provider": "dana",
+        "merchant_code": "larissama-dana",
+        "environment": "production"
       }
     ]
   },
   "request_id": "req_672bc19a3b04c"
 }
 ```
+
+> **Catatan Multi-Environment Gateway**:
+> Discovery gateway pada invoice preview mengevaluasi environment aktif masing-masing provider secara independen. Misalnya jika Midtrans berjalan pada mode `sandbox` sedangkan DANA telah beralih ke mode `production` (atau sebaliknya), gateway aktif milik aplikasi pada masing-masing environment akan muncul secara akurat sesuai konfigurasi merchant aktifnya.
 
 ---
 
@@ -326,9 +335,9 @@ Accept: application/json
 
 ---
 
-### 3.5. Checkout Invoice (Inisiasi Pembayaran Midtrans)
+### 3.5. Checkout Invoice (Inisiasi Pembayaran Midtrans & DANA)
 
-Meminta inisiasi sesi pembayaran ke payment gateway Midtrans dan menghasilkan QRIS, Nomor VA, atau link GoPay.
+Meminta inisiasi sesi pembayaran ke payment gateway (Midtrans atau DANA) dan menghasilkan instruksi bayar berupa QRIS MPM, Nomor Virtual Account, atau Deeplink Wallet.
 
 - **HTTP Method**: `POST`
 - **Endpoint Path**: `/api/v1/integrations/invoices/{invoiceNumber}/checkout`
@@ -338,17 +347,33 @@ Meminta inisiasi sesi pembayaran ke payment gateway Midtrans dan menghasilkan QR
   - `Idempotency-Key` _(optional jika di body, string, max: 64)_.
 - **Request Body Fields**:
   - `idempotency_key` _(required jika header tidak ada, string, max: 64, regex `/^[A-Za-z0-9][A-Za-z0-9._-]*$/`)_.
-  - `provider` _(optional, string, enum: `midtrans`, `dana`)_: **Sangat disarankan selalu mengirimkan `"midtrans"`**.
+  - `provider` _(optional, string, enum: `midtrans`, `dana`)_:
+    - Gunakan `"midtrans"` untuk pembayaran via Midtrans (Virtual Account, GoPay, QRIS Midtrans).
+    - Gunakan `"dana"` untuk pembayaran via DANA Gateway langsung (DANA QRIS MPM atau DANA E-Wallet).
+    - Jika dikosongkan, sistem memilih otomatis berdasarkan prioritas gateway aktif milik aplikasi.
   - `payment_method` _(optional, string)_:
-    - `qris` (QRIS Nasional MPM)
-    - `va_bca` (BCA Virtual Account)
-    - `va_bni` (BNI Virtual Account)
-    - `va_bri` (BRI Virtual Account)
-    - `va_permata` (Permata Virtual Account)
-    - `va_mandiri` atau `echannel` (Mandiri Bill Payment)
-    - `gopay` (GoPay Deeplink / QR)
-  - `bank` _(optional, string, in: `bca`, `bni`, `bri`, `permata`, `mandiri`, `echannel`)_: Opsional jika nama bank tidak disatukan di `payment_method`.
+    - **Pilihan Midtrans (`provider: "midtrans"`)**:
+      - `qris` (QRIS Nasional MPM Midtrans)
+      - `va_bca` (BCA Virtual Account)
+      - `va_bni` (BNI Virtual Account)
+      - `va_bri` (BRI Virtual Account)
+      - `va_permata` (Permata Virtual Account)
+      - `va_mandiri` atau `echannel` (Mandiri Bill Payment)
+      - `gopay` (GoPay Deeplink / QR)
+    - **Pilihan DANA (`provider: "dana"`)**:
+      - `qris` (DANA QRIS Nasional MPM - menghasilkan payload QR string / URL gambar QR)
+      - `dana_wallet` (DANA E-Wallet - menghasilkan `checkout_url` web checkout / deeplink aplikasi DANA)
+  - `bank` _(optional, string, in: `bca`, `bni`, `bri`, `permata`, `mandiri`, `echannel`)_: Khusus Virtual Account Midtrans jika nama bank tidak disatukan di `payment_method`.
 - **Parameter Terlarang**: `amount`, `currency`, `merchant`, `merchant_code`.
+
+#### Kebijakan Biaya & Surcharge:
+- **Zero Surcharge Pelanggan**: Sesuai regulasi penagihan UDEV, tagihan pelanggan tidak dikenakan surcharge tambahan (`admin_fee = 0.0`). Total tagihan pelanggan (`amount`) sama persis dengan `final_price` invoice. Biaya gateway sepenuhnya diserap atau ditanggung oleh merchant.
+
+#### Status Pembayaran & Siklus Transaksi:
+- **Invoice Status**: `pending` (belum dibayar), `paid` (lunas), `cancelled` (dibatalkan), `expired` (kedaluwarsa), `failed` (gagal).
+- **Payment Attempt Status**: `initiated` (checkout dibuat), `pending` (menunggu pembayaran di gateway), `succeeded` (berhasil lunas), `failed` (transaksi ditolak gateway), `cancelled` (dibatalkan), `expired` (kedaluwarsa).
+- **Checkout Status**: `ready` (instruksi bayar/QR/VA sudah tersedia), `processing` (sedang menunggu antrean gateway via outbox), `failed` (inisiasi ke gateway gagal).
+- **Environment**: Respons menyertakan field `gateway_environment` dan `environment` (`sandbox` atau `production`) yang merefleksikan environment aktual saat attempt dieksekusi.
 
 #### Contoh Request (Checkout BCA Virtual Account):
 
@@ -416,6 +441,8 @@ Accept: application/json
         "transaction_id": "midtrans-trx-887711",
         "message": "Bayar melalui Virtual Account BCA sebelum batas waktu."
       },
+      "gateway_environment": "sandbox",
+      "environment": "sandbox",
       "checkout_expires_at": "2026-11-07T10:35:00.000000Z",
       "transaction_id": "INV-202611-0001-A1",
       "completed_at": null,
@@ -425,6 +452,8 @@ Accept: application/json
       {
         "attempt_number": 1,
         "provider": "midtrans",
+        "gateway_environment": "sandbox",
+        "environment": "sandbox",
         "status": "pending",
         "payment_method": "va_bca",
         "bank": "bca",
@@ -443,6 +472,204 @@ Accept: application/json
     }
   },
   "request_id": "req_672bc19a3b04c"
+}
+```
+
+#### Contoh Request (Checkout DANA QRIS MPM):
+
+```http
+POST /api/v1/integrations/invoices/INV-202611-0001/checkout HTTP/1.1
+Host: apiudev.udumbara.my.id
+Authorization: Bearer udev_66d1fc2ec130b18a25e63a566bbaa5b95e660e2ae510b2a1999d7937ab2af65e
+Idempotency-Key: chk-warung-001-attempt-02
+Content-Type: application/json
+Accept: application/json
+
+{
+  "provider": "dana",
+  "payment_method": "qris",
+  "idempotency_key": "chk-warung-001-attempt-02"
+}
+```
+
+#### Contoh Success Response DANA QRIS (`200 OK` - Ready):
+
+```json
+{
+  "data": {
+    "invoice_number": "INV-202611-0001",
+    "status": "pending",
+    "period_count": 1,
+    "issued_at": "2026-11-06T10:30:00.000000Z",
+    "due_at": "2026-11-08T23:59:59.000000Z",
+    "paid_at": null,
+    "plan": {
+      "code": "BASIC-WARUNG",
+      "name": "Paket Warung Mandiri",
+      "duration_days": 30,
+      "period_count": 1
+    },
+    "pricing": {
+      "normal_price": "175000.00",
+      "referral_code": "MITRA-JAKARTA",
+      "referral_type": "khusus",
+      "discount_amount": "75000.00",
+      "final_price": "100000.00",
+      "currency": "IDR"
+    },
+    "payment": {
+      "status": "pending",
+      "provider": "dana",
+      "gateway_environment": "production",
+      "environment": "production",
+      "payment_method": "qris",
+      "bank": null,
+      "amount": "100000.00",
+      "subtotal_amount": 100000.0,
+      "admin_fee": 0.0,
+      "fee_breakdown": {
+        "payment_method": "qris",
+        "payment_method_name": "QRIS",
+        "environment": "production",
+        "customer_fee": 0.0,
+        "fee_amount": 0.0,
+        "subtotal_amount": 100000.0,
+        "total_amount": 100000.0,
+        "customer_fee_policy": "absorbed_by_merchant"
+      },
+      "checkout_status": "ready",
+      "checkout_url": null,
+      "qr_content": "00020101021226670016ID.DANA.WWW0118936009153000000000021500000000000000052045812530336054061000005802ID5914UDEV BILLING6007JAKARTA61051234062210517INV-202611-0001-A26304ABCD",
+      "payment_code": null,
+      "payment_instruction": {
+        "type": "qris",
+        "qr_content": "00020101021226670016ID.DANA.WWW0118936009153000000000021500000000000000052045812530336054061000005802ID5914UDEV BILLING6007JAKARTA61051234062210517INV-202611-0001-A26304ABCD",
+        "expires_at": "2026-11-06T11:00:00.000000Z",
+        "message": "Pindai kode QRIS menggunakan aplikasi DANA atau aplikasi e-wallet / mobile banking apa pun."
+      },
+      "checkout_expires_at": "2026-11-06T11:00:00.000000Z",
+      "transaction_id": "INV-202611-0001-A2",
+      "completed_at": null,
+      "failure_code": null
+    },
+    "payment_history": [
+      {
+        "attempt_number": 2,
+        "provider": "dana",
+        "gateway_environment": "production",
+        "environment": "production",
+        "status": "pending",
+        "payment_method": "qris",
+        "bank": null,
+        "amount": "100000.00",
+        "currency": "IDR",
+        "requested_at": "2026-11-06T10:45:00.000000Z",
+        "completed_at": null
+      }
+    ],
+    "subscription": null,
+    "tracking": {
+      "settlement_id": null,
+      "settlement_status": null,
+      "settlement_error_code": null,
+      "settled_at": null
+    }
+  },
+  "request_id": "req_672bc19a3b04d"
+}
+```
+
+#### Contoh Request (Checkout DANA E-Wallet):
+
+```http
+POST /api/v1/integrations/invoices/INV-202611-0001/checkout HTTP/1.1
+Host: apiudev.udumbara.my.id
+Authorization: Bearer udev_66d1fc2ec130b18a25e63a566bbaa5b95e660e2ae510b2a1999d7937ab2af65e
+Idempotency-Key: chk-warung-001-attempt-03
+Content-Type: application/json
+Accept: application/json
+
+{
+  "provider": "dana",
+  "payment_method": "dana_wallet",
+  "idempotency_key": "chk-warung-001-attempt-03"
+}
+```
+
+#### Contoh Success Response DANA E-Wallet (`200 OK` - Ready):
+
+```json
+{
+  "data": {
+    "invoice_number": "INV-202611-0001",
+    "status": "pending",
+    "period_count": 1,
+    "issued_at": "2026-11-06T10:30:00.000000Z",
+    "due_at": "2026-11-08T23:59:59.000000Z",
+    "paid_at": null,
+    "plan": {
+      "code": "BASIC-WARUNG",
+      "name": "Paket Warung Mandiri",
+      "duration_days": 30,
+      "period_count": 1
+    },
+    "pricing": {
+      "normal_price": "175000.00",
+      "referral_code": "MITRA-JAKARTA",
+      "referral_type": "khusus",
+      "discount_amount": "75000.00",
+      "final_price": "100000.00",
+      "currency": "IDR"
+    },
+    "payment": {
+      "status": "pending",
+      "provider": "dana",
+      "gateway_environment": "production",
+      "environment": "production",
+      "payment_method": "dana_wallet",
+      "bank": null,
+      "amount": "100000.00",
+      "subtotal_amount": 100000.0,
+      "admin_fee": 0.0,
+      "checkout_status": "ready",
+      "checkout_url": "https://m.dana.id/d/checkout/pay?token=202611061234567890",
+      "qr_content": null,
+      "payment_code": null,
+      "payment_instruction": {
+        "type": "wallet",
+        "checkout_url": "https://m.dana.id/d/checkout/pay?token=202611061234567890",
+        "expires_at": "2026-11-06T11:00:00.000000Z",
+        "message": "Buka URL checkout untuk melanjutkan pembayaran dengan akun DANA Anda."
+      },
+      "checkout_expires_at": "2026-11-06T11:00:00.000000Z",
+      "transaction_id": "INV-202611-0001-A3",
+      "completed_at": null,
+      "failure_code": null
+    },
+    "payment_history": [
+      {
+        "attempt_number": 3,
+        "provider": "dana",
+        "gateway_environment": "production",
+        "environment": "production",
+        "status": "pending",
+        "payment_method": "dana_wallet",
+        "bank": null,
+        "amount": "100000.00",
+        "currency": "IDR",
+        "requested_at": "2026-11-06T10:50:00.000000Z",
+        "completed_at": null
+      }
+    ],
+    "subscription": null,
+    "tracking": {
+      "settlement_id": null,
+      "settlement_status": null,
+      "settlement_error_code": null,
+      "settled_at": null
+    }
+  },
+  "request_id": "req_672bc19a3b04e"
 }
 ```
 

@@ -325,7 +325,7 @@ paths:
                   type: string
                   enum: [midtrans, dana]
                   default: midtrans
-                  description: Payment gateway yang dituju. Sangat disarankan selalu menyertakan "midtrans".
+                  description: Payment gateway yang dituju ("midtrans" atau "dana").
                 payment_method:
                   type: string
                   enum:
@@ -338,9 +338,13 @@ paths:
                     - echannel
                     - gopay
                     - bank_transfer
+                    - dana_wallet
                   default: qris
-                  example: 'va_bca'
-                  description: Metode pembayaran yang dipilih.
+                  example: 'qris'
+                  description: |
+                    Metode pembayaran yang dipilih:
+                    - Untuk Midtrans: qris, va_bca, va_bni, va_bri, va_permata, va_mandiri, echannel, gopay.
+                    - Untuk DANA: qris (DANA QRIS MPM), dana_wallet (DANA E-Wallet).
                 bank:
                   type: string
                   enum: [bca, bni, bri, permata, mandiri, echannel]
@@ -723,6 +727,10 @@ components:
               merchant_code:
                 type: string
                 example: 'larissama'
+              environment:
+                type: string
+                enum: [sandbox, production]
+                example: 'production'
 
     InvoiceDetail:
       type: object
@@ -799,6 +807,14 @@ components:
               type: string
               enum: [midtrans, dana]
               example: 'midtrans'
+            gateway_environment:
+              type: string
+              enum: [sandbox, production]
+              example: 'production'
+            environment:
+              type: string
+              enum: [sandbox, production]
+              example: 'production'
             payment_method:
               type: string
               example: 'va_bca'
@@ -880,6 +896,14 @@ components:
               provider:
                 type: string
                 example: 'midtrans'
+              gateway_environment:
+                type: string
+                enum: [sandbox, production]
+                example: 'production'
+              environment:
+                type: string
+                enum: [sandbox, production]
+                example: 'production'
               status:
                 type: string
                 example: 'pending'

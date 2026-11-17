@@ -102,9 +102,11 @@ class MidtransGatewaySelectionAndEnvironmentTest extends TestCase
             ]);
 
         $responseProd->assertOk()
-            ->assertJsonCount(1, 'data.available_gateways')
+            ->assertJsonCount(2, 'data.available_gateways')
             ->assertJsonPath('data.available_gateways.0.provider', 'midtrans')
-            ->assertJsonPath('data.available_gateways.0.merchant_code', 'larissama-prod');
+            ->assertJsonPath('data.available_gateways.0.merchant_code', 'larissama-prod')
+            ->assertJsonPath('data.available_gateways.1.provider', 'dana')
+            ->assertJsonPath('data.available_gateways.1.merchant_code', 'larissama-dana-sb');
     }
 
     public function test_checkout_generic_qris_resolves_to_midtrans_when_midtrans_is_mapped_and_active(): void

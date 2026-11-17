@@ -10,10 +10,12 @@ use App\Http\Resources\IntegrationInvoiceResource;
 use App\Models\Application;
 use App\Models\ApplicationCustomer;
 use App\Models\ApplicationIntegrationToken;
+use App\Models\ApplicationPaymentGateway;
 use App\Models\Invoice;
 use App\Models\SubscriptionPlan;
 use App\Services\ApplicationIntegrationAuditService;
 use App\Services\CheckoutService;
+use App\Services\DanaEnvironmentService;
 use App\Services\IntegrationCustomerService;
 use App\Services\InvoiceService;
 use App\Services\MidtransEnvironmentService;
@@ -30,6 +32,7 @@ class IntegrationBillingController extends Controller
         IntegrationCustomerService $customers,
         ApplicationIntegrationAuditService $audits,
         MidtransEnvironmentService $midtransEnvironmentService,
+        DanaEnvironmentService $danaEnvironmentService,
     ): JsonResponse {
         [$application, $token] = $this->context($request);
         $customer = $this->customerOrFail($customers, $application, $externalId);
@@ -59,18 +62,31 @@ class IntegrationBillingController extends Controller
             ],
         );
 
-        $activeEnvironment = $midtransEnvironmentService->getActiveEnvironment();
+        $midtransEnv = $midtransEnvironmentService->getActiveEnvironment();
+        $danaEnv = $danaEnvironmentService->getActiveEnvironment();
 
-        $availableGateways = \App\Models\ApplicationPaymentGateway::query()
+        $availableGateways = ApplicationPaymentGateway::query()
             ->where('application_id', $application->getKey())
-            ->where('environment', $activeEnvironment)
             ->where('is_active', true)
+            ->where(function ($query) use ($midtransEnv, $danaEnv): void {
+                $query->where(function ($q) use ($midtransEnv): void {
+                    $q->where('provider', 'midtrans')
+                        ->where('environment', $midtransEnv);
+                })->orWhere(function ($q) use ($danaEnv): void {
+                    $q->where('provider', 'dana')
+                        ->where('environment', $danaEnv);
+                })->orWhere(function ($q): void {
+                    $q->whereNotIn('provider', ['midtrans', 'dana'])
+                        ->where('environment', 'sandbox');
+                });
+            })
             ->orderByRaw("CASE WHEN provider = 'midtrans' THEN 0 ELSE 1 END")
             ->orderBy('id')
-            ->get(['provider', 'gateway_merchant_code'])
+            ->get(['provider', 'gateway_merchant_code', 'environment'])
             ->map(fn ($g): array => [
                 'provider' => $g->provider,
                 'merchant_code' => $g->gateway_merchant_code,
+                'environment' => $g->environment,
             ])
             ->values()
             ->all();
