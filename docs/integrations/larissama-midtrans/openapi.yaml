@@ -2,6 +2,9 @@ openapi: 3.1.0
 info:
   title: UDEV Centralized Billing - Larissama Integration API
   version: 1.0.0
+  license:
+    name: Proprietary
+    identifier: Proprietary
   description: |
     Spesifikasi resmi kontrak API integrasi mesin-ke-mesin antara aplikasi **Larissama** dan **UDEV Centralized Billing Platform** menggunakan payment gateway **Midtrans**.
 
@@ -448,6 +451,8 @@ paths:
                         $ref: '#/components/schemas/CustomerReferralLocked'
                   request_id:
                     type: string
+        '404':
+          $ref: '#/components/responses/NotFoundError'
 
   /customers/{externalId}/transactions:
     get:
@@ -489,6 +494,8 @@ paths:
                     $ref: '#/components/schemas/PaginationLinks'
                   meta:
                     $ref: '#/components/schemas/PaginationMeta'
+        '404':
+          $ref: '#/components/responses/NotFoundError'
 
   /referrals/validate:
     post:
@@ -538,6 +545,8 @@ paths:
                         example: '100000.00'
                   request_id:
                     type: string
+        '422':
+          $ref: '#/components/responses/ValidationError'
 
   /customers/{externalId}/referral:
     post:
@@ -616,8 +625,7 @@ components:
           type: string
           example: 'Paket Warung Mandiri'
         description:
-          type: string
-          nullable: true
+          type: [string, "null"]
           example: 'Akses penuh sistem kasir, inventori, dan laporan cloud.'
         price:
           type: string
@@ -700,12 +708,10 @@ components:
               type: string
               example: '525000.00'
             referral_code:
-              type: string
-              nullable: true
+              type: [string, "null"]
               example: 'MITRA-JAKARTA'
             referral_type:
-              type: string
-              nullable: true
+              type: [string, "null"]
               example: 'khusus'
             discount_amount:
               type: string
@@ -754,9 +760,8 @@ components:
           format: date-time
           example: '2026-11-08T23:59:59.000000Z'
         paid_at:
-          type: string
+          type: [string, "null"]
           format: date-time
-          nullable: true
         plan:
           type: object
           properties:
@@ -779,12 +784,10 @@ components:
               type: string
               example: '175000.00'
             referral_code:
-              type: string
-              nullable: true
+              type: [string, "null"]
               example: 'MITRA-JAKARTA'
             referral_type:
-              type: string
-              nullable: true
+              type: [string, "null"]
               example: 'khusus'
             discount_amount:
               type: string
@@ -796,8 +799,7 @@ components:
               type: string
               example: 'IDR'
         payment:
-          type: object
-          nullable: true
+          type: [object, "null"]
           properties:
             status:
               type: string
@@ -819,8 +821,7 @@ components:
               type: string
               example: 'va_bca'
             bank:
-              type: string
-              nullable: true
+              type: [string, "null"]
               example: 'bca'
             amount:
               type: string
@@ -836,18 +837,14 @@ components:
               enum: [ready, processing, failed]
               example: 'ready'
             checkout_url:
-              type: string
-              nullable: true
+              type: [string, "null"]
             qr_content:
-              type: string
-              nullable: true
+              type: [string, "null"]
             payment_code:
-              type: string
-              nullable: true
+              type: [string, "null"]
               example: '100889977112233'
             payment_instruction:
-              type: object
-              nullable: true
+              type: [object, "null"]
               properties:
                 type:
                   type: string
@@ -860,11 +857,9 @@ components:
                   type: string
                   example: '100889977112233'
                 bill_key:
-                  type: string
-                  nullable: true
+                  type: [string, "null"]
                 biller_code:
-                  type: string
-                  nullable: true
+                  type: [string, "null"]
                 expiry_time:
                   type: string
                   format: date-time
@@ -879,12 +874,10 @@ components:
               type: string
               example: 'INV-202611-0001-A1'
             completed_at:
-              type: string
+              type: [string, "null"]
               format: date-time
-              nullable: true
             failure_code:
-              type: string
-              nullable: true
+              type: [string, "null"]
         payment_history:
           type: array
           items:
@@ -922,22 +915,17 @@ components:
           type: object
           properties:
             settlement_id:
-              type: integer
-              nullable: true
+              type: [integer, "null"]
             settlement_status:
-              type: string
-              nullable: true
+              type: [string, "null"]
             settlement_error_code:
-              type: string
-              nullable: true
+              type: [string, "null"]
             settled_at:
-              type: string
+              type: [string, "null"]
               format: date-time
-              nullable: true
 
     CustomerSubscriptionStatus:
-      type: object
-      nullable: true
+      type: [object, "null"]
       properties:
         status:
           type: string
@@ -963,8 +951,7 @@ components:
                 type: string
                 example: 'activation'
               previous_expires_at:
-                type: string
-                nullable: true
+                type: [string, "null"]
               new_expires_at:
                 type: string
               transaction_id:
@@ -973,8 +960,7 @@ components:
                 type: string
 
     CustomerReferralLocked:
-      type: object
-      nullable: true
+      type: [object, "null"]
       properties:
         code:
           type: string
@@ -1001,17 +987,13 @@ components:
       type: object
       properties:
         first:
-          type: string
-          nullable: true
+          type: [string, "null"]
         last:
-          type: string
-          nullable: true
+          type: [string, "null"]
         prev:
-          type: string
-          nullable: true
+          type: [string, "null"]
         next:
-          type: string
-          nullable: true
+          type: [string, "null"]
 
     PaginationMeta:
       type: object
@@ -1019,15 +1001,13 @@ components:
         current_page:
           type: integer
         from:
-          type: integer
-          nullable: true
+          type: [integer, "null"]
         last_page:
           type: integer
         per_page:
           type: integer
         to:
-          type: integer
-          nullable: true
+          type: [integer, "null"]
         total:
           type: integer
 
