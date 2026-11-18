@@ -70,6 +70,7 @@ class InvoiceCheckoutResource extends JsonResource
             'failure_code' => $this->failure_code ?? $this->outbox?->error_code,
             'failure_message' => $this->failure_message,
             'is_uncertain' => $isUncertain,
+            'inquiry_exhausted' => (bool) ($metadata['inquiry_exhausted'] ?? false),
             'checkout_url' => $this->checkout_url,
             'qr_content' => $qrContent,
             'qr_string' => $qrContent,

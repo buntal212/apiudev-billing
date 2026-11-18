@@ -64,6 +64,9 @@ return [
         'base_backoff_seconds' => (int) env('DANA_RECONCILIATION_BASE_BACKOFF_SECONDS', 15),
         'max_backoff_seconds' => (int) env('DANA_RECONCILIATION_MAX_BACKOFF_SECONDS', 900),
         'processing_timeout_seconds' => (int) env('DANA_RECONCILIATION_PROCESSING_TIMEOUT_SECONDS', 120),
+        'fast_retry_max_attempts' => (int) env('DANA_RECONCILIATION_FAST_RETRY_MAX_ATTEMPTS', 5),
+        'uncertain_slow_interval_seconds' => (int) env('DANA_RECONCILIATION_UNCERTAIN_SLOW_INTERVAL_SECONDS', 900),
+        'uncertain_window_hours' => (int) env('DANA_RECONCILIATION_UNCERTAIN_WINDOW_HOURS', 24),
     ],
 
     'dana_merchant_provisioning' => [

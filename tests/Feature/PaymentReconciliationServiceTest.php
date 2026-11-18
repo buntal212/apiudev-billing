@@ -645,6 +645,362 @@ class PaymentReconciliationServiceTest extends TestCase
         $this->assertTrue($fresh->metadata['uncertain'] ?? false);
     }
 
+    public function test_uncertain_attempt_retries_1_to_5_use_fast_backoff_and_subsequent_retries_use_15_minutes(): void
+    {
+        $attempt = $this->attempt([
+            'merchant_reference' => 'INV-UNCERTAIN-FAST-SLOW',
+            'status' => PaymentAttempt::StatusInitiated,
+            'failure_code' => 'gateway_uncertain_status',
+            'metadata' => ['uncertain' => true, 'is_uncertain' => true],
+        ]);
+
+        Http::fake([
+            "https://gateway.test/api/v1/payments/{$attempt->gateway_payment_id}/status" => Http::response([
+                'data' => [
+                    'id' => $attempt->gateway_payment_id,
+                    'merchant_order_id' => $attempt->merchant_reference,
+                    'amount_minor' => 10000,
+                    'currency' => 'IDR',
+                    'status' => 'pending',
+                ],
+            ]),
+            "https://gateway.test/api/v1/payments/{$attempt->gateway_payment_id}/inquiry" => Http::response([
+                'data' => [
+                    'id' => $attempt->gateway_payment_id,
+                    'merchant_order_id' => $attempt->merchant_reference,
+                    'amount_minor' => 10000,
+                    'currency' => 'IDR',
+                    'status' => 'pending',
+                ],
+                'dana_status' => [
+                    'latest_transaction_status' => '01',
+                ],
+            ]),
+        ]);
+
+        $service = app(PaymentReconciliationService::class);
+
+        // Run 1 (attempt_number = 1) -> fast backoff (base 15s)
+        $res1 = $service->reconcile($attempt->fresh());
+        $this->assertSame(PaymentReconciliationRun::StatusPending, $res1->status);
+        $this->assertNotNull($res1->retryAfterAt);
+        $this->assertTrue($res1->retryAfterAt->diffInSeconds(now()) <= 20);
+
+        // Simulate runs 2, 3, 4, 5
+        for ($i = 2; $i <= 5; $i++) {
+            $latest = PaymentReconciliationRun::query()->where('payment_attempt_id', $attempt->id)->latest('id')->firstOrFail();
+            $latest->update(['retry_after_at' => now()->subSecond(), 'status' => PaymentReconciliationRun::StatusPending]);
+            $res = $service->reconcile($attempt->fresh());
+            $this->assertSame($i, $res->run?->attempt_number);
+        }
+
+        // Run 5 had fast backoff. Now update run 5 to be due:
+        $latest = PaymentReconciliationRun::query()->where('payment_attempt_id', $attempt->id)->latest('id')->firstOrFail();
+        $this->assertSame(5, $latest->attempt_number);
+        $latest->update(['retry_after_at' => now()->subSecond(), 'status' => PaymentReconciliationRun::StatusPending]);
+
+        // Run 6 (attempt_number = 6) -> slow retry interval (15 minutes = 900 seconds)
+        $res6 = $service->reconcile($attempt->fresh());
+        $this->assertSame(6, $res6->run?->attempt_number);
+        $this->assertSame(PaymentReconciliationRun::StatusPending, $res6->status);
+        $this->assertNotNull($res6->retryAfterAt);
+        $diffMinutes = abs($res6->retryAfterAt->diffInMinutes(now()));
+        $this->assertEqualsWithDelta(15, $diffMinutes, 1);
+    }
+
+    public function test_attempt_86_scenario_recovers_and_creates_subsequent_inquiry_after_5_failed_runs(): void
+    {
+        $attempt = $this->attempt([
+            'merchant_reference' => 'INV-20261118-DNCYOMKO-A86',
+            'status' => PaymentAttempt::StatusPending,
+            'failure_code' => 'gateway_uncertain_status',
+            'metadata' => [
+                'uncertain' => true,
+                'is_uncertain' => true,
+                'gateway_status' => '01',
+                'first_uncertain_at' => now()->subHours(2)->toISOString(),
+            ],
+        ]);
+
+        // Create 5 existing runs where run 5 is failed (reconciliation_retry_exhausted)
+        for ($i = 1; $i <= 5; $i++) {
+            PaymentReconciliationRun::query()->create([
+                'payment_attempt_id' => $attempt->id,
+                'attempt_number' => $i,
+                'status' => $i === 5 ? PaymentReconciliationRun::StatusFailed : PaymentReconciliationRun::StatusRetryable,
+                'error_code' => $i === 5 ? 'reconciliation_retry_exhausted' : 'gateway_timeout',
+                'idempotency_key' => 'reconciliation:try:'.$attempt->id.':'.$i,
+                'started_at' => now()->subMinutes(60 - ($i * 5)),
+                'finished_at' => $i === 5 ? now()->subMinutes(20) : now()->subMinutes(60 - ($i * 5) - 1),
+                'retry_after_at' => null,
+            ]);
+        }
+
+        Http::fake([
+            "https://gateway.test/api/v1/payments/{$attempt->gateway_payment_id}/status" => Http::response([
+                'data' => [
+                    'id' => $attempt->gateway_payment_id,
+                    'merchant_order_id' => $attempt->merchant_reference,
+                    'amount_minor' => 10000,
+                    'currency' => 'IDR',
+                    'status' => 'pending',
+                ],
+            ]),
+            "https://gateway.test/api/v1/payments/{$attempt->gateway_payment_id}/inquiry" => Http::response([
+                'data' => [
+                    'id' => $attempt->gateway_payment_id,
+                    'merchant_order_id' => $attempt->merchant_reference,
+                    'amount_minor' => 10000,
+                    'currency' => 'IDR',
+                    'status' => 'pending',
+                ],
+                'dana_status' => [
+                    'latest_transaction_status' => '01',
+                ],
+            ]),
+        ]);
+
+        // Run reconcilePending - attempt #86 must be picked up for run 6
+        $count = app(PaymentReconciliationService::class)->reconcilePending(10);
+        $this->assertSame(1, $count);
+
+        $runs = PaymentReconciliationRun::query()->where('payment_attempt_id', $attempt->id)->orderBy('attempt_number')->get();
+        $this->assertCount(6, $runs);
+        $run6 = $runs->last();
+        $this->assertSame(6, $run6->attempt_number);
+        $this->assertSame(PaymentReconciliationRun::StatusPending, $run6->status);
+        $this->assertSame('01', $run6->gateway_status);
+        $this->assertNotNull($run6->retry_after_at);
+        $this->assertEqualsWithDelta(15, abs($run6->retry_after_at->diffInMinutes(now())), 1);
+
+        // Attempt remains pending and uncertain
+        $attempt->refresh();
+        $this->assertSame(PaymentAttempt::StatusPending, $attempt->status);
+        $this->assertSame('gateway_uncertain_status', $attempt->failure_code);
+        $this->assertTrue($attempt->metadata['uncertain']);
+    }
+
+    public function test_uncertain_attempt_resolves_to_paid_on_status_00_and_settles_idempotently(): void
+    {
+        [$attempt, $subscription] = $this->attemptWithSubscription();
+        $attempt->update([
+            'merchant_reference' => 'INV-UNCERTAIN-TO-PAID',
+            'status' => PaymentAttempt::StatusPending,
+            'failure_code' => 'gateway_uncertain_status',
+            'metadata' => [
+                'uncertain' => true,
+                'is_uncertain' => true,
+                'first_uncertain_at' => now()->subHours(1)->toISOString(),
+            ],
+        ]);
+
+        PaymentReconciliationRun::query()->create([
+            'payment_attempt_id' => $attempt->id,
+            'attempt_number' => 5,
+            'status' => PaymentReconciliationRun::StatusPending,
+            'retry_after_at' => now()->subMinute(),
+            'idempotency_key' => 'reconciliation:try:'.$attempt->id.':5',
+            'started_at' => now()->subMinutes(16),
+            'finished_at' => now()->subMinutes(15),
+        ]);
+
+        Http::fake([
+            "https://gateway.test/api/v1/payments/{$attempt->gateway_payment_id}/status" => Http::response([
+                'data' => [
+                    'id' => $attempt->gateway_payment_id,
+                    'merchant_order_id' => $attempt->merchant_reference,
+                    'amount_minor' => 10000,
+                    'currency' => 'IDR',
+                    'status' => 'paid',
+                    'paid_at' => now()->toISOString(),
+                ],
+            ]),
+            "https://gateway.test/api/v1/payments/{$attempt->gateway_payment_id}/inquiry" => Http::response([
+                'data' => [
+                    'id' => $attempt->gateway_payment_id,
+                    'merchant_order_id' => $attempt->merchant_reference,
+                    'amount_minor' => 10000,
+                    'currency' => 'IDR',
+                    'status' => 'paid',
+                    'paid_at' => now()->toISOString(),
+                ],
+                'dana_status' => [
+                    'latest_transaction_status' => '00',
+                ],
+            ]),
+        ]);
+
+        $result = app(PaymentReconciliationService::class)->reconcile($attempt->fresh());
+
+        $this->assertSame(PaymentReconciliationRun::StatusPaid, $result->status);
+        $attempt->refresh();
+        $this->assertSame(PaymentAttempt::StatusSucceeded, $attempt->status);
+        $this->assertArrayNotHasKey('uncertain', $attempt->metadata);
+        $this->assertSame('paid_confirmed_by_gateway', $attempt->metadata['uncertain_resolution']);
+        $this->assertDatabaseCount('payment_allocations', 1);
+
+        // Idempotency: reconciling again returns skipped
+        $second = app(PaymentReconciliationService::class)->reconcile($attempt->fresh());
+        $this->assertSame('skipped', $second->status);
+        $this->assertDatabaseCount('payment_allocations', 1);
+    }
+
+    public function test_uncertain_attempt_resolves_to_expired_on_status_05_and_allows_new_checkout(): void
+    {
+        $attempt = $this->attempt([
+            'merchant_reference' => 'INV-UNCERTAIN-TO-EXPIRED',
+            'status' => PaymentAttempt::StatusPending,
+            'failure_code' => 'gateway_uncertain_status',
+            'metadata' => [
+                'uncertain' => true,
+                'is_uncertain' => true,
+                'first_uncertain_at' => now()->subHours(1)->toISOString(),
+            ],
+        ]);
+
+        PaymentReconciliationRun::query()->create([
+            'payment_attempt_id' => $attempt->id,
+            'attempt_number' => 5,
+            'status' => PaymentReconciliationRun::StatusPending,
+            'retry_after_at' => now()->subMinute(),
+            'idempotency_key' => 'reconciliation:try:'.$attempt->id.':5',
+            'started_at' => now()->subMinutes(16),
+            'finished_at' => now()->subMinutes(15),
+        ]);
+
+        Http::fake([
+            "https://gateway.test/api/v1/payments/{$attempt->gateway_payment_id}/status" => Http::response([
+                'data' => [
+                    'id' => $attempt->gateway_payment_id,
+                    'merchant_order_id' => $attempt->merchant_reference,
+                    'amount_minor' => 10000,
+                    'currency' => 'IDR',
+                    'status' => 'expired',
+                ],
+            ]),
+            "https://gateway.test/api/v1/payments/{$attempt->gateway_payment_id}/inquiry" => Http::response([
+                'data' => [
+                    'id' => $attempt->gateway_payment_id,
+                    'merchant_order_id' => $attempt->merchant_reference,
+                    'amount_minor' => 10000,
+                    'currency' => 'IDR',
+                    'status' => 'expired',
+                ],
+                'dana_status' => [
+                    'latest_transaction_status' => '05',
+                ],
+            ]),
+        ]);
+
+        $result = app(PaymentReconciliationService::class)->reconcile($attempt->fresh());
+
+        $this->assertSame(PaymentReconciliationRun::StatusTerminal, $result->status);
+        $attempt->refresh();
+        $this->assertSame(PaymentAttempt::StatusExpired, $attempt->status);
+        $this->assertSame('gateway_expired', $attempt->failure_code);
+        $this->assertArrayNotHasKey('uncertain', $attempt->metadata);
+        $this->assertSame('expired_confirmed_by_gateway', $attempt->metadata['uncertain_resolution']);
+    }
+
+    public function test_uncertain_attempt_handles_timeout_during_slow_inquiry_without_abandoning(): void
+    {
+        $attempt = $this->attempt([
+            'merchant_reference' => 'INV-UNCERTAIN-TIMEOUT-SLOW',
+            'status' => PaymentAttempt::StatusPending,
+            'failure_code' => 'gateway_uncertain_status',
+            'metadata' => [
+                'uncertain' => true,
+                'is_uncertain' => true,
+                'first_uncertain_at' => now()->subHours(2)->toISOString(),
+            ],
+        ]);
+
+        PaymentReconciliationRun::query()->create([
+            'payment_attempt_id' => $attempt->id,
+            'attempt_number' => 5,
+            'status' => PaymentReconciliationRun::StatusPending,
+            'retry_after_at' => now()->subMinute(),
+            'idempotency_key' => 'reconciliation:try:'.$attempt->id.':5',
+            'started_at' => now()->subMinutes(16),
+            'finished_at' => now()->subMinutes(15),
+        ]);
+
+        Http::fake([
+            "https://gateway.test/api/v1/payments/{$attempt->gateway_payment_id}/status" => Http::response([
+                'data' => [
+                    'id' => $attempt->gateway_payment_id,
+                    'merchant_order_id' => $attempt->merchant_reference,
+                    'amount_minor' => 10000,
+                    'currency' => 'IDR',
+                    'status' => 'pending',
+                ],
+            ]),
+            "https://gateway.test/api/v1/payments/{$attempt->gateway_payment_id}/inquiry" => Http::response([
+                'message' => 'Gateway timeout',
+            ], 503),
+        ]);
+
+        $result = app(PaymentReconciliationService::class)->reconcile($attempt->fresh());
+
+        $this->assertSame(PaymentReconciliationRun::StatusRetryable, $result->status);
+        $this->assertSame(6, $result->run?->attempt_number);
+        $this->assertNotNull($result->retryAfterAt);
+        $this->assertEqualsWithDelta(15, abs($result->retryAfterAt->diffInMinutes(now())), 1);
+
+        $attempt->refresh();
+        $this->assertSame(PaymentAttempt::StatusPending, $attempt->status);
+        $this->assertSame('gateway_uncertain_status', $attempt->failure_code);
+        $this->assertTrue($attempt->metadata['uncertain']);
+    }
+
+    public function test_uncertain_attempt_stops_automatic_inquiry_after_24_hours_and_displays_warning(): void
+    {
+        $attempt = $this->attempt([
+            'merchant_reference' => 'INV-UNCERTAIN-24H-EXCEEDED',
+            'status' => PaymentAttempt::StatusPending,
+            'failure_code' => 'gateway_uncertain_status',
+            'metadata' => [
+                'uncertain' => true,
+                'is_uncertain' => true,
+                'first_uncertain_at' => now()->subHours(25)->toISOString(),
+            ],
+        ]);
+
+        PaymentReconciliationRun::query()->create([
+            'payment_attempt_id' => $attempt->id,
+            'attempt_number' => 20,
+            'status' => PaymentReconciliationRun::StatusPending,
+            'retry_after_at' => now()->subMinute(),
+            'idempotency_key' => 'reconciliation:try:'.$attempt->id.':20',
+            'started_at' => now()->subMinutes(16),
+            'finished_at' => now()->subMinutes(15),
+        ]);
+
+        $httpCalls = 0;
+        Http::fake(function () use (&$httpCalls) {
+            $httpCalls++;
+            return Http::response([], 200);
+        });
+
+        // Calling reconcile automatically (!force) halts because > 24 hours
+        $result = app(PaymentReconciliationService::class)->reconcile($attempt->fresh(), false);
+
+        $this->assertSame('skipped', $result->status);
+        $this->assertSame(0, $httpCalls);
+
+        $attempt->refresh();
+        $this->assertSame(PaymentAttempt::StatusPending, $attempt->status);
+        $this->assertSame('gateway_uncertain_status', $attempt->failure_code);
+        $this->assertTrue($attempt->metadata['uncertain']);
+        $this->assertTrue($attempt->metadata['inquiry_exhausted']);
+        $this->assertStringContainsString('24 jam', $attempt->failure_message);
+        $this->assertStringContainsString('Inquiry otomatis dihentikan', $attempt->failure_message);
+
+        // Also reconcilePending must skip this attempt
+        $count = app(PaymentReconciliationService::class)->reconcilePending(10);
+        $this->assertSame(0, $count);
+    }
+
     private function attempt(array $overrides = []): PaymentAttempt
     {
         $attempt = PaymentAttempt::factory()->create(array_merge([

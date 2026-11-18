@@ -35,6 +35,7 @@ class PaymentAttemptResource extends JsonResource
                 'gateway_environment' => $env,
                 'environment' => $env,
                 'is_uncertain' => ($this->failure_code === 'gateway_uncertain_status') || ($this->metadata['uncertain'] ?? false),
+                'inquiry_exhausted' => (bool) ($this->metadata['inquiry_exhausted'] ?? false),
                 'requested_at' => $this->requested_at?->toISOString(),
                 'completed_at' => $this->completed_at?->toISOString(),
                 'failure_code' => $this->failure_code,

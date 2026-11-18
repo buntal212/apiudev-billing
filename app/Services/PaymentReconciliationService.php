@@ -16,6 +16,10 @@ use Throwable;
 
 class PaymentReconciliationService
 {
+    public const int FastRetryMaxAttempts = 5;
+    public const int DefaultUncertainSlowIntervalSeconds = 900;
+    public const int DefaultUncertainWindowHours = 24;
+
     private readonly MidtransGatewayProvisioningClient $midtransClient;
     private readonly MidtransSecretStore $midtransSecretStore;
 
@@ -79,10 +83,23 @@ class PaymentReconciliationService
 
             $this->validateGatewayPayment($attempt, $gatewayPayment);
 
-            $isUncertain = ($attempt->failure_code === 'gateway_uncertain_status')
-                || (is_array($attempt->metadata) && (($attempt->metadata['uncertain'] ?? false) || ($attempt->metadata['is_uncertain'] ?? false)));
+            $isUncertain = $this->isUncertain($attempt);
 
             if ($isUncertain) {
+                $this->ensureFirstUncertainRecorded($attempt);
+                $now = now()->toImmutable();
+
+                if (! $force && ($this->isUncertain24hExceeded($attempt, $now) || ! empty($attempt->metadata['inquiry_exhausted']))) {
+                    $this->markInquiryExhausted($attempt, $now);
+
+                    return $this->finishRun(
+                        $run,
+                        $attempt,
+                        PaymentReconciliationRun::StatusFailed,
+                        errorCode: 'reconciliation_24h_exhausted',
+                    );
+                }
+
                 $paymentId = (string) ($gatewayPayment['id'] ?? $attempt->gateway_payment_id);
                 $inquiryResponse = $this->gatewayClient->queryPaymentStatus($merchant, $paymentId);
                 if (is_array($inquiryResponse['data'] ?? null)) {
@@ -91,6 +108,9 @@ class PaymentReconciliationService
 
                 $danaStatus = is_array($inquiryResponse['dana_status'] ?? null) ? $inquiryResponse['dana_status'] : [];
                 $latestTransactionStatus = $danaStatus['latest_transaction_status'] ?? null;
+                $run->gateway_status = is_string($latestTransactionStatus) && $latestTransactionStatus !== ''
+                    ? $latestTransactionStatus
+                    : (is_string($gatewayPayment['status'] ?? null) ? $gatewayPayment['status'] : null);
 
                 if ($latestTransactionStatus === '05' || ($gatewayPayment['status'] ?? null) === 'expired') {
                     return $this->finishTerminal($run, $attempt, 'expired');
@@ -148,9 +168,29 @@ class PaymentReconciliationService
         $remaining = $limit - $newAttemptIds->count();
         if ($remaining > 0) {
             $retryAttemptIds = $baseQuery()
-                ->whereHas('latestReconciliationRun', function (Builder $query) use ($now): void {
-                    $query->where('attempt_number', '<', $this->maxAttempts());
-                    $this->scopeDueRun($query, $now);
+                ->where(function (Builder $query) use ($now): void {
+                    // Regular attempts: latest run has attempt_number < maxAttempts and is due
+                    $query->where(function (Builder $sub) use ($now): void {
+                        $sub->whereHas('latestReconciliationRun', function (Builder $runQuery) use ($now): void {
+                            $runQuery->where('attempt_number', '<', $this->maxAttempts());
+                            $this->scopeDueRun($runQuery, $now);
+                        });
+                    })
+                    // Uncertain attempts: not exhausted and latest run is due
+                    ->orWhere(function (Builder $sub) use ($now): void {
+                        $sub->where(function (Builder $uncert): void {
+                            $uncert->where('failure_code', 'gateway_uncertain_status')
+                                ->orWhere('metadata->uncertain', true)
+                                ->orWhere('metadata->is_uncertain', true);
+                        })
+                        ->where(function (Builder $uncert): void {
+                            $uncert->whereNull('metadata->inquiry_exhausted')
+                                ->orWhere('metadata->inquiry_exhausted', false);
+                        })
+                        ->whereHas('latestReconciliationRun', function (Builder $runQuery) use ($now): void {
+                            $this->scopeDueUncertainRun($runQuery, $now);
+                        });
+                    });
                 })
                 ->orderBy('id')
                 ->limit($remaining)
@@ -249,8 +289,7 @@ class PaymentReconciliationService
     private function finishPending(PaymentReconciliationRun $run, PaymentAttempt $attempt): ReconciliationResult
     {
         $updatedAttempt = $attempt;
-        $isUncertain = ($attempt->failure_code === 'gateway_uncertain_status')
-            || (is_array($attempt->metadata) && (($attempt->metadata['uncertain'] ?? false) || ($attempt->metadata['is_uncertain'] ?? false)));
+        $isUncertain = $this->isUncertain($attempt);
 
         if ($attempt->status === PaymentAttempt::StatusInitiated) {
             $updatedAttempt = $this->paymentAttemptService->transitionStatus(
@@ -262,6 +301,7 @@ class PaymentReconciliationService
         }
 
         if ($isUncertain) {
+            $this->ensureFirstUncertainRecorded($updatedAttempt);
             $currentMetadata = is_array($updatedAttempt->metadata) ? $updatedAttempt->metadata : [];
             $currentMetadata['uncertain'] = true;
             $currentMetadata['is_uncertain'] = true;
@@ -272,11 +312,13 @@ class PaymentReconciliationService
             ]);
         }
 
+        $retryAfterAt = $this->nextRetryAt($run->attempt_number, null, $isUncertain);
+
         return $this->finishRun(
             $run,
             $updatedAttempt,
             PaymentReconciliationRun::StatusPending,
-            retryAfterAt: $this->nextRetryAt($run->attempt_number),
+            retryAfterAt: $retryAfterAt,
         );
     }
 
@@ -367,7 +409,24 @@ class PaymentReconciliationService
         ?int $httpStatus = null,
         ?int $retryAfterSeconds = null,
     ): ReconciliationResult {
-        if ($run->attempt_number >= $this->maxAttempts()) {
+        $isUncertain = $this->isUncertain($attempt);
+        $now = now()->toImmutable();
+
+        if ($isUncertain) {
+            $this->ensureFirstUncertainRecorded($attempt);
+
+            if ($this->isUncertain24hExceeded($attempt, $now)) {
+                $this->markInquiryExhausted($attempt, $now);
+
+                return $this->finishRun(
+                    $run,
+                    $attempt,
+                    PaymentReconciliationRun::StatusFailed,
+                    errorCode: 'reconciliation_24h_exhausted',
+                    httpStatus: $httpStatus,
+                );
+            }
+        } elseif ($run->attempt_number >= $this->maxAttempts()) {
             return $this->finishRun(
                 $run,
                 $attempt,
@@ -377,7 +436,7 @@ class PaymentReconciliationService
             );
         }
 
-        $retryAfterAt = $this->nextRetryAt($run->attempt_number, $retryAfterSeconds);
+        $retryAfterAt = $this->nextRetryAt($run->attempt_number, $retryAfterSeconds, $isUncertain);
 
         return $this->finishRun(
             $run,
@@ -440,6 +499,21 @@ class PaymentReconciliationService
                     return null;
                 }
 
+                $now = now()->toImmutable();
+                $isUncertain = $this->isUncertain($attempt);
+
+                if ($isUncertain) {
+                    $this->ensureFirstUncertainRecorded($attempt);
+
+                    if ($this->isUncertain24hExceeded($attempt, $now) || (! empty($attempt->metadata['inquiry_exhausted']) && ! $force)) {
+                        $this->markInquiryExhausted($attempt, $now);
+
+                        if (! $force) {
+                            return null;
+                        }
+                    }
+                }
+
                 $latest = PaymentReconciliationRun::query()
                     ->where('payment_attempt_id', $attempt->getKey())
                     ->latest('id')
@@ -447,7 +521,6 @@ class PaymentReconciliationService
                     ->first();
 
                 if ($latest !== null) {
-                    $now = now()->toImmutable();
                     $processingTimeout = $force ? 15 : $this->processingTimeoutSeconds();
                     // If stuck in processing past the timeout, mark stale run as failed
                     if ($latest->status === PaymentReconciliationRun::StatusProcessing
@@ -460,11 +533,11 @@ class PaymentReconciliationService
                         $latest = $latest->fresh();
                     }
 
-                    if ($latest->attempt_number >= $this->maxAttempts()) {
+                    if (! $isUncertain && $latest->attempt_number >= $this->maxAttempts()) {
                         return null;
                     }
 
-                    if (! $force && ! $this->isRunDue($latest, $now)) {
+                    if (! $force && ! $this->isRunDue($latest, $now, $isUncertain)) {
                         return null;
                     }
                 }
@@ -510,8 +583,65 @@ class PaymentReconciliationService
         });
     }
 
-    private function isRunDue(PaymentReconciliationRun $run, CarbonImmutable $now): bool
+    private function scopeDueUncertainRun(Builder $query, CarbonImmutable $now): void
     {
+        $query->where(function (Builder $query) use ($now): void {
+            $query
+                ->where(function (Builder $q) use ($now): void {
+                    $q->whereIn('status', [
+                        PaymentReconciliationRun::StatusPending,
+                        PaymentReconciliationRun::StatusRetryable,
+                    ])->where(function (Builder $sub) use ($now): void {
+                        $sub->whereNull('retry_after_at')
+                            ->orWhere('retry_after_at', '<=', $now);
+                    });
+                })
+                ->orWhere(function (Builder $q) use ($now): void {
+                    $q->where('status', PaymentReconciliationRun::StatusProcessing)
+                        ->where(function (Builder $sub) use ($now): void {
+                            $sub->whereNull('started_at')
+                                ->orWhere('started_at', '<=', $now->subSeconds($this->processingTimeoutSeconds()));
+                        });
+                })
+                ->orWhere(function (Builder $q) use ($now): void {
+                    $q->where('status', PaymentReconciliationRun::StatusFailed)
+                        ->where(function (Builder $sub) use ($now): void {
+                            $sub->where(function (Builder $f) use ($now): void {
+                                $f->whereNotNull('finished_at')
+                                    ->where('finished_at', '<=', $now->subSeconds($this->uncertainSlowIntervalSeconds()));
+                            })->orWhere(function (Builder $f) use ($now): void {
+                                $f->whereNull('finished_at')
+                                    ->where('created_at', '<=', $now->subSeconds($this->uncertainSlowIntervalSeconds()));
+                            });
+                        });
+                });
+        });
+    }
+
+    private function isRunDue(PaymentReconciliationRun $run, CarbonImmutable $now, bool $isUncertain = false): bool
+    {
+        if ($isUncertain) {
+            if ($run->status === PaymentReconciliationRun::StatusProcessing) {
+                return $run->started_at === null
+                    || ! $run->started_at->gt($now->subSeconds($this->processingTimeoutSeconds()));
+            }
+
+            if ($run->retry_after_at !== null) {
+                return ! $run->retry_after_at->isFuture();
+            }
+
+            $referenceTime = $run->finished_at ?? $run->created_at ?? $run->started_at;
+            if ($referenceTime === null) {
+                return true;
+            }
+
+            $intervalSeconds = $run->attempt_number >= $this->fastRetryMaxAttempts()
+                ? $this->uncertainSlowIntervalSeconds()
+                : $this->fastBackoffSeconds($run->attempt_number);
+
+            return $referenceTime->lte($now->subSeconds($intervalSeconds));
+        }
+
         return match ($run->status) {
             PaymentReconciliationRun::StatusPending,
             PaymentReconciliationRun::StatusRetryable => $run->retry_after_at === null
@@ -799,17 +929,106 @@ class PaymentReconciliationService
         return (int) $matches[1];
     }
 
-    private function nextRetryAt(int $attemptNumber, ?int $retryAfterSeconds = null): CarbonImmutable
+    private function nextRetryAt(int $attemptNumber, ?int $retryAfterSeconds = null, bool $isUncertain = false): CarbonImmutable
     {
+        if ($isUncertain && $attemptNumber >= $this->fastRetryMaxAttempts()) {
+            return now()->toImmutable()->addSeconds($this->uncertainSlowIntervalSeconds());
+        }
+
         $max = max(1, (int) config('services.dana_reconciliation.max_backoff_seconds', 900));
         if ($retryAfterSeconds !== null) {
             return now()->toImmutable()->addSeconds(min($max, max(0, $retryAfterSeconds)));
         }
 
-        $base = max(1, (int) config('services.dana_reconciliation.base_backoff_seconds', 15));
-        $backoff = min($max, $base * (2 ** max(0, $attemptNumber - 1)));
+        return now()->toImmutable()->addSeconds($this->fastBackoffSeconds($attemptNumber));
+    }
 
-        return now()->toImmutable()->addSeconds($backoff);
+    private function fastBackoffSeconds(int $attemptNumber): int
+    {
+        $max = max(1, (int) config('services.dana_reconciliation.max_backoff_seconds', 900));
+        $base = max(1, (int) config('services.dana_reconciliation.base_backoff_seconds', 15));
+
+        return min($max, $base * (2 ** max(0, $attemptNumber - 1)));
+    }
+
+    private function fastRetryMaxAttempts(): int
+    {
+        return max(1, (int) config('services.dana_reconciliation.fast_retry_max_attempts', self::FastRetryMaxAttempts));
+    }
+
+    private function uncertainSlowIntervalSeconds(): int
+    {
+        return max(60, (int) config('services.dana_reconciliation.uncertain_slow_interval_seconds', self::DefaultUncertainSlowIntervalSeconds));
+    }
+
+    private function uncertainWindowHours(): int
+    {
+        return max(1, (int) config('services.dana_reconciliation.uncertain_window_hours', self::DefaultUncertainWindowHours));
+    }
+
+    private function isUncertain(PaymentAttempt $attempt): bool
+    {
+        return ($attempt->failure_code === 'gateway_uncertain_status')
+            || (is_array($attempt->metadata) && (($attempt->metadata['uncertain'] ?? false) || ($attempt->metadata['is_uncertain'] ?? false)));
+    }
+
+    private function getFirstUncertainAt(PaymentAttempt $attempt): CarbonImmutable
+    {
+        $metadata = is_array($attempt->metadata) ? $attempt->metadata : [];
+        if (! empty($metadata['first_uncertain_at'])) {
+            try {
+                return CarbonImmutable::parse($metadata['first_uncertain_at']);
+            } catch (\Throwable) {
+            }
+        }
+
+        if (! empty($metadata['last_dispatch_error']['failed_at'])) {
+            try {
+                return CarbonImmutable::parse($metadata['last_dispatch_error']['failed_at']);
+            } catch (\Throwable) {
+            }
+        }
+
+        $time = $attempt->requested_at ?? $attempt->created_at ?? now();
+
+        return CarbonImmutable::parse($time);
+    }
+
+    private function ensureFirstUncertainRecorded(PaymentAttempt $attempt): void
+    {
+        $metadata = is_array($attempt->metadata) ? $attempt->metadata : [];
+        if (empty($metadata['first_uncertain_at'])) {
+            $firstUncertainAt = $this->getFirstUncertainAt($attempt);
+            $metadata['first_uncertain_at'] = $firstUncertainAt->toISOString();
+            $attempt->update(['metadata' => $metadata]);
+        }
+    }
+
+    private function isUncertain24hExceeded(PaymentAttempt $attempt, CarbonImmutable $now): bool
+    {
+        $firstUncertainAt = $this->getFirstUncertainAt($attempt);
+        $windowHours = $this->uncertainWindowHours();
+
+        return $now->greaterThanOrEqualTo($firstUncertainAt->addHours($windowHours));
+    }
+
+    private function markInquiryExhausted(PaymentAttempt $attempt, CarbonImmutable $now): void
+    {
+        $metadata = is_array($attempt->metadata) ? $attempt->metadata : [];
+        $metadata['uncertain'] = true;
+        $metadata['is_uncertain'] = true;
+        $metadata['gateway_status'] = '01';
+        $metadata['inquiry_exhausted'] = true;
+        $metadata['inquiry_exhausted_at'] = $now->toISOString();
+        if (empty($metadata['first_uncertain_at'])) {
+            $metadata['first_uncertain_at'] = $this->getFirstUncertainAt($attempt)->toISOString();
+        }
+
+        $attempt->update([
+            'failure_code' => 'gateway_uncertain_status',
+            'failure_message' => 'Transaksi berstatus tidak pasti di gateway DANA (01) telah melewati batas 24 jam rekonsiliasi otomatis. Inquiry otomatis dihentikan. Silakan lakukan pengecekan manual pada merchant portal DANA.',
+            'metadata' => $metadata,
+        ]);
     }
 
     private function maxAttempts(): int
