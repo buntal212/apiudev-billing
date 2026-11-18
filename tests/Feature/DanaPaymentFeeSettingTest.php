@@ -971,7 +971,62 @@ class DanaPaymentFeeSettingTest extends TestCase
         }
     }
 
-    public function test_production_larissama_central_merchant_is_blocked_without_contract_approval(): void
+    public function test_production_larissama_subscription_billing_succeeds_as_direct_udev_service(): void
+    {
+        Sanctum::actingAs($this->admin, ['admin:access']);
+
+        \App\Models\DanaEnvironmentSetting::query()->updateOrCreate(
+            ['gateway' => 'dana'],
+            [
+                'active_environment' => 'production',
+                'primary_merchant_code' => 'MRC-0002',
+                'is_production_ready' => true,
+            ]
+        );
+
+        $merchants = config('services.dana_gateway.merchants', []);
+        $merchants['production']['MRC-0002'] = ['name' => 'UDEV Central Production', 'is_active' => true];
+        config()->set('services.dana_gateway.merchants', $merchants);
+
+        $keys = config('services.dana_gateway.merchant_api_keys', []);
+        $keys['production']['MRC-0002'] = 'prod-key-002';
+        config()->set('services.dana_gateway.merchant_api_keys', $keys);
+
+        config()->set('services.udev_billing.subscription_dana_production_merchant_code', 'MRC-0002');
+        // Whitelist persetujuan pihak ketiga kosong; transaksi langganan resmi Udumbara tidak memerlukannya
+        config()->set('services.dana_gateway.contract_approved_third_party_apps', []);
+
+        // Larissama Production menggunakan kode APP0001
+        $app = Application::factory()->create(['code' => 'APP0001', 'name' => 'Larissama POS']);
+        $customer = ApplicationCustomer::factory()->create(['application_id' => $app->id]);
+        $plan = SubscriptionPlan::factory()->create(['application_id' => $app->id, 'price' => 100000]);
+
+        $invoice = Invoice::factory()->create([
+            'application_customer_id' => $customer->id,
+            'subscription_plan_id' => $plan->id,
+            'amount' => '100000.00',
+            'currency' => 'IDR',
+            'due_at' => now()->addDay(),
+        ]);
+
+        $this->fakeCheckoutGateway('pay-prod-sub-direct', 'MRC-0002', 'production');
+
+        // Pembayaran langganan resmi SaaS software Udumbara (Larissama) di Production berhasil
+        $response = $this->postJson("/api/v1/admin/invoices/{$invoice->id}/checkout", [
+            'payment_method' => 'qris',
+        ], ['Idempotency-Key' => 'idemp-laris-prod-sub-direct']);
+
+        $response->assertOk();
+
+        $attempt = PaymentAttempt::query()->where('invoice_id', $invoice->id)->sole();
+        $this->assertSame('MRC-0002', $attempt->gateway_merchant_code);
+        $this->assertSame('production', $attempt->gateway_environment);
+        $this->assertSame('100000.00', (string) $attempt->amount); // Zero customer surcharge
+        $this->assertSame(0.0, (float) ($attempt->metadata['fee_breakdown']['customer_fee'] ?? 0.0));
+        $this->assertSame('udev_central', $attempt->metadata['billing_recipient'] ?? null);
+    }
+
+    public function test_production_non_subscription_or_third_party_warung_transaction_is_blocked_fail_closed(): void
     {
         Sanctum::actingAs($this->admin, ['admin:access']);
 
@@ -995,35 +1050,39 @@ class DanaPaymentFeeSettingTest extends TestCase
         config()->set('services.udev_billing.subscription_dana_production_merchant_code', 'MRC-0002');
         config()->set('services.dana_gateway.contract_approved_third_party_apps', []); // Belum ada persetujuan
 
-        // Larissama Production menggunakan kode APP0001
         $app = Application::factory()->create(['code' => 'APP0001', 'name' => 'Larissama POS']);
         $customer = ApplicationCustomer::factory()->create(['application_id' => $app->id]);
         $plan = SubscriptionPlan::factory()->create(['application_id' => $app->id, 'price' => 100000]);
 
+        // Invoice non-langganan (transaksi belanja warung / retail pihak ketiga ditandai pada metadata)
         $invoice = Invoice::factory()->create([
             'application_customer_id' => $customer->id,
             'subscription_plan_id' => $plan->id,
             'amount' => '100000.00',
             'currency' => 'IDR',
             'due_at' => now()->addDay(),
+            'metadata' => [
+                'transaction_type' => 'warung_commerce',
+            ],
         ]);
 
         $this->fakeCheckoutGateway('pay-prod-fail', 'MRC-0002', 'production');
 
-        // Percobaan checkout Larissama ke merchant pusat di Production harus fail-closed (422)
+        // Percobaan checkout non-langganan ke merchant pusat di Production wajib fail-closed (422)
         $response = $this->postJson("/api/v1/admin/invoices/{$invoice->id}/checkout", [
             'payment_method' => 'qris',
-        ], ['Idempotency-Key' => 'idemp-laris-prod-blocked']);
+        ], ['Idempotency-Key' => 'idemp-laris-prod-non-sub-blocked']);
 
         $response->assertStatus(422)
             ->assertJsonValidationErrors(['invoice']);
 
         $errors = $response->json('errors.invoice', []);
         $this->assertNotEmpty($errors);
+        $this->assertStringContainsString('transaksi non-langganan / pembayaran warung pihak ketiga', implode(' ', $errors));
         $this->assertStringContainsString('belum memiliki persetujuan kontraktual tertulis resmi dari DANA', implode(' ', $errors));
     }
 
-    public function test_production_larissama_central_merchant_succeeds_when_contract_approved(): void
+    public function test_production_non_subscription_succeeds_when_contract_approved(): void
     {
         Sanctum::actingAs($this->admin, ['admin:access']);
 
@@ -1052,12 +1111,16 @@ class DanaPaymentFeeSettingTest extends TestCase
         $customer = ApplicationCustomer::factory()->create(['application_id' => $app->id]);
         $plan = SubscriptionPlan::factory()->create(['application_id' => $app->id, 'price' => 100000]);
 
+        // Invoice non-langganan / warung commerce
         $invoice = Invoice::factory()->create([
             'application_customer_id' => $customer->id,
             'subscription_plan_id' => $plan->id,
             'amount' => '100000.00',
             'currency' => 'IDR',
             'due_at' => now()->addDay(),
+            'metadata' => [
+                'transaction_type' => 'warung_commerce',
+            ],
         ]);
 
         $this->fakeCheckoutGateway('pay-prod-approved', 'MRC-0002', 'production');
@@ -1075,7 +1138,7 @@ class DanaPaymentFeeSettingTest extends TestCase
         $this->assertSame(0.0, (float) ($attempt->metadata['fee_breakdown']['customer_fee'] ?? 0.0));
     }
 
-    public function test_production_larissama_central_merchant_succeeds_when_approved_by_app_name_or_comma_separated_env(): void
+    public function test_production_external_third_party_app_is_blocked_without_dana_approval(): void
     {
         Sanctum::actingAs($this->admin, ['admin:access']);
 
@@ -1097,10 +1160,10 @@ class DanaPaymentFeeSettingTest extends TestCase
         config()->set('services.dana_gateway.merchant_api_keys', $keys);
 
         config()->set('services.udev_billing.subscription_dana_production_merchant_code', 'MRC-0002');
-        // Persetujuan diisi nama aplikasi 'larissama' dalam bentuk string dipisah koma (mirip format .env)
-        config()->set('services.dana_gateway.contract_approved_third_party_apps', 'other_app,larissama');
+        config()->set('services.dana_gateway.contract_approved_third_party_apps', []); // Belum ada persetujuan
 
-        $app = Application::factory()->create(['code' => 'APP0001', 'name' => 'Larissama POS']);
+        // Aplikasi pihak ketiga di luar ekosistem resmi Udumbara
+        $app = Application::factory()->create(['code' => 'APP9999', 'name' => 'Mitra Eksternal']);
         $customer = ApplicationCustomer::factory()->create(['application_id' => $app->id]);
         $plan = SubscriptionPlan::factory()->create(['application_id' => $app->id, 'price' => 100000]);
 
@@ -1112,11 +1175,64 @@ class DanaPaymentFeeSettingTest extends TestCase
             'due_at' => now()->addDay(),
         ]);
 
-        $this->fakeCheckoutGateway('pay-prod-approved-name', 'MRC-0002', 'production');
+        $this->fakeCheckoutGateway('pay-prod-fail-ext', 'MRC-0002', 'production');
+
+        // Percobaan checkout aplikasi pihak ketiga tanpa persetujuan DANA di Production wajib fail-closed (422)
+        $response = $this->postJson("/api/v1/admin/invoices/{$invoice->id}/checkout", [
+            'payment_method' => 'qris',
+        ], ['Idempotency-Key' => 'idemp-ext-prod-blocked']);
+
+        $response->assertStatus(422)
+            ->assertJsonValidationErrors(['invoice']);
+
+        $errors = $response->json('errors.invoice', []);
+        $this->assertNotEmpty($errors);
+        $this->assertStringContainsString("penagihan aplikasi pihak ketiga ('Mitra Eksternal (app9999)')", implode(' ', $errors));
+        $this->assertStringContainsString('belum memiliki persetujuan kontraktual tertulis resmi dari DANA', implode(' ', $errors));
+    }
+
+    public function test_production_external_third_party_app_succeeds_when_approved_by_app_name_or_comma_separated_env(): void
+    {
+        Sanctum::actingAs($this->admin, ['admin:access']);
+
+        \App\Models\DanaEnvironmentSetting::query()->updateOrCreate(
+            ['gateway' => 'dana'],
+            [
+                'active_environment' => 'production',
+                'primary_merchant_code' => 'MRC-0002',
+                'is_production_ready' => true,
+            ]
+        );
+
+        $merchants = config('services.dana_gateway.merchants', []);
+        $merchants['production']['MRC-0002'] = ['name' => 'UDEV Central Production', 'is_active' => true];
+        config()->set('services.dana_gateway.merchants', $merchants);
+
+        $keys = config('services.dana_gateway.merchant_api_keys', []);
+        $keys['production']['MRC-0002'] = 'prod-key-002';
+        config()->set('services.dana_gateway.merchant_api_keys', $keys);
+
+        config()->set('services.udev_billing.subscription_dana_production_merchant_code', 'MRC-0002');
+        // Persetujuan diisi kode aplikasi pihak ketiga dalam bentuk string dipisah koma (format .env)
+        config()->set('services.dana_gateway.contract_approved_third_party_apps', 'other_app,APP9999');
+
+        $app = Application::factory()->create(['code' => 'APP9999', 'name' => 'Mitra Eksternal']);
+        $customer = ApplicationCustomer::factory()->create(['application_id' => $app->id]);
+        $plan = SubscriptionPlan::factory()->create(['application_id' => $app->id, 'price' => 100000]);
+
+        $invoice = Invoice::factory()->create([
+            'application_customer_id' => $customer->id,
+            'subscription_plan_id' => $plan->id,
+            'amount' => '100000.00',
+            'currency' => 'IDR',
+            'due_at' => now()->addDay(),
+        ]);
+
+        $this->fakeCheckoutGateway('pay-prod-approved-ext', 'MRC-0002', 'production');
 
         $response = $this->postJson("/api/v1/admin/invoices/{$invoice->id}/checkout", [
             'payment_method' => 'qris',
-        ], ['Idempotency-Key' => 'idemp-laris-prod-name']);
+        ], ['Idempotency-Key' => 'idemp-ext-prod-approved']);
 
         $response->assertOk();
 

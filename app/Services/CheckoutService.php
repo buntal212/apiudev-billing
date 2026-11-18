@@ -406,32 +406,68 @@ class CheckoutService
                     $isCentral = true;
 
                     // Guard Kepatuhan Kontrak DANA:
-                    // Penggunaan merchant pusat (MRC-0002 / udev-central) untuk penagihan aplikasi pihak ketiga
-                    // (seperti Larissama) di Production WAJIB memiliki persetujuan tertulis resmi dari DANA.
-                    if ($chosenEnvironment === 'production' && ($isLarissamaCentral || ($app !== null && ! in_array($appCode, ['udev', 'udev-billing', 'platform'], true)))) {
-                        $approvedConfig = config('services.dana_gateway.contract_approved_third_party_apps', []);
-                        if (is_string($approvedConfig)) {
-                            $approvedConfig = array_filter(array_map('trim', explode(',', $approvedConfig)));
-                        }
-                        $approvedNormalized = array_map('strtolower', (array) $approvedConfig);
+                    // 1. Pembayaran Langganan Udumbara: Transaksi langganan resmi SaaS software Udumbara
+                    //    (memiliki subscription_plan dan bukan transaksi belanja warung) dari aplikasi
+                    //    ekosistem resmi Udumbara (Larissama / APP0001 / udev) di mana dana diterima langsung
+                    //    oleh merchant pusat MRC-0002 adalah transaksi first-party Udumbara yang sah dan diizinkan.
+                    // 2. Transaksi Warung / Pihak Ketiga: Transaksi retail/belanja warung (non-langganan)
+                    //    atau penagihan aplikasi pihak ketiga di luar ekosistem resmi Udumbara yang mencoba
+                    //    menggunakan merchant pusat MRC-0002 di Production WAJIB memiliki persetujuan tertulis resmi
+                    //    dari DANA demi mematuhi lisensi merchant dan larangan pooling dana (fail-closed jika belum disetujui).
+                    $isExplicitWarungCommerce = in_array(
+                        $lockedInvoice->metadata['transaction_type'] ?? null,
+                        ['warung_commerce', 'commerce', 'retail'],
+                        true
+                    ) || in_array(
+                        $lockedInvoice->metadata['billing_type'] ?? null,
+                        ['third_party_commerce', 'warung_commerce', 'external'],
+                        true
+                    ) || (bool) ($lockedInvoice->metadata['is_third_party_commerce'] ?? false);
 
-                        $isApproved = in_array($appCode, $approvedNormalized, true)
-                            || in_array($appName, $approvedNormalized, true)
-                            || in_array((string) $app?->id, $approvedNormalized, true)
-                            || ($isLarissamaCentral && (
-                                in_array('larissama', $approvedNormalized, true)
-                                || in_array('laris', $approvedNormalized, true)
-                                || in_array('app0001', $approvedNormalized, true)
-                                || in_array('app-0001', $approvedNormalized, true)
-                            ));
+                    $isUdevSubscriptionBilling = (! $isExplicitWarungCommerce)
+                        && ($lockedInvoice->subscription_plan_id !== null || $lockedInvoice->plan !== null);
 
-                        if (! $isApproved) {
+                    $isUdevEcosystemApp = $isLarissamaCentral
+                        || in_array($appCode, ['udev', 'udev-billing', 'platform', 'larissama', 'laris', 'app0001', 'app-0001'], true)
+                        || ($app === null);
+
+                    if ($chosenEnvironment === 'production') {
+                        $requiresThirdPartyApproval = false;
+                        $transactionTypeLabel = '';
+
+                        if (! $isUdevSubscriptionBilling) {
+                            $requiresThirdPartyApproval = true;
+                            $transactionTypeLabel = 'transaksi non-langganan / pembayaran warung pihak ketiga';
+                        } elseif (! $isUdevEcosystemApp) {
+                            $requiresThirdPartyApproval = true;
                             $appLabel = $app?->name ? "{$app->name} ({$appCode})" : ($appCode ?: ($appName ?: "App #{$app?->id}"));
-                            throw ValidationException::withMessages([
-                                'invoice' => [
-                                    "Penggunaan merchant pusat '{$recipientMerchantCode}' untuk penagihan aplikasi pihak ketiga ('{$appLabel}') di Production belum memiliki persetujuan kontraktual tertulis resmi dari DANA. Transaksi diblokir demi kepatuhan kontrak.",
-                                ],
-                            ]);
+                            $transactionTypeLabel = "penagihan aplikasi pihak ketiga ('{$appLabel}')";
+                        }
+
+                        if ($requiresThirdPartyApproval) {
+                            $approvedConfig = config('services.dana_gateway.contract_approved_third_party_apps', []);
+                            if (is_string($approvedConfig)) {
+                                $approvedConfig = array_filter(array_map('trim', explode(',', $approvedConfig)));
+                            }
+                            $approvedNormalized = array_map('strtolower', (array) $approvedConfig);
+
+                            $isApproved = in_array($appCode, $approvedNormalized, true)
+                                || in_array($appName, $approvedNormalized, true)
+                                || in_array((string) $app?->id, $approvedNormalized, true)
+                                || ($isLarissamaCentral && (
+                                    in_array('larissama', $approvedNormalized, true)
+                                    || in_array('laris', $approvedNormalized, true)
+                                    || in_array('app0001', $approvedNormalized, true)
+                                    || in_array('app-0001', $approvedNormalized, true)
+                                ));
+
+                            if (! $isApproved) {
+                                throw ValidationException::withMessages([
+                                    'invoice' => [
+                                        "Penggunaan merchant pusat '{$recipientMerchantCode}' untuk {$transactionTypeLabel} di Production belum memiliki persetujuan kontraktual tertulis resmi dari DANA. Transaksi diblokir demi kepatuhan kontrak.",
+                                    ],
+                                ]);
+                            }
                         }
                     }
                 }
