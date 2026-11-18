@@ -132,7 +132,7 @@ class CheckoutService
         try {
             return DB::transaction(function () use ($invoice, $requestIdempotencyKey, $paymentMethod, $provider, $bank, $environment): CheckoutOutboxMessage {
                 $lockedInvoice = Invoice::query()
-                    ->with('plan')
+                    ->with(['plan.application', 'customer.application'])
                     ->lockForUpdate()
                     ->findOrFail($invoice->getKey());
                 $this->assertInvoiceCanStartCheckout($lockedInvoice);
@@ -341,7 +341,14 @@ class CheckoutService
                 $hasCustomerTenantMapping = ($prodDanaMapping !== null && ! in_array($prodDanaMapping->gateway_merchant_code, $centralMerchantCodes, true))
                     || ($sandboxDanaMapping !== null && ! in_array($sandboxDanaMapping->gateway_merchant_code, $centralMerchantCodes, true));
 
-                $isCustomerAppInvoice = $hasCustomerTenantMapping;
+                // Larissama central billing alignment:
+                // Larissama subscriptions are collected via UDEV Central billing ('udev-central').
+                $app = $lockedInvoice->plan?->application ?? $lockedInvoice->customer?->application;
+                $appCode = strtolower((string) ($app?->code ?? ''));
+                $appName = strtolower((string) ($app?->name ?? ''));
+                $isLarissamaCentral = in_array($appCode, ['larissama', 'laris'], true) || ($appName === 'larissama');
+
+                $isCustomerAppInvoice = $isLarissamaCentral ? false : $hasCustomerTenantMapping;
 
                 if ($isCustomerAppInvoice) {
                     $chosenEnvironment = $targetEnv;
@@ -406,6 +413,8 @@ class CheckoutService
                 );
                 $attemptAmount = $feeSnapshot['total_amount'];
 
+                $resolvedBank = $this->resolveEffectiveBank($paymentMethod, $bank);
+
                 $attemptMetadata = [
                     'invoice_number' => $lockedInvoice->invoice_number,
                     'application_customer_id' => $lockedInvoice->application_customer_id,
@@ -416,6 +425,10 @@ class CheckoutService
                     'gateway_environment' => $chosenEnvironment,
                     'gateway_merchant_code' => $recipientMerchantCode,
                 ];
+
+                if ($resolvedBank !== null) {
+                    $attemptMetadata['bank'] = $resolvedBank;
+                }
 
                 if ($isCentral) {
                     $attemptMetadata[SubscriptionBillingMerchantResolver::RecipientMetadataKey] = SubscriptionBillingMerchantResolver::CentralRecipient;
@@ -529,13 +542,14 @@ class CheckoutService
                     idempotencyKey: $claimed->idempotency_key,
                     merchantOrderId: $attempt->merchant_reference,
                     amountMinor: $amountMinor,
-                    metadata: [
+                    metadata: array_filter([
                         'payment_method' => $paymentMethod,
+                        'bank' => $attempt->metadata['bank'] ?? null,
                         'udev_invoice_id' => $attempt->invoice_id,
                         'udev_payment_attempt_id' => $attempt->getKey(),
                         'invoice_number' => $attempt->invoice->invoice_number,
                         'udev_sandbox_payment_method' => $paymentMethod,
-                    ],
+                    ], fn ($v) => $v !== null),
                     environment: $attempt->gateway_environment,
                 );
             }

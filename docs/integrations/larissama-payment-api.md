@@ -168,7 +168,17 @@ Idempotency-Key: laris-invoice-SALON-001-20261027-01
 
 Request ulang dengan header dan payload yang sama tidak membuat invoice kedua. Jangan mengirim `amount`, `currency`, `application_id`, atau `subscription_id`; seluruhnya ditolak.
 
-## Checkout QRIS DANA Sandbox
+## Checkout DANA (QRIS, E-Wallet, & Virtual Account)
+
+Mendukung 6 metode pembayaran resmi DANA:
+1. `qris` (QRIS DANA MPM)
+2. `dana_wallet` (DANA E-Wallet Deeplink / Web Checkout)
+3. `va_bri` (Virtual Account BRI via DANA)
+4. `va_cimb` (Virtual Account CIMB Niaga via DANA)
+5. `va_btpn` (Virtual Account BTPN / Jenius via DANA)
+6. `va_pani` (Virtual Account Panin Bank via DANA)
+
+### Contoh Request QRIS DANA:
 
 ```http
 POST /invoices/INV-20261027-ABC123/checkout
@@ -176,10 +186,28 @@ Idempotency-Key: laris-checkout-INV-20261027-ABC123-qris-01
 ```
 
 ```json
-{ "payment_method": "qris" }
+{
+  "provider": "dana",
+  "payment_method": "qris"
+}
 ```
 
-UDEV memilih `udev-central` di server. Respons `200` berarti instruksi siap, sedangkan `202` berarti masih diproses dan dapat dipoll melalui `GET /invoices/{invoiceNumber}`. Invoice tetap `pending` sampai settlement sah.
+### Contoh Request Virtual Account CIMB Niaga via DANA:
+
+```http
+POST /invoices/INV-20261027-ABC123/checkout
+Idempotency-Key: laris-checkout-INV-20261027-ABC123-vacimb-01
+```
+
+```json
+{
+  "provider": "dana",
+  "payment_method": "va_cimb",
+  "bank": "cimb"
+}
+```
+
+UDEV memilih merchant pusat `udev-central` di server secara otomatis untuk invoice aplikasi Larissama. Respons `200` berarti instruksi siap, sedangkan `202` berarti masih diproses dan dapat dipoll melalui `GET /invoices/{invoiceNumber}`. Invoice tetap `pending` sampai settlement sah.
 
 ```json
 {
@@ -204,7 +232,7 @@ UDEV memilih `udev-central` di server. Respons `200` berarti instruksi siap, sed
 }
 ```
 
-`payment_code` Custom Checkout bukan otomatis QR Content MPM. Hanya render QR jika `qr_content` benar-benar dikirim oleh kontrak QRIS yang terverifikasi. Jika yang tersedia hanya `payment_code`, tampilkan sebagai kode/instruksi; jangan mengubahnya menjadi QR MPM.
+`payment_code` Custom Checkout bukan otomatis QR Content MPM. Hanya render QR jika `qr_content` benar-benar dikirim oleh kontrak QRIS yang terverifikasi. Jika yang tersedia hanya `payment_code`, tampilkan sebagai kode/instruksi; jangan mengubahnya menjadi QR MPM. Untuk Virtual Account, `payment_code` berisi nomor VA yang harus dibayarkan pelanggan dengan batas waktu `checkout_expires_at`. Tagihan pelanggan bebas biaya admin tambahan (`admin_fee = 0.0`).
 
 ## Polling pembayaran dan masa aktif
 

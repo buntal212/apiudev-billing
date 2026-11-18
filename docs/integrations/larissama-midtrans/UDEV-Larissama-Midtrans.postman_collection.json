@@ -1,8 +1,8 @@
 {
   "info": {
     "_postman_id": "c1f7a048-b328-40b9-8e41-0164c8d5a7e1",
-    "name": "UDEV Centralized Billing - Larissama (Midtrans)",
-    "description": "Koleksi resmi Postman untuk integrasi sistem penagihan Larissama ke UDEV Centralized Billing menggunakan payment gateway Midtrans.\n\nAlur transaksi:\n1. Get Plans -> 2. Sync Customer -> 3. Invoice Preview -> 4. Create Invoice -> 5. Checkout Midtrans (QRIS/VA/GoPay) -> 6. Get Invoice Detail -> 7. Get Subscription -> 8. Get Transactions.",
+    "name": "UDEV Centralized Billing - Larissama (DANA & Midtrans)",
+    "description": "Koleksi resmi Postman untuk integrasi sistem penagihan Larissama ke UDEV Centralized Billing menggunakan payment gateway DANA dan Midtrans.\n\nAlur transaksi:\n1. Get Plans -> 2. Sync Customer -> 3. Invoice Preview -> 4. Create Invoice -> 5. Checkout (DANA / Midtrans) -> 6. Get Invoice Detail -> 7. Get Subscription -> 8. Get Transactions.",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
   "auth": {
@@ -501,7 +501,247 @@
       "response": []
     },
     {
-      "name": "14. Cek Status Invoice (Polling / Rekonsiliasi)",
+      "name": "14. Checkout DANA - QRIS",
+      "event": [
+        {
+          "listen": "prerequest",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.variables.set(\"dynamic_chk_idemp\", \"chk-\" + pm.environment.get(\"invoice_number\") + \"-dana-qris-\" + Date.now());"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Idempotency-Key",
+            "value": "{{dynamic_chk_idemp}}",
+            "type": "text"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"provider\": \"dana\",\n  \"payment_method\": \"qris\",\n  \"idempotency_key\": \"{{dynamic_chk_idemp}}\"\n}"
+        },
+        "url": {
+          "raw": "{{base_url}}/{{integration_prefix}}/invoices/{{invoice_number}}/checkout",
+          "host": ["{{base_url}}"],
+          "path": [
+            "{{integration_prefix}}",
+            "invoices",
+            "{{invoice_number}}",
+            "checkout"
+          ]
+        },
+        "description": "Meminta sesi checkout QRIS DANA (Menghasilkan qr_content / payment_code)."
+      },
+      "response": []
+    },
+    {
+      "name": "15. Checkout DANA - Wallet",
+      "event": [
+        {
+          "listen": "prerequest",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.variables.set(\"dynamic_chk_idemp\", \"chk-\" + pm.environment.get(\"invoice_number\") + \"-dana-wallet-\" + Date.now());"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Idempotency-Key",
+            "value": "{{dynamic_chk_idemp}}",
+            "type": "text"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"provider\": \"dana\",\n  \"payment_method\": \"dana_wallet\",\n  \"idempotency_key\": \"{{dynamic_chk_idemp}}\"\n}"
+        },
+        "url": {
+          "raw": "{{base_url}}/{{integration_prefix}}/invoices/{{invoice_number}}/checkout",
+          "host": ["{{base_url}}"],
+          "path": [
+            "{{integration_prefix}}",
+            "invoices",
+            "{{invoice_number}}",
+            "checkout"
+          ]
+        },
+        "description": "Meminta sesi checkout DANA Wallet (Menghasilkan checkout_url web checkout)."
+      },
+      "response": []
+    },
+    {
+      "name": "16. Checkout DANA - BRI Virtual Account",
+      "event": [
+        {
+          "listen": "prerequest",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.variables.set(\"dynamic_chk_idemp\", \"chk-\" + pm.environment.get(\"invoice_number\") + \"-dana-vabri-\" + Date.now());"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Idempotency-Key",
+            "value": "{{dynamic_chk_idemp}}",
+            "type": "text"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"provider\": \"dana\",\n  \"payment_method\": \"va_bri\",\n  \"bank\": \"bri\",\n  \"idempotency_key\": \"{{dynamic_chk_idemp}}\"\n}"
+        },
+        "url": {
+          "raw": "{{base_url}}/{{integration_prefix}}/invoices/{{invoice_number}}/checkout",
+          "host": ["{{base_url}}"],
+          "path": [
+            "{{integration_prefix}}",
+            "invoices",
+            "{{invoice_number}}",
+            "checkout"
+          ]
+        },
+        "description": "Meminta sesi Virtual Account BRI via DANA (Menghasilkan payment_code / nomor VA)."
+      },
+      "response": []
+    },
+    {
+      "name": "17. Checkout DANA - CIMB Niaga Virtual Account",
+      "event": [
+        {
+          "listen": "prerequest",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.variables.set(\"dynamic_chk_idemp\", \"chk-\" + pm.environment.get(\"invoice_number\") + \"-dana-vacimb-\" + Date.now());"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Idempotency-Key",
+            "value": "{{dynamic_chk_idemp}}",
+            "type": "text"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"provider\": \"dana\",\n  \"payment_method\": \"va_cimb\",\n  \"bank\": \"cimb\",\n  \"idempotency_key\": \"{{dynamic_chk_idemp}}\"\n}"
+        },
+        "url": {
+          "raw": "{{base_url}}/{{integration_prefix}}/invoices/{{invoice_number}}/checkout",
+          "host": ["{{base_url}}"],
+          "path": [
+            "{{integration_prefix}}",
+            "invoices",
+            "{{invoice_number}}",
+            "checkout"
+          ]
+        },
+        "description": "Meminta sesi Virtual Account CIMB Niaga via DANA (Menghasilkan payment_code / nomor VA)."
+      },
+      "response": []
+    },
+    {
+      "name": "18. Checkout DANA - BTPN Virtual Account",
+      "event": [
+        {
+          "listen": "prerequest",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.variables.set(\"dynamic_chk_idemp\", \"chk-\" + pm.environment.get(\"invoice_number\") + \"-dana-vabtpn-\" + Date.now());"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Idempotency-Key",
+            "value": "{{dynamic_chk_idemp}}",
+            "type": "text"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"provider\": \"dana\",\n  \"payment_method\": \"va_btpn\",\n  \"bank\": \"btpn\",\n  \"idempotency_key\": \"{{dynamic_chk_idemp}}\"\n}"
+        },
+        "url": {
+          "raw": "{{base_url}}/{{integration_prefix}}/invoices/{{invoice_number}}/checkout",
+          "host": ["{{base_url}}"],
+          "path": [
+            "{{integration_prefix}}",
+            "invoices",
+            "{{invoice_number}}",
+            "checkout"
+          ]
+        },
+        "description": "Meminta sesi Virtual Account BTPN / Jenius via DANA (Menghasilkan payment_code / nomor VA)."
+      },
+      "response": []
+    },
+    {
+      "name": "19. Checkout DANA - Panin Virtual Account",
+      "event": [
+        {
+          "listen": "prerequest",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.variables.set(\"dynamic_chk_idemp\", \"chk-\" + pm.environment.get(\"invoice_number\") + \"-dana-vapani-\" + Date.now());"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Idempotency-Key",
+            "value": "{{dynamic_chk_idemp}}",
+            "type": "text"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"provider\": \"dana\",\n  \"payment_method\": \"va_pani\",\n  \"bank\": \"pani\",\n  \"idempotency_key\": \"{{dynamic_chk_idemp}}\"\n}"
+        },
+        "url": {
+          "raw": "{{base_url}}/{{integration_prefix}}/invoices/{{invoice_number}}/checkout",
+          "host": ["{{base_url}}"],
+          "path": [
+            "{{integration_prefix}}",
+            "invoices",
+            "{{invoice_number}}",
+            "checkout"
+          ]
+        },
+        "description": "Meminta sesi Virtual Account Panin Bank via DANA (Menghasilkan payment_code / nomor VA)."
+      },
+      "response": []
+    },
+    {
+      "name": "20. Cek Status Invoice (Polling / Rekonsiliasi)",
       "request": {
         "method": "GET",
         "header": [],
@@ -522,7 +762,7 @@
       "response": []
     },
     {
-      "name": "15. Cek Status Subscription Resmi Pelanggan",
+      "name": "21. Cek Status Subscription Resmi Pelanggan",
       "request": {
         "method": "GET",
         "header": [],
@@ -541,7 +781,7 @@
       "response": []
     },
     {
-      "name": "16. Riwayat Transaksi Penagihan Pelanggan",
+      "name": "22. Riwayat Transaksi Penagihan Pelanggan",
       "request": {
         "method": "GET",
         "header": [],

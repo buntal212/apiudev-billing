@@ -342,15 +342,18 @@ paths:
                     - gopay
                     - bank_transfer
                     - dana_wallet
+                    - va_cimb
+                    - va_btpn
+                    - va_pani
                   default: qris
                   example: 'qris'
                   description: |
                     Metode pembayaran yang dipilih:
                     - Untuk Midtrans: qris, va_bca, va_bni, va_bri, va_permata, va_mandiri, echannel, gopay.
-                    - Untuk DANA: qris (DANA QRIS MPM), dana_wallet (DANA E-Wallet).
+                    - Untuk DANA: qris (DANA QRIS MPM), dana_wallet (DANA E-Wallet), va_bri (VA BRI), va_cimb (VA CIMB Niaga), va_btpn (VA BTPN/Jenius), va_pani (VA Panin).
                 bank:
                   type: string
-                  enum: [bca, bni, bri, permata, mandiri, echannel]
+                  enum: [bca, bni, bri, permata, mandiri, echannel, cimb, btpn, pani]
                   description: Pilihan bank spesifik (opsional jika nama bank sudah tercantum di payment_method).
                 idempotency_key:
                   type: string

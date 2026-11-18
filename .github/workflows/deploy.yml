@@ -70,6 +70,8 @@ jobs:
             --exclude='/.well-known/'
             --exclude='/.user.ini'
             --exclude='/public/.user.ini'
+            --exclude='/.current_release'
+            --exclude='/public/release.json'
           )
 
           fail() { echo "::error::$*"; exit 1; }
@@ -257,16 +259,20 @@ jobs:
           }
 
           rollback() {
-            echo '::warning::Restoring previous application files'
+            echo "::warning::Mengembalikan rilis aplikasi sebelumnya menggunakan backup terverifikasi Release ID: $RELEASE_ID (Target Commit: $GITHUB_SHA). Bukan HEAD~1."
+            rm -f "$APP_DIR/public/release.json" 2>/dev/null || true
             [[ "$BACKUP_READY" == 1 && -d "$BACKUP_DIR" ]] || {
               echo '::error::No valid rollback backup'; return 1;
+            }
+            [[ -f "$BACKUP_DIR/artisan" && -f "$BACKUP_DIR/composer.json" && -d "$BACKUP_DIR/vendor" ]] || {
+              echo '::error::Rollback backup integrity check failed'; return 1;
             }
             rsync -a --delete "${EXCLUDES[@]}" "$BACKUP_DIR/" "$APP_DIR/" || return 1
             if ! build_cache "$APP_DIR"; then
               echo '::error::Rollback files restored but Laravel cache rebuild failed; manual intervention needed'
               return 1
             fi
-            echo '=== Previous application restored ==='
+            echo '=== Previous application restored from verified release backup ==='
           }
 
           finish() {
@@ -374,10 +380,25 @@ jobs:
           echo '=== Validating staging ==='
           build_cache "$STAGING_DIR"
 
+          echo '=== Validasi migration pending di staging (Fail-Closed, Read-Only) ==='
+          (
+            cd "$STAGING_DIR"
+            "$PHP_BIN" artisan migrate:status --no-interaction
+            PENDING_COUNT=$("$PHP_BIN" artisan migrate:status --no-interaction 2>&1 | grep -c 'Pending' || true)
+            if [[ "$PENDING_COUNT" -gt 0 ]]; then
+              echo "::error::FAIL-CLOSED: Ditemukan $PENDING_COUNT migration pending yang belum terpasang."
+              echo "::error::Eksekusi migration otomatis dinonaktifkan. Rilis UDEV ini membutuhkan migration database yang belum disetujui/terpasang."
+              fail "Deployment UDEV dibatalkan (Fail-Closed) karena terdapat $PENDING_COUNT migration pending."
+            fi
+            echo '=== Staging migration check: Tidak ada pending migration ==='
+          )
+
           echo '=== Backing up production (excluding generated cache) ==='
           rsync -a "${EXCLUDES[@]}" "$APP_DIR/" "$BACKUP_DIR/"
           [[ -f "$BACKUP_DIR/artisan" && -f "$BACKUP_DIR/composer.json" && -d "$BACKUP_DIR/vendor" ]] || \
             fail 'Rollback backup is incomplete'
+          printf 'RELEASE_ID=%s\nTARGET_SHA=%s\nBACKUP_TIME=%s\n' \
+            "$RELEASE_ID" "$GITHUB_SHA" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$BACKUP_DIR/.release_meta"
           BACKUP_READY=1
 
           echo '=== Activating prepared release ==='
@@ -385,10 +406,18 @@ jobs:
           rsync -a --delete "${EXCLUDES[@]}" "$STAGING_DIR/" "$APP_DIR/"
           build_cache "$APP_DIR"
 
-          echo '=== Running non-destructive database migrations ==='
+          echo '=== Pemeriksaan migration pending pada production (Fail-Closed, Read-Only) ==='
           (
             cd "$APP_DIR"
-            "$PHP_BIN" artisan migrate --force --no-interaction
+            echo '--- Status migration saat ini ---'
+            "$PHP_BIN" artisan migrate:status --no-interaction
+            PENDING_COUNT=$("$PHP_BIN" artisan migrate:status --no-interaction 2>&1 | grep -c 'Pending' || true)
+            if [[ "$PENDING_COUNT" -gt 0 ]]; then
+              echo "::error::FAIL-CLOSED: Ditemukan $PENDING_COUNT migration berstatus Pending pada production."
+              echo "::error::Eksekusi migration otomatis dinonaktifkan. Rilis digagalkan karena terdapat skema DB yang belum terpasang."
+              exit 1
+            fi
+            echo '=== Semua migration sudah dieksekusi (0 pending) ==='
           )
 
           echo '=== Resetting OPcache / PHP bytecache ==='
@@ -435,9 +464,17 @@ jobs:
           chmod 775 "$APP_DIR/bootstrap/cache" 2>/dev/null || true
           chmod 664 "$APP_DIR/bootstrap/cache"/*.php 2>/dev/null || true
 
+          printf 'RELEASE_ID=%s\nCOMMIT_SHA=%s\nDEPLOYED_AT=%s\nINTEGRATION_STAGE=tahap-2\n' \
+            "$RELEASE_ID" "$GITHUB_SHA" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$APP_DIR/.current_release"
+
+          # Tulis manifest publik release untuk verifikasi downstream (deployment gate Larissama)
+          printf '{\n  "release_id": "%s",\n  "commit_sha": "%s",\n  "integration_stage": "tahap-2",\n  "features": [\n    "dana_checkout_methods",\n    "midtrans_gateway",\n    "subscription_billing_tahap_2"\n  ],\n  "status": "active",\n  "deployed_at": "%s"\n}\n' \
+            "$RELEASE_ID" "$GITHUB_SHA" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$APP_DIR/public/release.json"
+
           ACTIVATION_STARTED=0
           DEPLOY_OK=1
           echo '=== Deployment successful ==='
+          echo '=== Pipeline Urutan Deployment: Tahap 1 (UDEV Billing) SELESAI. Sistem siap untuk Tahap 2 (Larissama). ==='
 
           # Only prune backups after successful activation. Keep two newest.
           echo '=== Cleaning old backups ==='

@@ -53,6 +53,7 @@ return [
     // used as a fallback recipient for new subscription invoices.
     'udev_billing' => [
         'subscription_dana_sandbox_merchant_code' => env('UDEV_SUBSCRIPTION_DANA_SANDBOX_MERCHANT_CODE'),
+        'subscription_dana_production_merchant_code' => env('UDEV_SUBSCRIPTION_DANA_PRODUCTION_MERCHANT_CODE'),
     ],
 
     'dana_reconciliation' => [

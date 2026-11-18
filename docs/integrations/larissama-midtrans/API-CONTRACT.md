@@ -363,7 +363,11 @@ Meminta inisiasi sesi pembayaran ke payment gateway (Midtrans atau DANA) dan men
     - **Pilihan DANA (`provider: "dana"`)**:
       - `qris` (DANA QRIS Nasional MPM - menghasilkan payload QR string / URL gambar QR)
       - `dana_wallet` (DANA E-Wallet - menghasilkan `checkout_url` web checkout / deeplink aplikasi DANA)
-  - `bank` _(optional, string, in: `bca`, `bni`, `bri`, `permata`, `mandiri`, `echannel`)_: Khusus Virtual Account Midtrans jika nama bank tidak disatukan di `payment_method`.
+      - `va_bri` (Virtual Account BRI via DANA)
+      - `va_cimb` (Virtual Account CIMB Niaga via DANA)
+      - `va_btpn` (Virtual Account BTPN / Jenius via DANA)
+      - `va_pani` (Virtual Account Panin Bank via DANA)
+  - `bank` _(optional, string, in: `bca`, `bni`, `bri`, `permata`, `mandiri`, `echannel`, `cimb`, `btpn`, `pani`)_: Pilihan bank untuk Virtual Account Midtrans atau DANA jika nama bank tidak disatukan di `payment_method`.
 - **Parameter Terlarang**: `amount`, `currency`, `merchant`, `merchant_code`.
 
 #### Kebijakan Biaya & Surcharge:
