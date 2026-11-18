@@ -2,6 +2,7 @@
 
 namespace App\Services;
 
+use App\Models\CheckoutOutboxMessage;
 use App\Models\PaymentAttempt;
 use App\Models\PaymentReconciliationRun;
 use Carbon\CarbonImmutable;
@@ -51,8 +52,62 @@ class PaymentReconciliationService
                 (string) $attempt->gateway_merchant_code,
                 (string) $attempt->gateway_environment,
             );
-            $gatewayPayment = $this->gatewayClient->findPayment($merchant, (string) $attempt->gateway_payment_id);
+
+            $gatewayPayment = null;
+            if (! empty($attempt->gateway_payment_id)) {
+                try {
+                    $gatewayPayment = $this->gatewayClient->findPayment($merchant, (string) $attempt->gateway_payment_id);
+                } catch (DanaGatewayException $e) {
+                    if ($e->statusCode !== 404 || empty($attempt->merchant_reference)) {
+                        throw $e;
+                    }
+                }
+            }
+
+            if ($gatewayPayment === null && ! empty($attempt->merchant_reference)) {
+                $gatewayPayment = $this->gatewayClient->findPaymentByMerchantOrderId($merchant, (string) $attempt->merchant_reference);
+            }
+
+            if ($gatewayPayment === null) {
+                return $this->finishFailed($run, $attempt, 'gateway_payment_not_found', 404);
+            }
+
+            if (empty($attempt->gateway_payment_id) && ! empty($gatewayPayment['id'])) {
+                $attempt->update(['gateway_payment_id' => $gatewayPayment['id']]);
+                $attempt->gateway_payment_id = $gatewayPayment['id'];
+            }
+
             $this->validateGatewayPayment($attempt, $gatewayPayment);
+
+            $isUncertain = ($attempt->failure_code === 'gateway_uncertain_status')
+                || (is_array($attempt->metadata) && (($attempt->metadata['uncertain'] ?? false) || ($attempt->metadata['is_uncertain'] ?? false)));
+
+            if ($isUncertain) {
+                $paymentId = (string) ($gatewayPayment['id'] ?? $attempt->gateway_payment_id);
+                $inquiryResponse = $this->gatewayClient->queryPaymentStatus($merchant, $paymentId);
+                if (is_array($inquiryResponse['data'] ?? null)) {
+                    $gatewayPayment = $inquiryResponse['data'];
+                }
+
+                $danaStatus = is_array($inquiryResponse['dana_status'] ?? null) ? $inquiryResponse['dana_status'] : [];
+                $latestTransactionStatus = $danaStatus['latest_transaction_status'] ?? null;
+
+                if ($latestTransactionStatus === '05' || ($gatewayPayment['status'] ?? null) === 'expired') {
+                    return $this->finishTerminal($run, $attempt, 'expired');
+                }
+
+                if ($latestTransactionStatus === '02' || ($gatewayPayment['status'] ?? null) === 'cancelled') {
+                    return $this->finishTerminal($run, $attempt, 'cancelled');
+                }
+
+                if ($latestTransactionStatus === '00' || ($gatewayPayment['status'] ?? null) === 'paid') {
+                    return $this->finishPaid($run, $attempt, $gatewayPayment);
+                }
+
+                if ($latestTransactionStatus === '01' || ($gatewayPayment['status'] ?? null) === 'pending') {
+                    return $this->finishPending($run, $attempt);
+                }
+            }
 
             return $this->applyGatewayResult($attempt, $run, $gatewayPayment);
         } catch (DanaGatewayException $exception) {
@@ -156,6 +211,11 @@ class PaymentReconciliationService
             $paidAt,
         );
         $metadata = is_array($updatedAttempt->metadata) ? $updatedAttempt->metadata : [];
+        if (! empty($metadata['uncertain']) || ! empty($metadata['is_uncertain']) || $updatedAttempt->failure_code === 'gateway_uncertain_status') {
+            unset($metadata['uncertain'], $metadata['is_uncertain'], $metadata['gateway_status'], $metadata['failure_reason']);
+            $metadata['uncertain_resolved_at'] = now()->toISOString();
+            $metadata['uncertain_resolution'] = 'paid_confirmed_by_gateway';
+        }
         $metadata['gateway_verification'] = [
             'provider' => $updatedAttempt->provider,
             'gateway_payment_id' => $updatedAttempt->gateway_payment_id,
@@ -189,11 +249,27 @@ class PaymentReconciliationService
     private function finishPending(PaymentReconciliationRun $run, PaymentAttempt $attempt): ReconciliationResult
     {
         $updatedAttempt = $attempt;
+        $isUncertain = ($attempt->failure_code === 'gateway_uncertain_status')
+            || (is_array($attempt->metadata) && (($attempt->metadata['uncertain'] ?? false) || ($attempt->metadata['is_uncertain'] ?? false)));
+
         if ($attempt->status === PaymentAttempt::StatusInitiated) {
             $updatedAttempt = $this->paymentAttemptService->transitionStatus(
                 $attempt,
                 PaymentAttempt::StatusPending,
+                failureCode: $isUncertain ? 'gateway_uncertain_status' : null,
+                failureMessage: $isUncertain ? ($attempt->failure_message ?: 'Transaksi masih berstatus 01 di gateway DANA.') : null,
             );
+        }
+
+        if ($isUncertain) {
+            $currentMetadata = is_array($updatedAttempt->metadata) ? $updatedAttempt->metadata : [];
+            $currentMetadata['uncertain'] = true;
+            $currentMetadata['is_uncertain'] = true;
+            $currentMetadata['gateway_status'] = '01';
+            $updatedAttempt->update([
+                'failure_code' => 'gateway_uncertain_status',
+                'metadata' => $currentMetadata,
+            ]);
         }
 
         return $this->finishRun(
@@ -233,6 +309,17 @@ class PaymentReconciliationService
             $updateAttributes['checkout_expires_at'] = $expiresAt;
         } elseif ($status === PaymentAttempt::StatusExpired && ($updatedAttempt->checkout_expires_at === null || $updatedAttempt->checkout_expires_at->isFuture())) {
             $updateAttributes['checkout_expires_at'] = now();
+        }
+
+        $metadata = is_array($updatedAttempt->metadata) ? $updatedAttempt->metadata : [];
+        if (! empty($metadata['uncertain']) || ! empty($metadata['is_uncertain']) || $updatedAttempt->failure_code === 'gateway_uncertain_status') {
+            unset($metadata['uncertain'], $metadata['is_uncertain'], $metadata['gateway_status'], $metadata['failure_reason']);
+            $metadata['uncertain_resolved_at'] = now()->toISOString();
+            $metadata['uncertain_resolution'] = $status === PaymentAttempt::StatusExpired
+                ? 'expired_confirmed_by_gateway'
+                : ($status === PaymentAttempt::StatusCancelled ? 'cancelled_confirmed_by_gateway' : 'terminal_confirmed_by_gateway');
+            $updateAttributes['metadata'] = $metadata;
+            $updateAttributes['failure_code'] = 'gateway_'.$gatewayStatus;
         }
 
         if (! empty($updateAttributes)) {
@@ -439,7 +526,10 @@ class PaymentReconciliationService
     private function validateGatewayPayment(PaymentAttempt $attempt, array $gatewayPayment): void
     {
         $expectedAmount = $this->amountMinor((string) $attempt->getRawOriginal('amount'));
-        if (($gatewayPayment['id'] ?? null) !== $attempt->gateway_payment_id
+        $paymentIdMatches = empty($attempt->gateway_payment_id)
+            || ($gatewayPayment['id'] ?? null) === $attempt->gateway_payment_id;
+
+        if (! $paymentIdMatches
             || ($gatewayPayment['merchant_order_id'] ?? null) !== $attempt->merchant_reference
             || ($gatewayPayment['amount_minor'] ?? null) !== $expectedAmount
             || strtoupper((string) ($gatewayPayment['currency'] ?? '')) !== strtoupper((string) $attempt->currency)) {

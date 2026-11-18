@@ -655,9 +655,13 @@ class CheckoutService
         $expiresAt = $gatewayPayment['expires_at'] ?? null;
 
         $gatewayMetadata = is_array($gatewayPayment['metadata'] ?? null) ? $gatewayPayment['metadata'] : [];
-        $instruction = is_array($gatewayMetadata['udev_sandbox_payment_instruction'] ?? null)
-            ? $gatewayMetadata['udev_sandbox_payment_instruction']
-            : null;
+        $instruction = is_array($gatewayPayment['payment_instruction'] ?? null)
+            ? $gatewayPayment['payment_instruction']
+            : (is_array($gatewayMetadata['payment_instruction'] ?? null)
+                ? $gatewayMetadata['payment_instruction']
+                : (is_array($gatewayMetadata['udev_sandbox_payment_instruction'] ?? null)
+                    ? $gatewayMetadata['udev_sandbox_payment_instruction']
+                    : null));
         $paymentCode = is_string($instruction['payment_code'] ?? null) && $instruction['payment_code'] !== ''
             ? $instruction['payment_code']
             : (is_string($gatewayMetadata['qr_content'] ?? null) ? $gatewayMetadata['qr_content'] : null);

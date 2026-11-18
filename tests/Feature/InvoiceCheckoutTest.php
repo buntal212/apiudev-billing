@@ -533,12 +533,73 @@ class InvoiceCheckoutTest extends TestCase
     public function test_checkout_when_inquiry_reports_status_01_marks_uncertain_and_blocks_new_order(): void
     {
         [$invoice] = $this->invoiceWithGateway();
-        Http::fake([
-            'https://gateway.test/api/v1/payments*' => Http::response([
-                'message' => 'DANA melaporkan transaksi sudah terdaftar dengan status 01; pembuatan order baru diblokir.',
-                'error_code' => 'transaction_already_registered',
-            ], 409),
-        ]);
+        $gatewayState = 'initial_create_blocked';
+        $gatewayPublicId = 'pay-dana-recovery-01';
+        $newQrContent = '00020101021226540014ID.DANA.WWW01189360091800000000005204581253033605802ID5914UDEV CENTRAL6007JAKARTA61051292062070703A016304ABCD';
+
+        Http::fake(function (HttpRequest $request) use (&$gatewayState, $gatewayPublicId, $newQrContent, $invoice) {
+            if ($gatewayState === 'initial_create_blocked') {
+                return Http::response([
+                    'message' => 'DANA melaporkan transaksi sudah terdaftar dengan status 01; pembuatan order baru diblokir.',
+                    'error_code' => 'transaction_already_registered',
+                ], 409);
+            }
+
+            if (str_contains($request->url(), "/api/v1/payments/{$gatewayPublicId}/inquiry")) {
+                return Http::response([
+                    'data' => [
+                        'id' => $gatewayPublicId,
+                        'merchant_order_id' => $invoice->invoice_number.'-A1',
+                        'amount_minor' => 10000,
+                        'currency' => 'IDR',
+                        'status' => 'expired',
+                    ],
+                    'dana_status' => [
+                        'response_code' => '2005500',
+                        'latest_transaction_status' => '05',
+                    ],
+                ]);
+            }
+
+            if ($request->method() === 'GET' && str_contains($request->url(), '/api/v1/payments')) {
+                return Http::response([
+                    'data' => [
+                        [
+                            'id' => $gatewayPublicId,
+                            'merchant_order_id' => $invoice->invoice_number.'-A1',
+                            'amount_minor' => 10000,
+                            'currency' => 'IDR',
+                            'status' => 'pending',
+                        ],
+                    ],
+                ]);
+            }
+
+            if ($request->method() === 'POST' && str_contains($request->url(), '/api/v1/payments')) {
+                return Http::response([
+                    'data' => [
+                        'id' => 'pay-dana-attempt-2',
+                        'merchant_order_id' => $invoice->invoice_number.'-A2',
+                        'amount_minor' => 10000,
+                        'currency' => 'IDR',
+                        'status' => 'pending',
+                        'checkout_url' => 'https://checkout.dana.id/pay/002',
+                        'provider_order_id' => 'DANA-ORDER-002',
+                        'expires_at' => now()->addMinutes(30)->toISOString(),
+                        'payment_instruction' => [
+                            'method' => 'qris',
+                            'label' => 'QRIS',
+                            'type' => 'qris_mpm',
+                            'qr_content' => $newQrContent,
+                            'payment_code' => $newQrContent,
+                            'message' => 'Pindai QRIS menggunakan aplikasi DANA atau aplikasi pembayaran pendukung QRIS.',
+                        ],
+                    ],
+                ], 201);
+            }
+
+            return Http::response(['message' => 'not found'], 404);
+        });
 
         $response = $this->actingAdmin()
             ->postJson("/api/v1/admin/invoices/{$invoice->id}/checkout", [], ['Idempotency-Key' => 'uncertain-001']);
@@ -564,6 +625,25 @@ class InvoiceCheckoutTest extends TestCase
         $subsequentResponse->assertStatus(409);
         $this->assertStringContainsString('berstatus tidak pasti', (string) $subsequentResponse->json('message'));
         $this->assertDatabaseCount('payment_attempts', 1);
+
+        // When DANA later confirms status 05 (expired), auto-recovery reconciles attempt #1 as expired
+        $gatewayState = 'reconcile_and_checkout';
+        $reconcileResult = app(\App\Services\PaymentReconciliationService::class)->reconcile($attempt);
+        $this->assertSame(\App\Models\PaymentReconciliationRun::StatusTerminal, $reconcileResult->status);
+        $this->assertSame(PaymentAttempt::StatusExpired, $attempt->fresh()->status);
+        $this->assertSame('expired_confirmed_by_gateway', $attempt->fresh()->metadata['uncertain_resolution'] ?? null);
+
+        // Now checkout can proceed cleanly, creating Attempt #2 with new reference and idempotency key
+        $newCheckoutResponse = $this->actingAdmin()
+            ->postJson("/api/v1/admin/invoices/{$invoice->id}/checkout", [], ['Idempotency-Key' => 'clean-checkout-002']);
+        $newCheckoutResponse->assertStatus(200);
+        $this->assertDatabaseCount('payment_attempts', 2);
+
+        $attempt2 = PaymentAttempt::query()->where('attempt_number', 2)->firstOrFail();
+        $this->assertSame($invoice->invoice_number.'-A2', $attempt2->merchant_reference);
+        $this->assertSame(PaymentAttempt::StatusPending, $attempt2->status);
+        $this->assertSame('qris', $attempt2->metadata['payment_instruction']['method'] ?? null);
+        $this->assertSame($newQrContent, $attempt2->metadata['payment_instruction']['qr_content'] ?? null);
     }
 
     private function actingAdmin(): self

@@ -437,6 +437,214 @@ class PaymentReconciliationServiceTest extends TestCase
         });
     }
 
+    public function test_uncertain_attempt_with_null_gateway_payment_id_finds_by_merchant_order_id_and_inquiry_resolves_expired_05(): void
+    {
+        $attempt = $this->attempt([
+            'gateway_payment_id' => null,
+            'merchant_reference' => 'INV-20261118-DNCYOMKO-A85',
+            'status' => PaymentAttempt::StatusInitiated,
+            'failure_code' => 'gateway_uncertain_status',
+            'metadata' => [
+                'uncertain' => true,
+                'is_uncertain' => true,
+                'gateway_status' => '01',
+            ],
+        ]);
+
+        $gatewayPublicId = 'pay-prod-85';
+        Http::fake([
+            'https://gateway.test/api/v1/payments?merchant_order_id=INV-20261118-DNCYOMKO-A85*' => Http::response([
+                'data' => [
+                    [
+                        'id' => $gatewayPublicId,
+                        'merchant_order_id' => 'INV-20261118-DNCYOMKO-A85',
+                        'amount_minor' => 10000,
+                        'currency' => 'IDR',
+                        'status' => 'pending',
+                    ],
+                ],
+            ]),
+            "https://gateway.test/api/v1/payments/{$gatewayPublicId}/inquiry" => Http::response([
+                'data' => [
+                    'id' => $gatewayPublicId,
+                    'merchant_order_id' => 'INV-20261118-DNCYOMKO-A85',
+                    'amount_minor' => 10000,
+                    'currency' => 'IDR',
+                    'status' => 'expired',
+                ],
+                'dana_status' => [
+                    'response_code' => '2005500',
+                    'latest_transaction_status' => '05',
+                ],
+            ]),
+        ]);
+
+        $result = app(PaymentReconciliationService::class)->reconcile($attempt);
+
+        $this->assertSame(PaymentReconciliationRun::StatusTerminal, $result->status);
+        $fresh = $attempt->fresh();
+        $this->assertSame(PaymentAttempt::StatusExpired, $fresh->status);
+        $this->assertSame('gateway_expired', $fresh->failure_code);
+        $this->assertSame($gatewayPublicId, $fresh->gateway_payment_id);
+        $this->assertFalse($fresh->metadata['uncertain'] ?? false);
+        $this->assertFalse($fresh->metadata['is_uncertain'] ?? false);
+        $this->assertSame('expired_confirmed_by_gateway', $fresh->metadata['uncertain_resolution'] ?? null);
+    }
+
+    public function test_uncertain_attempt_when_dana_reports_01_maintains_uncertain_status(): void
+    {
+        $attempt = $this->attempt([
+            'gateway_payment_id' => null,
+            'merchant_reference' => 'INV-20261118-DNCYOMKO-A85',
+            'status' => PaymentAttempt::StatusInitiated,
+            'failure_code' => 'gateway_uncertain_status',
+            'metadata' => [
+                'uncertain' => true,
+                'is_uncertain' => true,
+                'gateway_status' => '01',
+            ],
+        ]);
+
+        $gatewayPublicId = 'pay-prod-85';
+        Http::fake([
+            'https://gateway.test/api/v1/payments?merchant_order_id=INV-20261118-DNCYOMKO-A85*' => Http::response([
+                'data' => [
+                    [
+                        'id' => $gatewayPublicId,
+                        'merchant_order_id' => 'INV-20261118-DNCYOMKO-A85',
+                        'amount_minor' => 10000,
+                        'currency' => 'IDR',
+                        'status' => 'pending',
+                    ],
+                ],
+            ]),
+            "https://gateway.test/api/v1/payments/{$gatewayPublicId}/inquiry" => Http::response([
+                'data' => [
+                    'id' => $gatewayPublicId,
+                    'merchant_order_id' => 'INV-20261118-DNCYOMKO-A85',
+                    'amount_minor' => 10000,
+                    'currency' => 'IDR',
+                    'status' => 'pending',
+                ],
+                'dana_status' => [
+                    'response_code' => '2005500',
+                    'latest_transaction_status' => '01',
+                ],
+            ]),
+        ]);
+
+        $result = app(PaymentReconciliationService::class)->reconcile($attempt);
+
+        $this->assertSame(PaymentReconciliationRun::StatusPending, $result->status);
+        $fresh = $attempt->fresh();
+        $this->assertSame(PaymentAttempt::StatusPending, $fresh->status);
+        $this->assertSame('gateway_uncertain_status', $fresh->failure_code);
+        $this->assertTrue($fresh->metadata['uncertain'] ?? false);
+        $this->assertSame('01', $fresh->metadata['gateway_status'] ?? null);
+        $this->assertSame($gatewayPublicId, $fresh->gateway_payment_id);
+    }
+
+    public function test_uncertain_attempt_when_dana_reports_00_success_settles_invoice_idempotently(): void
+    {
+        [$attempt, $subscription] = $this->attemptWithSubscription();
+        $attempt->update([
+            'gateway_payment_id' => null,
+            'merchant_reference' => 'INV-20261118-DNCYOMKO-A85',
+            'status' => PaymentAttempt::StatusInitiated,
+            'failure_code' => 'gateway_uncertain_status',
+            'metadata' => [
+                'uncertain' => true,
+                'is_uncertain' => true,
+                'gateway_status' => '01',
+            ],
+        ]);
+
+        $gatewayPublicId = 'pay-prod-85';
+        $paidAt = now()->toIso8601String();
+        Http::fake([
+            'https://gateway.test/api/v1/payments?merchant_order_id=INV-20261118-DNCYOMKO-A85*' => Http::response([
+                'data' => [
+                    [
+                        'id' => $gatewayPublicId,
+                        'merchant_order_id' => 'INV-20261118-DNCYOMKO-A85',
+                        'amount_minor' => 10000,
+                        'currency' => 'IDR',
+                        'status' => 'pending',
+                    ],
+                ],
+            ]),
+            "https://gateway.test/api/v1/payments/{$gatewayPublicId}/inquiry" => Http::response([
+                'data' => [
+                    'id' => $gatewayPublicId,
+                    'merchant_order_id' => 'INV-20261118-DNCYOMKO-A85',
+                    'amount_minor' => 10000,
+                    'currency' => 'IDR',
+                    'status' => 'paid',
+                    'paid_at' => $paidAt,
+                ],
+                'dana_status' => [
+                    'response_code' => '2005500',
+                    'latest_transaction_status' => '00',
+                ],
+            ]),
+        ]);
+
+        $result = app(PaymentReconciliationService::class)->reconcile($attempt);
+
+        $this->assertSame(PaymentReconciliationRun::StatusPaid, $result->status);
+        $fresh = $attempt->fresh();
+        $this->assertSame(PaymentAttempt::StatusSucceeded, $fresh->status);
+        $this->assertSame(Invoice::StatusPaid, $fresh->invoice->status);
+        $this->assertFalse($fresh->metadata['uncertain'] ?? false);
+        $this->assertSame('paid_confirmed_by_gateway', $fresh->metadata['uncertain_resolution'] ?? null);
+        $this->assertDatabaseCount('payment_allocations', 1);
+
+        // Idempotent: reconciling again does not create duplicate allocation
+        $secondResult = app(PaymentReconciliationService::class)->reconcile($fresh);
+        $this->assertSame('skipped', $secondResult->status);
+        $this->assertDatabaseCount('payment_allocations', 1);
+    }
+
+    public function test_uncertain_attempt_when_inquiry_times_out_marks_retryable(): void
+    {
+        $attempt = $this->attempt([
+            'gateway_payment_id' => null,
+            'merchant_reference' => 'INV-20261118-DNCYOMKO-A85',
+            'status' => PaymentAttempt::StatusInitiated,
+            'failure_code' => 'gateway_uncertain_status',
+            'metadata' => [
+                'uncertain' => true,
+                'is_uncertain' => true,
+            ],
+        ]);
+
+        $gatewayPublicId = 'pay-prod-85';
+        Http::fake([
+            'https://gateway.test/api/v1/payments?merchant_order_id=INV-20261118-DNCYOMKO-A85*' => Http::response([
+                'data' => [
+                    [
+                        'id' => $gatewayPublicId,
+                        'merchant_order_id' => 'INV-20261118-DNCYOMKO-A85',
+                        'amount_minor' => 10000,
+                        'currency' => 'IDR',
+                        'status' => 'pending',
+                    ],
+                ],
+            ]),
+            "https://gateway.test/api/v1/payments/{$gatewayPublicId}/inquiry" => Http::response([
+                'message' => 'Gateway timeout',
+            ], 503),
+        ]);
+
+        $result = app(PaymentReconciliationService::class)->reconcile($attempt);
+
+        $this->assertSame(PaymentReconciliationRun::StatusRetryable, $result->status);
+        $fresh = $attempt->fresh();
+        $this->assertSame(PaymentAttempt::StatusInitiated, $fresh->status);
+        $this->assertSame('gateway_uncertain_status', $fresh->failure_code);
+        $this->assertTrue($fresh->metadata['uncertain'] ?? false);
+    }
+
     private function attempt(array $overrides = []): PaymentAttempt
     {
         $attempt = PaymentAttempt::factory()->create(array_merge([
