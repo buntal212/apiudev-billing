@@ -46,6 +46,8 @@ return [
         'merchant_api_keys' => json_decode((string) env('DANA_GATEWAY_MERCHANT_API_KEYS', '{}'), true) ?: [],
         'merchants' => json_decode((string) env('DANA_GATEWAY_MERCHANTS', '{}'), true) ?: [],
         'webhook_secret' => env('DANA_GATEWAY_WEBHOOK_SECRET', env('DANA_GATEWAY_SERVICE_TOKEN', env('DANA_MERCHANT_PROVISIONING_SERVICE_TOKEN'))),
+        'contract_approved_third_party_apps' => json_decode((string) env('DANA_GATEWAY_CONTRACT_APPROVED_THIRD_PARTY_APPS', '[]'), true)
+            ?: array_values(array_filter(array_map('trim', explode(',', (string) env('DANA_GATEWAY_CONTRACT_APPROVED_THIRD_PARTY_APPS', ''))))),
     ],
 
     // Deliberately unset by default. Operators must configure an existing,

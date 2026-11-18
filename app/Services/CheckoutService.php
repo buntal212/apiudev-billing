@@ -346,7 +346,9 @@ class CheckoutService
                 $app = $lockedInvoice->plan?->application ?? $lockedInvoice->customer?->application;
                 $appCode = strtolower((string) ($app?->code ?? ''));
                 $appName = strtolower((string) ($app?->name ?? ''));
-                $isLarissamaCentral = in_array($appCode, ['larissama', 'laris'], true) || ($appName === 'larissama');
+                $isLarissamaCentral = in_array($appCode, ['larissama', 'laris'], true)
+                    || ($appName === 'larissama')
+                    || (in_array($appCode, ['app0001', 'app-0001'], true) && ! $hasCustomerTenantMapping);
 
                 $isCustomerAppInvoice = $isLarissamaCentral ? false : $hasCustomerTenantMapping;
 
@@ -407,11 +409,24 @@ class CheckoutService
                     // Penggunaan merchant pusat (MRC-0002 / udev-central) untuk penagihan aplikasi pihak ketiga
                     // (seperti Larissama) di Production WAJIB memiliki persetujuan tertulis resmi dari DANA.
                     if ($chosenEnvironment === 'production' && ($isLarissamaCentral || ($app !== null && ! in_array($appCode, ['udev', 'udev-billing', 'platform'], true)))) {
-                        $approvedThirdPartyApps = (array) config('services.dana_gateway.contract_approved_third_party_apps', []);
-                        $isApproved = in_array($appCode, array_map('strtolower', $approvedThirdPartyApps), true);
+                        $approvedConfig = config('services.dana_gateway.contract_approved_third_party_apps', []);
+                        if (is_string($approvedConfig)) {
+                            $approvedConfig = array_filter(array_map('trim', explode(',', $approvedConfig)));
+                        }
+                        $approvedNormalized = array_map('strtolower', (array) $approvedConfig);
+
+                        $isApproved = in_array($appCode, $approvedNormalized, true)
+                            || in_array($appName, $approvedNormalized, true)
+                            || in_array((string) $app?->id, $approvedNormalized, true)
+                            || ($isLarissamaCentral && (
+                                in_array('larissama', $approvedNormalized, true)
+                                || in_array('laris', $approvedNormalized, true)
+                                || in_array('app0001', $approvedNormalized, true)
+                                || in_array('app-0001', $approvedNormalized, true)
+                            ));
 
                         if (! $isApproved) {
-                            $appLabel = $appCode ?: ($appName ?: "App #{$app->id}");
+                            $appLabel = $app?->name ? "{$app->name} ({$appCode})" : ($appCode ?: ($appName ?: "App #{$app?->id}"));
                             throw ValidationException::withMessages([
                                 'invoice' => [
                                     "Penggunaan merchant pusat '{$recipientMerchantCode}' untuk penagihan aplikasi pihak ketiga ('{$appLabel}') di Production belum memiliki persetujuan kontraktual tertulis resmi dari DANA. Transaksi diblokir demi kepatuhan kontrak.",
