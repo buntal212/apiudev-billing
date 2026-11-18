@@ -231,6 +231,55 @@ class DanaGatewayMerchantCatalog
     }
 
     /**
+     * Check whether a payment method is officially supported and active on the gateway for a merchant.
+     */
+    public function isMethodActiveForMerchant(string $merchantCode, string $paymentMethod, string $environment): bool
+    {
+        // 1. Whitelist of officially contracted methods
+        $supportedContractMethods = [
+            'qris',
+            'dana_wallet',
+            'va_bri',
+            'va_mandiri',
+            'va_bni',
+            'va_cimb',
+            'va_pani',
+        ];
+
+        // Production strictly limits to official contract methods (fail-closed for BTPN or unconfirmed methods)
+        if ($environment === 'production' && ! in_array($paymentMethod, $supportedContractMethods, true)) {
+            return false;
+        }
+
+        // Sandbox allows contract methods plus sandbox tester methods
+        $sandboxSupportedMethods = array_merge($supportedContractMethods, ['va_btpn']);
+        if ($environment !== 'production' && ! in_array($paymentMethod, $sandboxSupportedMethods, true)) {
+            return false;
+        }
+
+        // 2. Merchant readiness check on environment
+        $readiness = $this->readiness($merchantCode, $environment);
+        if (! $readiness['ready']) {
+            return false;
+        }
+
+        // 3. Check merchant specific configuration for allowed / disabled methods
+        $config = $this->merchantConfiguration($merchantCode, $environment) ?? [];
+
+        $disabledMethods = (array) ($config['disabled_payment_methods'] ?? $config['disabled_methods'] ?? []);
+        if (in_array($paymentMethod, $disabledMethods, true)) {
+            return false;
+        }
+
+        $allowedMethods = $config['allowed_payment_methods'] ?? $config['payment_methods'] ?? null;
+        if (is_array($allowedMethods) && ! in_array($paymentMethod, $allowedMethods, true)) {
+            return false;
+        }
+
+        return true;
+    }
+
+    /**
      * @return array<string, mixed>|null
      */
     private function fetchGatewayReadiness(string $merchantCode, string $environment): ?array

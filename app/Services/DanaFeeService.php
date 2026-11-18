@@ -12,10 +12,24 @@ use Illuminate\Validation\ValidationException;
 class DanaFeeService
 {
     /**
-     * Official standard DANA and UDEV fee configurations.
-     * QRIS: MDR 0.70% (Standard Bank Indonesia / DANA).
-     * DANA Wallet: MDR 1.50% (Official DANA PG rate).
-     * Virtual Accounts (BRI, CIMB, BTPN, PANI): Rp 4.000 per transaction.
+     * Official constants for UDEV Billing QRIS tiered MDR (Bank Indonesia / DANA).
+     * Category UMI (Usaha Mikro):
+     * - Nominal <= Rp 500.000: MDR 0.00%
+     * - Nominal > Rp 500.000: MDR 0.30% dari seluruh nominal transaksi
+     */
+    public const float QrisUmiThreshold = 500000.0;
+
+    public const float QrisUmiMdrRate = 0.30;
+
+    public const string DefaultMerchantCategory = 'UMI';
+
+    public const string DefaultShopId = 'UDEV001';
+
+    /**
+     * Official standard DANA and UDEV fee configurations based on the Udumbara Contract.
+     * QRIS: Tiered UMI (<=500k 0%, >500k 0.30%) / Standard 0.70%.
+     * DANA Wallet: MDR 1.30% (Official Udumbara Contract rate).
+     * Virtual Accounts (BRI, Mandiri, BNI, CIMB, Panin): Rp 1.500 per transaction (Contract rate).
      * UDEV platform fee: default Rp 0.00.
      *
      * @var array<string, array{dana: array{fee_value: float, fee_unit: string, notes: string}, udev: array{fee_value: float, fee_unit: string, notes: string}}>
@@ -35,9 +49,9 @@ class DanaFeeService
         ],
         'dana_wallet' => [
             'dana' => [
-                'fee_value' => 1.50,
+                'fee_value' => 1.30,
                 'fee_unit' => DanaPaymentFeeSetting::FeeUnitPercent,
-                'notes' => 'MDR DANA Wallet PG',
+                'notes' => 'MDR DANA Wallet PG (Kontrak Udumbara 1,3%)',
             ],
             'udev' => [
                 'fee_value' => 0.00,
@@ -47,9 +61,33 @@ class DanaFeeService
         ],
         'va_bri' => [
             'dana' => [
-                'fee_value' => 4000.00,
+                'fee_value' => 1500.00,
                 'fee_unit' => DanaPaymentFeeSetting::FeeUnitRupiah,
-                'notes' => 'Biaya Transaksi Virtual Account BRI',
+                'notes' => 'Biaya Transaksi Virtual Account BRI (Kontrak Udumbara Rp1.500)',
+            ],
+            'udev' => [
+                'fee_value' => 0.00,
+                'fee_unit' => DanaPaymentFeeSetting::FeeUnitRupiah,
+                'notes' => 'Biaya Layanan UDEV Platform',
+            ],
+        ],
+        'va_mandiri' => [
+            'dana' => [
+                'fee_value' => 1500.00,
+                'fee_unit' => DanaPaymentFeeSetting::FeeUnitRupiah,
+                'notes' => 'Biaya Transaksi Virtual Account Mandiri (Kontrak Udumbara Rp1.500)',
+            ],
+            'udev' => [
+                'fee_value' => 0.00,
+                'fee_unit' => DanaPaymentFeeSetting::FeeUnitRupiah,
+                'notes' => 'Biaya Layanan UDEV Platform',
+            ],
+        ],
+        'va_bni' => [
+            'dana' => [
+                'fee_value' => 1500.00,
+                'fee_unit' => DanaPaymentFeeSetting::FeeUnitRupiah,
+                'notes' => 'Biaya Transaksi Virtual Account BNI (Kontrak Udumbara Rp1.500)',
             ],
             'udev' => [
                 'fee_value' => 0.00,
@@ -59,21 +97,9 @@ class DanaFeeService
         ],
         'va_cimb' => [
             'dana' => [
-                'fee_value' => 4000.00,
+                'fee_value' => 1500.00,
                 'fee_unit' => DanaPaymentFeeSetting::FeeUnitRupiah,
-                'notes' => 'Biaya Transaksi Virtual Account CIMB',
-            ],
-            'udev' => [
-                'fee_value' => 0.00,
-                'fee_unit' => DanaPaymentFeeSetting::FeeUnitRupiah,
-                'notes' => 'Biaya Layanan UDEV Platform',
-            ],
-        ],
-        'va_btpn' => [
-            'dana' => [
-                'fee_value' => 4000.00,
-                'fee_unit' => DanaPaymentFeeSetting::FeeUnitRupiah,
-                'notes' => 'Biaya Transaksi Virtual Account BTPN',
+                'notes' => 'Biaya Transaksi Virtual Account CIMB (Kontrak Udumbara Rp1.500)',
             ],
             'udev' => [
                 'fee_value' => 0.00,
@@ -83,9 +109,9 @@ class DanaFeeService
         ],
         'va_pani' => [
             'dana' => [
-                'fee_value' => 4000.00,
+                'fee_value' => 1500.00,
                 'fee_unit' => DanaPaymentFeeSetting::FeeUnitRupiah,
-                'notes' => 'Biaya Transaksi Virtual Account PANI',
+                'notes' => 'Biaya Transaksi Virtual Account Panin (Kontrak Udumbara Rp1.500)',
             ],
             'udev' => [
                 'fee_value' => 0.00,
@@ -114,28 +140,48 @@ class DanaFeeService
         'dana_wallet' => [
             'name' => 'DANA Wallet',
             'merchant_type' => DanaPaymentMethodFee::TypePercent,
-            'merchant_rate' => 1.5000,
+            'merchant_rate' => 1.3000,
             'merchant_fixed' => 0.00,
             'customer_type' => DanaPaymentMethodFee::TypeFixed,
             'customer_rate' => 0.0000,
             'customer_fixed' => 0.00,
-            'customer_policy' => 'zero_surcharge_policy',
+            'customer_policy' => 'absorbed_by_merchant',
         ],
         'va_bri' => [
             'name' => 'Virtual Account BRI',
             'merchant_type' => DanaPaymentMethodFee::TypeFixed,
             'merchant_rate' => 0.0000,
-            'merchant_fixed' => 4000.00,
+            'merchant_fixed' => 1500.00,
+            'customer_type' => DanaPaymentMethodFee::TypeFixed,
+            'customer_rate' => 0.0000,
+            'customer_fixed' => 0.00,
+            'customer_policy' => 'absorbed_by_merchant',
+        ],
+        'va_mandiri' => [
+            'name' => 'Virtual Account Mandiri',
+            'merchant_type' => DanaPaymentMethodFee::TypeFixed,
+            'merchant_rate' => 0.0000,
+            'merchant_fixed' => 1500.00,
+            'customer_type' => DanaPaymentMethodFee::TypeFixed,
+            'customer_rate' => 0.0000,
+            'customer_fixed' => 0.00,
+            'customer_policy' => 'absorbed_by_merchant',
+        ],
+        'va_bni' => [
+            'name' => 'Virtual Account BNI',
+            'merchant_type' => DanaPaymentMethodFee::TypeFixed,
+            'merchant_rate' => 0.0000,
+            'merchant_fixed' => 1500.00,
             'customer_type' => DanaPaymentMethodFee::TypeFixed,
             'customer_rate' => 0.0000,
             'customer_fixed' => 0.00,
             'customer_policy' => 'absorbed_by_merchant',
         ],
         'va_pani' => [
-            'name' => 'Virtual Account PANI',
+            'name' => 'Virtual Account Panin',
             'merchant_type' => DanaPaymentMethodFee::TypeFixed,
             'merchant_rate' => 0.0000,
-            'merchant_fixed' => 4000.00,
+            'merchant_fixed' => 1500.00,
             'customer_type' => DanaPaymentMethodFee::TypeFixed,
             'customer_rate' => 0.0000,
             'customer_fixed' => 0.00,
@@ -145,17 +191,7 @@ class DanaFeeService
             'name' => 'Virtual Account CIMB',
             'merchant_type' => DanaPaymentMethodFee::TypeFixed,
             'merchant_rate' => 0.0000,
-            'merchant_fixed' => 4000.00,
-            'customer_type' => DanaPaymentMethodFee::TypeFixed,
-            'customer_rate' => 0.0000,
-            'customer_fixed' => 0.00,
-            'customer_policy' => 'absorbed_by_merchant',
-        ],
-        'va_btpn' => [
-            'name' => 'Virtual Account BTPN',
-            'merchant_type' => DanaPaymentMethodFee::TypeFixed,
-            'merchant_rate' => 0.0000,
-            'merchant_fixed' => 4000.00,
+            'merchant_fixed' => 1500.00,
             'customer_type' => DanaPaymentMethodFee::TypeFixed,
             'customer_rate' => 0.0000,
             'customer_fixed' => 0.00,
@@ -202,6 +238,65 @@ class DanaFeeService
     }
 
     /**
+     * Calculate automatic tiered QRIS MDR based on Bank Indonesia / DANA policy.
+     * Category UMI (Usaha Mikro):
+     * - Nominal <= Rp 500.000: MDR 0.00%
+     * - Nominal > Rp 500.000: MDR 0.30% dari seluruh nominal transaksi
+     *
+     * @return array{
+     *     rate: float,
+     *     fee_amount: float,
+     *     tier: string,
+     *     tier_label: string,
+     *     category: string,
+     *     threshold: float
+     * }
+     */
+    public function calculateAutomaticQrisMdr(float|int|string $subtotal, string $category = self::DefaultMerchantCategory): array
+    {
+        $amount = (float) $subtotal;
+        $cat = strtoupper(trim($category));
+
+        if ($cat === self::DefaultMerchantCategory) {
+            if ($amount <= self::QrisUmiThreshold) {
+                return [
+                    'rate' => 0.0,
+                    'fee_amount' => 0.0,
+                    'tier' => 'tier_le_500k',
+                    'tier_label' => '≤ Rp 500.000 (MDR 0%)',
+                    'category' => $cat,
+                    'threshold' => self::QrisUmiThreshold,
+                ];
+            }
+
+            $rate = self::QrisUmiMdrRate;
+            $fee = (float) round($amount * ($rate / 100));
+
+            return [
+                'rate' => $rate,
+                'fee_amount' => $fee,
+                'tier' => 'tier_gt_500k',
+                'tier_label' => '> Rp 500.000 (MDR 0,3%)',
+                'category' => $cat,
+                'threshold' => self::QrisUmiThreshold,
+            ];
+        }
+
+        // For non-UMI categories (e.g. UKE/UME/UBE standard 0.70%)
+        $rate = 0.70;
+        $fee = (float) round($amount * ($rate / 100));
+
+        return [
+            'rate' => $rate,
+            'fee_amount' => $fee,
+            'tier' => 'standard',
+            'tier_label' => 'Standard (MDR 0,7%)',
+            'category' => $cat,
+            'threshold' => 0.0,
+        ];
+    }
+
+    /**
      * Calculate all fee components for a given subtotal, merchant, method, and application.
      *
      * @return array<string, mixed>
@@ -214,18 +309,32 @@ class DanaFeeService
         float|int|string $subtotal,
         ?string $environment = null,
         ?int $applicationId = null,
+        ?string $merchantCategory = null,
     ): array {
         $subtotalFloat = (float) $subtotal;
         $env = $environment ?: (string) config('services.dana_gateway.environment', 'sandbox');
 
-        $primaryMerchantCode = DanaEnvironmentSetting::getPrimaryMerchantCode($env);
+        $trimmedMerchant = trim($merchantCode);
+        if ($trimmedMerchant === '') {
+            throw ValidationException::withMessages([
+                'merchant_code' => [
+                    "Merchant DANA tidak teridentifikasi (kode merchant kosong). Checkout dibatalkan (fail-closed).",
+                ],
+            ]);
+        }
+
+        $primaryMerchantCode = trim((string) DanaEnvironmentSetting::getPrimaryMerchantCode($env));
         $centralMerchantCodes = array_values(array_unique(array_filter([
-            $primaryMerchantCode,
             'udev-central',
+            'MRC-0002',
             'udev-demo',
-            config('services.dana_gateway.merchant_id'),
+            $primaryMerchantCode,
+            trim((string) config('services.dana_gateway.merchant_id')),
         ])));
-        $isMerchantMandiri = ! in_array($merchantCode, $centralMerchantCodes, true);
+        $isCentralMerchant = in_array($trimmedMerchant, $centralMerchantCodes, true);
+        $isMerchantMandiri = ! $isCentralMerchant;
+        $effectiveMerchantCategory = $merchantCategory ?: ($isCentralMerchant ? self::DefaultMerchantCategory : null);
+        $shopId = $isCentralMerchant ? self::DefaultShopId : null;
 
         // Check if modern fee settings table exists and has active rules
         $hasFeeSettingsTable = Schema::hasTable('dana_payment_fee_settings');
@@ -233,7 +342,7 @@ class DanaFeeService
         $udevSetting = null;
 
         if ($hasFeeSettingsTable) {
-            $resolveSetting = function (string $feeType) use ($env, $paymentMethod, $merchantCode, $applicationId, $isMerchantMandiri): ?DanaPaymentFeeSetting {
+            $resolveSetting = function (string $feeType) use ($env, $paymentMethod, $trimmedMerchant, $applicationId, $isMerchantMandiri): ?DanaPaymentFeeSetting {
                 $baseQuery = DanaPaymentFeeSetting::query()
                     ->where('environment', $env)
                     ->where('payment_method', $paymentMethod)
@@ -241,10 +350,10 @@ class DanaFeeService
                     ->where('is_active', true);
 
                 // 1. Most specific: application_id + gateway_merchant_code
-                if ($applicationId !== null && $merchantCode !== '') {
+                if ($applicationId !== null && $trimmedMerchant !== '') {
                     $setting = (clone $baseQuery)
                         ->where('application_id', $applicationId)
-                        ->where('gateway_merchant_code', $merchantCode)
+                        ->where('gateway_merchant_code', $trimmedMerchant)
                         ->first();
                     if ($setting !== null) {
                         return $setting;
@@ -252,9 +361,9 @@ class DanaFeeService
                 }
 
                 // 2. Specific to gateway_merchant_code (where application_id IS NULL)
-                if ($merchantCode !== '') {
+                if ($trimmedMerchant !== '') {
                     $setting = (clone $baseQuery)
-                        ->where('gateway_merchant_code', $merchantCode)
+                        ->where('gateway_merchant_code', $trimmedMerchant)
                         ->whereNull('application_id')
                         ->first();
                     if ($setting !== null) {
@@ -289,6 +398,20 @@ class DanaFeeService
             $udevSetting = $resolveSetting(DanaPaymentFeeSetting::FeeTypeUdev);
         }
 
+        $isAutomaticQrisMdr = false;
+        $qrisMdr = null;
+
+        if ($paymentMethod === 'qris' && $isCentralMerchant) {
+            // Automatic QRIS MDR applies for central merchant with category UMI when:
+            // 1. No custom positive setting in DB ($danaSetting === null), OR
+            // 2. Setting has fee_value 0.0 (temporary UAT zero fee), OR
+            // 3. Category UMI is explicitly requested or active
+            if ($danaSetting === null || (float) $danaSetting->fee_value === 0.0 || $merchantCategory === self::DefaultMerchantCategory) {
+                $isAutomaticQrisMdr = true;
+                $qrisMdr = $this->calculateAutomaticQrisMdr($subtotalFloat, $effectiveMerchantCategory ?? self::DefaultMerchantCategory);
+            }
+        }
+
         // FAIL-CLOSED CHECK 1: Merchant mandiri without valid fee configuration
         if ($isMerchantMandiri && $danaSetting === null) {
             throw ValidationException::withMessages([
@@ -299,7 +422,8 @@ class DanaFeeService
         }
 
         // FAIL-CLOSED CHECK 2: Production environment without fee configuration
-        if ($env === 'production' && $danaSetting === null) {
+        // QRIS for UDEV Central with category UMI has valid automatic MDR (0% / 0.3%)
+        if ($env === 'production' && $danaSetting === null && ! $isAutomaticQrisMdr) {
             throw ValidationException::withMessages([
                 'payment_method' => [
                     "Tarif biaya DANA Production untuk metode '{$paymentMethod}' belum dikonfigurasi. Checkout dibatalkan (fail-closed).",
@@ -309,16 +433,43 @@ class DanaFeeService
 
         // If modern fee settings table exists, resolve fees (or zero fee if no active rule configured)
         if ($hasFeeSettingsTable) {
-            $danaFeeAmount = $danaSetting !== null ? $danaSetting->computeAmount($subtotalFloat) : 0.0;
-            $danaFeeValue = $danaSetting !== null ? (float) $danaSetting->fee_value : 0.0;
-            $danaFeeUnit = $danaSetting !== null ? $danaSetting->fee_unit : DanaPaymentFeeSetting::FeeUnitRupiah;
+            if ($isAutomaticQrisMdr) {
+                $danaFeeAmount = (float) $qrisMdr['fee_amount'];
+                $danaFeeValue = (float) $qrisMdr['rate'];
+                $danaFeeUnit = DanaPaymentFeeSetting::FeeUnitPercent;
 
-            $udevFeeAmount = $udevSetting !== null ? $udevSetting->computeAmount($subtotalFloat) : 0.0;
-            $udevFeeValue = $udevSetting !== null ? (float) $udevSetting->fee_value : 0.0;
-            $udevFeeUnit = $udevSetting !== null ? $udevSetting->fee_unit : DanaPaymentFeeSetting::FeeUnitRupiah;
+                $udevFeeAmount = $udevSetting !== null ? $udevSetting->computeAmount($subtotalFloat) : 0.0;
+                $udevFeeValue = $udevSetting !== null ? (float) $udevSetting->fee_value : 0.0;
+                $udevFeeUnit = $udevSetting !== null ? $udevSetting->fee_unit : DanaPaymentFeeSetting::FeeUnitRupiah;
 
-            $totalCustomerFee = (float) round($danaFeeAmount + $udevFeeAmount);
-            $totalPayable = (float) round($subtotalFloat + $totalCustomerFee);
+                // Kontrak DANA: Zero surcharge pelanggan (bebas biaya admin/MDR).
+                // Seluruh biaya gateway DANA ditanggung merchant.
+                // Biaya platform UDEV dicatat internal untuk pelaporan platform, tidak ditagihkan ke pelanggan DANA.
+                $totalCustomerFee = 0.0;
+                $totalPayable = $subtotalFloat;
+                $customerFeePolicy = 'absorbed_by_merchant';
+                $estimatedMerchantFee = $danaFeeAmount;
+                $estimatedNetSettlement = max(0.0, (float) round($subtotalFloat - $danaFeeAmount));
+                $isTemporaryZeroFee = $danaSetting !== null && (float) $danaSetting->fee_value === 0.0;
+            } else {
+                $danaFeeAmount = $danaSetting !== null ? $danaSetting->computeAmount($subtotalFloat) : 0.0;
+                $danaFeeValue = $danaSetting !== null ? (float) $danaSetting->fee_value : 0.0;
+                $danaFeeUnit = $danaSetting !== null ? $danaSetting->fee_unit : DanaPaymentFeeSetting::FeeUnitRupiah;
+
+                $udevFeeAmount = $udevSetting !== null ? $udevSetting->computeAmount($subtotalFloat) : 0.0;
+                $udevFeeValue = $udevSetting !== null ? (float) $udevSetting->fee_value : 0.0;
+                $udevFeeUnit = $udevSetting !== null ? $udevSetting->fee_unit : DanaPaymentFeeSetting::FeeUnitRupiah;
+
+                // Kontrak DANA: Zero surcharge pelanggan (bebas biaya admin/MDR).
+                // Seluruh biaya gateway DANA ditanggung merchant.
+                // Biaya platform UDEV dicatat internal untuk pelaporan platform, tidak ditagihkan ke pelanggan DANA.
+                $totalCustomerFee = 0.0;
+                $totalPayable = $subtotalFloat;
+                $customerFeePolicy = 'absorbed_by_merchant';
+                $estimatedMerchantFee = $danaFeeAmount;
+                $estimatedNetSettlement = max(0.0, (float) round($subtotalFloat - $danaFeeAmount));
+                $isTemporaryZeroFee = $danaSetting !== null && (float) $danaSetting->fee_value === 0.0;
+            }
 
             return [
                 'payment_method' => $paymentMethod,
@@ -348,16 +499,25 @@ class DanaFeeService
                 'fee_amount' => $totalCustomerFee,
                 'fee_rate' => $danaFeeUnit === DanaPaymentFeeSetting::FeeUnitPercent ? $danaFeeValue : 0.0,
                 'total_amount' => $totalPayable,
-                'customer_fee_policy' => 'customer_surcharge',
+                'customer_fee_policy' => $customerFeePolicy,
                 'merchant_fee_type' => $danaFeeUnit,
                 'merchant_fee_rate' => $danaFeeValue,
                 'merchant_fixed_amount' => $danaFeeUnit === DanaPaymentFeeSetting::FeeUnitRupiah ? $danaFeeValue : 0.0,
-                'estimated_merchant_fee' => $danaFeeAmount,
-                'estimated_net_settlement' => $subtotalFloat, // Hak pemilik aplikasi tetap utuh sebesar tagihan pokok
-                'is_temporary_zero_fee' => $danaSetting !== null && (float) $danaSetting->fee_value === 0.0,
+                'estimated_merchant_fee' => $estimatedMerchantFee,
+                'estimated_gateway_fee' => $danaFeeAmount,
+                'estimated_net_settlement' => $estimatedNetSettlement,
+                'actual_gateway_fee' => null,
+                'actual_settlement' => null,
+                'settlement_status' => 'estimated',
+                'is_temporary_zero_fee' => $isTemporaryZeroFee,
                 'rule_id' => $danaSetting?->id ?? $udevSetting?->id,
                 'dana_setting_id' => $danaSetting?->id,
                 'udev_setting_id' => $udevSetting?->id,
+                'merchant_category' => $effectiveMerchantCategory,
+                'shop_id' => $shopId,
+                'is_automatic_qris_mdr' => $isAutomaticQrisMdr,
+                'qris_mdr_tier' => $isAutomaticQrisMdr ? ($qrisMdr['tier'] ?? null) : null,
+                'qris_mdr_tier_label' => $isAutomaticQrisMdr ? ($qrisMdr['tier_label'] ?? null) : null,
             ];
         }
 
@@ -414,13 +574,13 @@ class DanaFeeService
         ];
 
         if ($rule !== null) {
-            $customerFee = $paymentMethod === 'qris' ? 0.0 : $rule->calculateCustomerFee($subtotalFloat);
+            $customerFee = 0.0;
             $merchantFee = $rule->calculateMerchantFee($subtotalFloat);
             $methodName = $rule->payment_method_name;
             $merchantFeeType = $rule->merchant_fee_type;
             $merchantFeeRate = (float) $rule->merchant_fee_rate;
             $merchantFixed = (float) $rule->merchant_fixed_amount;
-            $policy = $rule->notes ?: ($paymentMethod === 'qris' ? 'absorbed_by_merchant' : 'zero_surcharge_policy');
+            $policy = 'absorbed_by_merchant';
             $ruleId = $rule->id;
         } else {
             $configuredRates = config('services.dana_gateway.fees.'.$paymentMethod, []);
@@ -436,12 +596,12 @@ class DanaFeeService
             }
 
             $methodName = $configuredRates['name'] ?? $default['name'];
-            $policy = $default['customer_policy'];
+            $policy = 'absorbed_by_merchant';
             $ruleId = null;
         }
 
-        $totalPayable = (float) round($subtotalFloat + $customerFee);
-        $netSettlement = max(0.0, (float) round($totalPayable - $merchantFee));
+        $totalPayable = $subtotalFloat;
+        $netSettlement = max(0.0, (float) round($subtotalFloat - $merchantFee));
 
         return [
             'payment_method' => $paymentMethod,
@@ -468,7 +628,11 @@ class DanaFeeService
             'merchant_fee_rate' => $merchantFeeRate,
             'merchant_fixed_amount' => $merchantFixed,
             'estimated_merchant_fee' => $merchantFee,
+            'estimated_gateway_fee' => $merchantFee,
             'estimated_net_settlement' => $netSettlement,
+            'actual_gateway_fee' => null,
+            'actual_settlement' => null,
+            'settlement_status' => 'estimated',
             'rule_id' => $ruleId,
             'dana_setting_id' => null,
             'udev_setting_id' => null,
@@ -510,6 +674,10 @@ class DanaFeeService
             'environment' => $env,
             'merchant_code' => $merchant,
             'gateway_merchant_code' => $merchant,
+            'shop_id' => $calc['shop_id'] ?? null,
+            'merchant_category' => $calc['merchant_category'] ?? null,
+            'is_automatic_qris_mdr' => $calc['is_automatic_qris_mdr'] ?? false,
+            'qris_mdr_tier' => $calc['qris_mdr_tier'] ?? null,
             'application_id' => $appId,
             'dana_fee' => $calc['dana_fee_amount'] ?? 0.0,
             'dana_fee_amount' => $calc['dana_fee_amount'] ?? 0.0,
@@ -530,7 +698,11 @@ class DanaFeeService
             'merchant_fee_rate' => $calc['merchant_fee_rate'],
             'merchant_fixed_amount' => $calc['merchant_fixed_amount'],
             'estimated_merchant_fee' => $calc['estimated_merchant_fee'],
-            'estimated_net_settlement' => $calc['estimated_net_settlement'], // Hak pemilik aplikasi sebesar tagihan pokok
+            'estimated_gateway_fee' => $calc['estimated_gateway_fee'] ?? $calc['estimated_merchant_fee'],
+            'estimated_net_settlement' => $calc['estimated_net_settlement'], // Estimasi pelunasan bersih setelah dipotong biaya gateway DANA
+            'actual_gateway_fee' => $calc['actual_gateway_fee'] ?? null,
+            'actual_settlement' => $calc['actual_settlement'] ?? null,
+            'settlement_status' => $calc['settlement_status'] ?? 'estimated',
             'is_temporary_zero_fee' => (bool) ($calc['is_temporary_zero_fee'] ?? false),
             'currency' => (string) ($invoice->currency ?? 'IDR'),
             'calculated_at' => now()->toIso8601String(),
@@ -546,7 +718,9 @@ class DanaFeeService
             'qris' => 'QRIS DANA',
             'dana_wallet' => 'DANA Wallet',
             'va_bri' => 'Virtual Account BRI',
-            'va_pani' => 'Virtual Account PANI',
+            'va_mandiri' => 'Virtual Account Mandiri',
+            'va_bni' => 'Virtual Account BNI',
+            'va_pani' => 'Virtual Account Panin',
             'va_cimb' => 'Virtual Account CIMB',
             'va_btpn' => 'Virtual Account BTPN',
             default => strtoupper(str_replace('_', ' ', $paymentMethod)),

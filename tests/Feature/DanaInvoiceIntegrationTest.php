@@ -50,7 +50,7 @@ class DanaInvoiceIntegrationTest extends TestCase
         $this->assertSame(100_000.0, $qrisFee['total_amount']);
         $this->assertSame(0.0, $qrisFee['estimated_merchant_fee']);
         $this->assertSame(100_000.0, $qrisFee['estimated_net_settlement']);
-        $this->assertSame('customer_surcharge', $qrisFee['customer_fee_policy']);
+        $this->assertSame('absorbed_by_merchant', $qrisFee['customer_fee_policy']);
 
         // DANA Wallet tanpa tarif: customer fee Rp0, hak pemilik aplikasi tetap utuh Rp100.000
         $walletFee = $service->calculateFee('udev-central', 'dana_wallet', 100_000);
@@ -58,7 +58,7 @@ class DanaInvoiceIntegrationTest extends TestCase
         $this->assertSame(100_000.0, $walletFee['total_amount']);
         $this->assertSame(0.0, $walletFee['estimated_merchant_fee']);
         $this->assertSame(100_000.0, $walletFee['estimated_net_settlement']);
-        $this->assertSame('customer_surcharge', $walletFee['customer_fee_policy']);
+        $this->assertSame('absorbed_by_merchant', $walletFee['customer_fee_policy']);
     }
 
     public function test_admin_can_preview_fee_breakdown_via_api(): void

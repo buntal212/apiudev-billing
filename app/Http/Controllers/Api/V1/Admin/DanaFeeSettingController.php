@@ -358,18 +358,20 @@ class DanaFeeSettingController extends Controller
             'gateway_merchant_code' => ['nullable', 'string', 'max:60'],
             'environment' => ['nullable', 'string', 'in:sandbox,production'],
             'application_id' => ['nullable', 'integer', 'exists:applications,id'],
+            'merchant_category' => ['nullable', 'string', 'in:UMI,UKE,UME,UBE'],
         ]);
 
         $env = $validated['environment'] ?? 'sandbox';
         $method = $validated['payment_method'];
         $amount = (float) $validated['amount'];
         $appId = isset($validated['application_id']) ? (int) $validated['application_id'] : null;
+        $merchantCategory = $validated['merchant_category'] ?? null;
 
         $merchantCode = ! empty($validated['gateway_merchant_code'])
             ? trim($validated['gateway_merchant_code'])
             : DanaEnvironmentSetting::getPrimaryMerchantCode($env);
 
-        $result = $this->feeService->calculateFee($merchantCode, $method, $amount, $env, $appId);
+        $result = $this->feeService->calculateFee($merchantCode, $method, $amount, $env, $appId, $merchantCategory);
 
         return response()->json([
             'status' => 'success',

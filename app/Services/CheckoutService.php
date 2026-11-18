@@ -52,7 +52,7 @@ class CheckoutService
     public function startCheckout(
         Invoice $invoice,
         string $requestIdempotencyKey,
-        string $paymentMethod = 'dana_wallet',
+        string $paymentMethod = 'qris',
         ?string $provider = null,
         ?string $bank = null,
         ?string $environment = null,
@@ -124,7 +124,7 @@ class CheckoutService
     private function prepareCheckout(
         Invoice $invoice,
         string $requestIdempotencyKey,
-        string $paymentMethod = 'dana_wallet',
+        string $paymentMethod = 'qris',
         ?string $provider = null,
         ?string $bank = null,
         ?string $environment = null,
@@ -149,7 +149,7 @@ class CheckoutService
                 if ($existingAttemptByIdempotency !== null) {
                     if (! $this->attemptMatchesParameters($existingAttemptByIdempotency, $lockedInvoice, $paymentMethod, $resolvedProvider, $bank)) {
                         $existingMetadata = is_array($existingAttemptByIdempotency->metadata) ? $existingAttemptByIdempotency->metadata : [];
-                        $existingMethod = $existingMetadata['payment_method'] ?? 'dana_wallet';
+                        $existingMethod = $existingMetadata['payment_method'] ?? ($existingAttemptByIdempotency->provider === 'midtrans' ? 'qris' : 'dana_wallet');
                         $existingBank = $existingMetadata['bank'] ?? null;
                         $existingProvider = $existingAttemptByIdempotency->provider;
                         $existingDesc = $existingMethod.($existingBank ? " ({$existingBank})" : '')." via {$existingProvider}";
@@ -316,7 +316,7 @@ class CheckoutService
                 $appId = $lockedInvoice->plan?->application_id ?? $lockedInvoice->customer?->application_id;
                 $targetEnv = $environment ?: $this->danaEnvironmentService->getActiveEnvironment();
                 $primaryMerchantCode = $this->danaEnvironmentService->getPrimaryMerchantCode($targetEnv);
-                $centralMerchantCodes = array_values(array_unique([$primaryMerchantCode, 'udev-central', 'udev-demo']));
+                $centralMerchantCodes = array_values(array_unique(array_filter([$primaryMerchantCode, 'udev-central', 'udev-demo', 'MRC-0002'])));
 
                 $prodDanaMapping = $appId !== null
                     ? ApplicationPaymentGateway::query()
@@ -402,6 +402,34 @@ class CheckoutService
                     $recipientMerchantCode = $this->subscriptionMerchantResolver
                         ->resolveNewCheckoutMerchant($chosenEnvironment);
                     $isCentral = true;
+
+                    // Guard Kepatuhan Kontrak DANA:
+                    // Penggunaan merchant pusat (MRC-0002 / udev-central) untuk penagihan aplikasi pihak ketiga
+                    // (seperti Larissama) di Production WAJIB memiliki persetujuan tertulis resmi dari DANA.
+                    if ($chosenEnvironment === 'production' && ($isLarissamaCentral || ($app !== null && ! in_array($appCode, ['udev', 'udev-billing', 'platform'], true)))) {
+                        $approvedThirdPartyApps = (array) config('services.dana_gateway.contract_approved_third_party_apps', []);
+                        $isApproved = in_array($appCode, array_map('strtolower', $approvedThirdPartyApps), true);
+
+                        if (! $isApproved) {
+                            $appLabel = $appCode ?: ($appName ?: "App #{$app->id}");
+                            throw ValidationException::withMessages([
+                                'invoice' => [
+                                    "Penggunaan merchant pusat '{$recipientMerchantCode}' untuk penagihan aplikasi pihak ketiga ('{$appLabel}') di Production belum memiliki persetujuan kontraktual tertulis resmi dari DANA. Transaksi diblokir demi kepatuhan kontrak.",
+                                ],
+                            ]);
+                        }
+                    }
+                }
+
+                // Guard Kepatuhan Kontrak & Ketersediaan Metode DANA:
+                // Pilihan DANA Wallet/VA hanya dapat digunakan jika metode benar-benar didukung
+                // dan aktif pada gateway merchant serta environment terkait. Daftar tarif bukan bukti aktivasi gateway.
+                if (! $this->merchantCatalog->isMethodActiveForMerchant($recipientMerchantCode, $paymentMethod, $chosenEnvironment)) {
+                    throw ValidationException::withMessages([
+                        'payment_method' => [
+                            "Metode pembayaran '{$paymentMethod}' tidak didukung atau belum aktif pada gateway untuk merchant '{$recipientMerchantCode}' ({$chosenEnvironment}). Checkout dibatalkan (fail-closed).",
+                        ],
+                    ]);
                 }
 
                 $feeSnapshot = $this->danaFeeService->buildFeeSnapshot(
@@ -536,7 +564,7 @@ class CheckoutService
             // POST dengan reference dan Idempotency-Key outbox yang sama akan
             // melanjutkan payment gateway yang sama; tidak membuat payment baru.
             if ($gatewayPayment === null || ! $this->hasCompleteGatewayCheckout($gatewayPayment)) {
-                $paymentMethod = $attempt->metadata['payment_method'] ?? 'dana_wallet';
+                $paymentMethod = $attempt->metadata['payment_method'] ?? ($attempt->provider === 'midtrans' ? 'qris' : 'dana_wallet');
                 $gatewayPayment = $this->gatewayClient->createPayment(
                     merchant: $merchant,
                     idempotencyKey: $claimed->idempotency_key,
@@ -1441,7 +1469,7 @@ class CheckoutService
         }
 
         $metadata = is_array($attempt->metadata) ? $attempt->metadata : [];
-        $existingMethod = $metadata['payment_method'] ?? 'dana_wallet';
+        $existingMethod = $metadata['payment_method'] ?? ($attempt->provider === 'midtrans' ? 'qris' : 'dana_wallet');
         if ($existingMethod !== $paymentMethod) {
             return false;
         }

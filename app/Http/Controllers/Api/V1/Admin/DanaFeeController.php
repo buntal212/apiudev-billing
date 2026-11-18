@@ -20,18 +20,20 @@ class DanaFeeController extends Controller
     public function preview(Request $request): JsonResponse
     {
         $validated = $request->validate([
-            'payment_method' => ['required', 'string', 'in:qris,dana_wallet,va_bri,va_pani,va_cimb,va_btpn'],
+            'payment_method' => ['required', 'string', 'in:qris,dana_wallet,va_bri,va_mandiri,va_bni,va_pani,va_cimb'],
             'amount' => ['required', 'numeric', 'min:1'],
             'merchant_code' => ['nullable', 'string', 'max:60'],
             'environment' => ['nullable', 'string', 'in:sandbox,production'],
+            'merchant_category' => ['nullable', 'string', 'in:UMI,UKE,UME,UBE'],
         ]);
 
         $environment = $validated['environment'] ?? $request->query('environment');
         $merchantCode = $validated['merchant_code'] ?? DanaEnvironmentSetting::getPrimaryMerchantCode($environment ?? 'sandbox');
         $paymentMethod = $validated['payment_method'];
         $amount = (float) $validated['amount'];
+        $merchantCategory = $validated['merchant_category'] ?? null;
 
-        $feeData = $this->danaFeeService->calculateFee($merchantCode, $paymentMethod, $amount, $environment);
+        $feeData = $this->danaFeeService->calculateFee($merchantCode, $paymentMethod, $amount, $environment, null, $merchantCategory);
 
         return response()->json([
             'status' => 'success',
@@ -46,7 +48,7 @@ class DanaFeeController extends Controller
     {
         $environment = $request->query('environment');
         $merchantCode = $request->query('merchant_code') ?: DanaEnvironmentSetting::getPrimaryMerchantCode($environment ?? 'sandbox');
-        $methods = ['qris', 'dana_wallet', 'va_bri', 'va_pani', 'va_cimb', 'va_btpn'];
+        $methods = ['qris', 'dana_wallet', 'va_bri', 'va_mandiri', 'va_bni', 'va_pani', 'va_cimb'];
         $items = [];
 
         foreach ($methods as $method) {

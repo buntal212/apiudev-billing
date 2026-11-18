@@ -61,7 +61,7 @@ class InvoiceCheckoutResource extends JsonResource
             'status' => $this->status,
             'gateway_environment' => $env,
             'environment' => $env,
-            'payment_method' => $metadata['payment_method'] ?? 'dana_wallet',
+            'payment_method' => $metadata['payment_method'] ?? ($this->provider === 'midtrans' ? 'qris' : 'dana_wallet'),
             'amount' => $this->amount,
             'subtotal_amount' => (float) ($metadata['fee_breakdown']['subtotal_amount'] ?? $this->amount),
             'admin_fee' => (float) ($metadata['fee_breakdown']['fee_amount'] ?? 0.0),

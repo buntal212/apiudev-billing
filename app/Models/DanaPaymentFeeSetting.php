@@ -23,8 +23,9 @@ class DanaPaymentFeeSetting extends Model
         'qris',
         'dana_wallet',
         'va_bri',
+        'va_mandiri',
+        'va_bni',
         'va_cimb',
-        'va_btpn',
         'va_pani',
     ];
 

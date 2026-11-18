@@ -279,12 +279,34 @@ class PaymentResultService
 
         if ($status === PaymentAttempt::StatusSucceeded) {
             $metadata = is_array($updatedAttempt->metadata) ? $updatedAttempt->metadata : [];
-            $metadata['gateway_verification'] = [
+            $gatewayVerification = [
                 'provider' => $updatedAttempt->provider,
                 'gateway_payment_id' => $updatedAttempt->gateway_payment_id,
                 'verified_at' => now()->toISOString(),
                 'gateway_paid_at' => $gatewayPayment['paid_at'] ?? null,
             ];
+
+            // Item 3: Pisahkan estimated_gateway_fee, estimated_net_settlement, dan actual_settlement.
+            // Nilai aktual hanya boleh berasal dari data settlement resmi DANA yang terverifikasi.
+            if (isset($gatewayPayment['actual_settlement']) && is_numeric($gatewayPayment['actual_settlement'])) {
+                $actualSettlement = (float) $gatewayPayment['actual_settlement'];
+                $actualGatewayFee = isset($gatewayPayment['actual_gateway_fee']) ? (float) $gatewayPayment['actual_gateway_fee'] : null;
+                $gatewayVerification['actual_settlement'] = $actualSettlement;
+                $gatewayVerification['actual_gateway_fee'] = $actualGatewayFee;
+                $gatewayVerification['settlement_status'] = 'settled';
+
+                if (isset($metadata['fee_breakdown']) && is_array($metadata['fee_breakdown'])) {
+                    $metadata['fee_breakdown']['actual_settlement'] = $actualSettlement;
+                    $metadata['fee_breakdown']['actual_gateway_fee'] = $actualGatewayFee;
+                    $metadata['fee_breakdown']['settlement_status'] = 'settled';
+                }
+            } else {
+                $gatewayVerification['actual_settlement'] = null;
+                $gatewayVerification['actual_gateway_fee'] = null;
+                $gatewayVerification['settlement_status'] = 'pending_settlement_report';
+            }
+
+            $metadata['gateway_verification'] = $gatewayVerification;
             $updatedAttempt->update(['metadata' => $metadata]);
         }
 
