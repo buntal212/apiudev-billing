@@ -610,11 +610,71 @@ class CheckoutService
             $amountMinor = $this->amountMinor($attempt->amount);
             $gatewayPayment = $this->gatewayClient->findPaymentByMerchantOrderId($merchant, $attempt->merchant_reference);
 
+            if ($gatewayPayment !== null && ! empty($gatewayPayment['id']) && $attempt->gateway_payment_id !== $gatewayPayment['id']) {
+                $attempt->update(['gateway_payment_id' => $gatewayPayment['id']]);
+                $attempt->gateway_payment_id = $gatewayPayment['id'];
+            }
+
             // Selalu baca order yang sudah ada lebih dulu. Payment pending tanpa
             // instruksi checkout adalah hasil parsial, bukan checkout siap bayar.
             // POST dengan reference dan Idempotency-Key outbox yang sama akan
             // melanjutkan payment gateway yang sama; tidak membuat payment baru.
-            if ($gatewayPayment === null || ! $this->hasCompleteGatewayCheckout($gatewayPayment)) {
+            if ($gatewayPayment === null) {
+                $paymentMethod = $attempt->metadata['payment_method'] ?? ($attempt->provider === 'midtrans' ? 'qris' : 'dana_wallet');
+                $gatewayPayment = $this->gatewayClient->createPayment(
+                    merchant: $merchant,
+                    idempotencyKey: $claimed->idempotency_key,
+                    merchantOrderId: $attempt->merchant_reference,
+                    amountMinor: $amountMinor,
+                    metadata: array_filter([
+                        'payment_method' => $paymentMethod,
+                        'bank' => $attempt->metadata['bank'] ?? null,
+                        'udev_invoice_id' => $attempt->invoice_id,
+                        'udev_payment_attempt_id' => $attempt->getKey(),
+                        'invoice_number' => $attempt->invoice->invoice_number,
+                        'udev_sandbox_payment_method' => $paymentMethod,
+                    ], fn ($v) => $v !== null),
+                    environment: $attempt->gateway_environment,
+                );
+            } elseif (! $this->hasCompleteGatewayCheckout($gatewayPayment)) {
+                $paymentId = (string) ($gatewayPayment['id'] ?? $attempt->gateway_payment_id);
+                $danaStatus = null;
+
+                if ($paymentId !== '') {
+                    try {
+                        $inquiry = $this->gatewayClient->queryPaymentStatus($merchant, $paymentId);
+                        if (is_array($inquiry['data'] ?? null)) {
+                            $gatewayPayment = $inquiry['data'];
+                        }
+                        $danaStatus = is_array($inquiry['dana_status'] ?? null)
+                            ? ($inquiry['dana_status']['latest_transaction_status'] ?? null)
+                            : null;
+                    } catch (\Throwable) {
+                        // Inquiry gagal atau tidak tersedia
+                    }
+                }
+
+                if ($this->hasCompleteGatewayCheckout($gatewayPayment)) {
+                    $this->storeCheckout($claimed, $gatewayPayment, $amountMinor);
+
+                    return;
+                }
+
+                $isAlreadyUncertain = ($danaStatus === '01')
+                    || ($attempt->failure_code === 'gateway_uncertain_status')
+                    || (is_array($attempt->metadata) && (($attempt->metadata['uncertain'] ?? false) || ($attempt->metadata['is_uncertain'] ?? false)));
+
+                if ($isAlreadyUncertain) {
+                    $this->markDispatchFailure(
+                        $claimed,
+                        false,
+                        'transaction_already_registered',
+                        'DANA melaporkan transaksi sudah terdaftar dengan status 01; pembuatan order baru diblokir.'
+                    );
+
+                    return;
+                }
+
                 $paymentMethod = $attempt->metadata['payment_method'] ?? ($attempt->provider === 'midtrans' ? 'qris' : 'dana_wallet');
                 $gatewayPayment = $this->gatewayClient->createPayment(
                     merchant: $merchant,
@@ -664,7 +724,9 @@ class CheckoutService
                     : null));
         $paymentCode = is_string($instruction['payment_code'] ?? null) && $instruction['payment_code'] !== ''
             ? $instruction['payment_code']
-            : (is_string($gatewayMetadata['qr_content'] ?? null) ? $gatewayMetadata['qr_content'] : null);
+            : (is_string($instruction['qr_content'] ?? null) && $instruction['qr_content'] !== ''
+                ? $instruction['qr_content']
+                : (is_string($gatewayMetadata['qr_content'] ?? null) ? $gatewayMetadata['qr_content'] : null));
 
         $hasValidCheckoutUrl = is_string($checkoutUrl) && filter_var($checkoutUrl, FILTER_VALIDATE_URL);
         $hasValidPaymentCode = is_string($paymentCode) && $paymentCode !== '';
@@ -703,10 +765,9 @@ class CheckoutService
             }
             if ($instruction !== null) {
                 $currentMetadata['payment_instruction'] = $instruction;
-                if (($instruction['type'] ?? null) === 'qris_mpm'
-                    && is_string($instruction['qr_content'] ?? null)
-                    && $instruction['qr_content'] !== '') {
-                    $currentMetadata['qr_content'] = $instruction['qr_content'];
+                $qrCandidate = $instruction['qr_content'] ?? (($instruction['type'] ?? null) === 'qris_mpm' ? $paymentCode : null);
+                if (is_string($qrCandidate) && $qrCandidate !== '') {
+                    $currentMetadata['qr_content'] = $qrCandidate;
                 }
             }
 
@@ -739,10 +800,18 @@ class CheckoutService
     {
         $checkoutUrl = $gatewayPayment['checkout_url'] ?? null;
         $metadata = is_array($gatewayPayment['metadata'] ?? null) ? $gatewayPayment['metadata'] : [];
-        $instruction = is_array($metadata['udev_sandbox_payment_instruction'] ?? null)
-            ? $metadata['udev_sandbox_payment_instruction']
-            : [];
-        $paymentCode = $instruction['payment_code'] ?? $metadata['payment_code'] ?? $metadata['qr_content'] ?? null;
+        $instruction = is_array($gatewayPayment['payment_instruction'] ?? null)
+            ? $gatewayPayment['payment_instruction']
+            : (is_array($metadata['payment_instruction'] ?? null)
+                ? $metadata['payment_instruction']
+                : (is_array($metadata['udev_sandbox_payment_instruction'] ?? null)
+                    ? $metadata['udev_sandbox_payment_instruction']
+                    : []));
+        $paymentCode = $instruction['payment_code']
+            ?? $instruction['qr_content']
+            ?? $metadata['payment_code']
+            ?? $metadata['qr_content']
+            ?? null;
 
         return ($gatewayPayment['status'] ?? null) === PaymentAttempt::StatusPending
             && is_string($gatewayPayment['expires_at'] ?? null)

@@ -646,6 +646,216 @@ class InvoiceCheckoutTest extends TestCase
         $this->assertSame($newQrContent, $attempt2->metadata['payment_instruction']['qr_content'] ?? null);
     }
 
+    public function test_admin_can_checkout_with_qris_mpm_and_stores_qr_content_at_all_levels(): void
+    {
+        [$invoice] = $this->invoiceWithGateway();
+        $dummyQris = '00020101021226670016ID.DANA.WWW011893600911000000000002150000000000000000303UMI51440014ID.CO.QRIS.WWW02150000000000000000303UMI5204581453033605802ID5911UDEV0016007BANDUNG61054011562070703A016304ABCD';
+
+        Http::fake(function (HttpRequest $request) use ($dummyQris): mixed {
+            if ($request->method() === 'GET') {
+                return Http::response(['data' => []]);
+            }
+
+            $attempt = PaymentAttempt::query()->sole();
+
+            return Http::response([
+                'data' => [
+                    'id' => 'gateway-qris-mpm-001',
+                    'merchant_order_id' => $attempt->merchant_reference,
+                    'amount_minor' => 10000,
+                    'currency' => 'IDR',
+                    'status' => 'pending',
+                    'checkout_url' => null,
+                    'expires_at' => now()->addMinutes(30)->toISOString(),
+                    'payment_instruction' => [
+                        'method' => 'qris',
+                        'label' => 'QRIS',
+                        'type' => 'qris_mpm',
+                        'qr_content' => $dummyQris,
+                        'payment_code' => $dummyQris,
+                    ],
+                    'metadata' => [
+                        'payment_instruction' => [
+                            'method' => 'qris',
+                            'label' => 'QRIS',
+                            'type' => 'qris_mpm',
+                            'qr_content' => $dummyQris,
+                            'payment_code' => $dummyQris,
+                        ],
+                    ],
+                ],
+            ]);
+        });
+
+        $response = $this->actingAdmin()
+            ->postJson("/api/v1/admin/invoices/{$invoice->id}/checkout", [
+                'payment_method' => 'qris',
+            ], ['Idempotency-Key' => 'checkout-qris-mpm-001']);
+
+        $response->assertOk()
+            ->assertJsonPath('data.payment_method', 'qris')
+            ->assertJsonPath('data.checkout_status', 'ready')
+            ->assertJsonPath('data.qr_content', $dummyQris)
+            ->assertJsonPath('data.qr_string', $dummyQris)
+            ->assertJsonPath('data.payment_instruction.type', 'qris_mpm')
+            ->assertJsonPath('data.payment_instruction.qr_content', $dummyQris);
+
+        $attempt = PaymentAttempt::query()->sole();
+        $this->assertSame($dummyQris, $attempt->metadata['qr_content']);
+        $this->assertSame($dummyQris, $attempt->metadata['payment_instruction']['qr_content']);
+        $this->assertSame('gateway-qris-mpm-001', $attempt->gateway_payment_id);
+    }
+
+    public function test_outbox_retry_avoids_duplicate_create_order_when_gateway_reports_status_01(): void
+    {
+        [$invoice] = $this->invoiceWithGateway();
+
+        $attempt = PaymentAttempt::factory()->create([
+            'invoice_id' => $invoice->id,
+            'attempt_number' => 1,
+            'provider' => 'dana',
+            'merchant_reference' => $invoice->invoice_number.'-A1',
+            'gateway_merchant_code' => 'udev-demo',
+            'gateway_environment' => 'sandbox',
+            'amount' => $invoice->amount,
+            'currency' => $invoice->currency,
+            'status' => PaymentAttempt::StatusInitiated,
+            'metadata' => ['payment_method' => 'qris'],
+        ]);
+
+        $outbox = CheckoutOutboxMessage::query()->create([
+            'payment_attempt_id' => $attempt->id,
+            'idempotency_key' => 'outbox-retry-01',
+            'status' => CheckoutOutboxMessage::StatusPending,
+            'attempts' => 1,
+        ]);
+
+        $createdOrderCalls = 0;
+
+        Http::fake(function (HttpRequest $request) use (&$createdOrderCalls, $attempt): mixed {
+            if ($request->method() === 'GET' && str_contains($request->url(), '/inquiry')) {
+                return Http::response([
+                    'data' => [
+                        'id' => 'gateway-dana-incomplete-01',
+                        'merchant_order_id' => $attempt->merchant_reference,
+                        'status' => 'pending',
+                        'amount_minor' => 10000,
+                        'currency' => 'IDR',
+                        'expires_at' => null,
+                        'checkout_url' => null,
+                    ],
+                    'dana_status' => [
+                        'latest_transaction_status' => '01',
+                    ],
+                ]);
+            }
+
+            if ($request->method() === 'GET') {
+                return Http::response([
+                    'data' => [
+                        [
+                            'id' => 'gateway-dana-incomplete-01',
+                            'merchant_order_id' => $attempt->merchant_reference,
+                            'status' => 'pending',
+                            'amount_minor' => 10000,
+                            'currency' => 'IDR',
+                            'expires_at' => null,
+                            'checkout_url' => null,
+                        ],
+                    ],
+                ]);
+            }
+
+            if ($request->method() === 'POST') {
+                $createdOrderCalls++;
+                return Http::response(['message' => 'should not be called'], 409);
+            }
+
+            return Http::response([], 404);
+        });
+
+        app(CheckoutService::class)->dispatchPending(1);
+
+        $this->assertSame(0, $createdOrderCalls);
+        $outbox->refresh();
+        $this->assertSame(CheckoutOutboxMessage::StatusFailed, $outbox->status);
+        $this->assertSame('transaction_already_registered', $outbox->error_code);
+
+        $attempt->refresh();
+        $this->assertSame('gateway-dana-incomplete-01', $attempt->gateway_payment_id);
+        $this->assertSame('gateway_uncertain_status', $attempt->failure_code);
+        $this->assertTrue($attempt->metadata['uncertain']);
+    }
+
+    public function test_outbox_recovers_existing_complete_payment_without_creating_new_order(): void
+    {
+        [$invoice] = $this->invoiceWithGateway();
+        $dummyQris = '00020101021226670016ID.DANA.WWW011893600911000000000002150000000000000000303UMI51440014ID.CO.QRIS.WWW02150000000000000000303UMI5204581453033605802ID5911UDEV0016007BANDUNG61054011562070703A016304ABCD';
+
+        $attempt = PaymentAttempt::factory()->create([
+            'invoice_id' => $invoice->id,
+            'attempt_number' => 1,
+            'provider' => 'dana',
+            'merchant_reference' => $invoice->invoice_number.'-A1',
+            'gateway_merchant_code' => 'udev-demo',
+            'gateway_environment' => 'sandbox',
+            'amount' => $invoice->amount,
+            'currency' => $invoice->currency,
+            'status' => PaymentAttempt::StatusInitiated,
+            'metadata' => ['payment_method' => 'qris'],
+        ]);
+
+        $outbox = CheckoutOutboxMessage::query()->create([
+            'payment_attempt_id' => $attempt->id,
+            'idempotency_key' => 'outbox-recover-01',
+            'status' => CheckoutOutboxMessage::StatusPending,
+            'attempts' => 1,
+        ]);
+
+        $createdOrderCalls = 0;
+
+        Http::fake(function (HttpRequest $request) use (&$createdOrderCalls, $attempt, $dummyQris): mixed {
+            if ($request->method() === 'GET') {
+                return Http::response([
+                    'data' => [
+                        [
+                            'id' => 'gateway-dana-complete-01',
+                            'merchant_order_id' => $attempt->merchant_reference,
+                            'status' => 'pending',
+                            'amount_minor' => 10000,
+                            'currency' => 'IDR',
+                            'expires_at' => now()->addMinutes(20)->toISOString(),
+                            'checkout_url' => null,
+                            'payment_instruction' => [
+                                'type' => 'qris_mpm',
+                                'qr_content' => $dummyQris,
+                                'payment_code' => $dummyQris,
+                            ],
+                        ],
+                    ],
+                ]);
+            }
+
+            if ($request->method() === 'POST') {
+                $createdOrderCalls++;
+                return Http::response(['message' => 'should not be called'], 409);
+            }
+
+            return Http::response([], 404);
+        });
+
+        app(CheckoutService::class)->dispatchPending(1);
+
+        $this->assertSame(0, $createdOrderCalls);
+        $outbox->refresh();
+        $this->assertSame(CheckoutOutboxMessage::StatusCompleted, $outbox->status);
+
+        $attempt->refresh();
+        $this->assertSame('gateway-dana-complete-01', $attempt->gateway_payment_id);
+        $this->assertSame(PaymentAttempt::StatusPending, $attempt->status);
+        $this->assertSame($dummyQris, $attempt->metadata['qr_content']);
+    }
+
     private function actingAdmin(): self
     {
         Sanctum::actingAs(User::factory()->create(['is_admin' => true]), ['admin:access']);
