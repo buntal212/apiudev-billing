@@ -1001,6 +1001,203 @@ class PaymentReconciliationServiceTest extends TestCase
         $this->assertSame(0, $count);
     }
 
+    public function test_attempt_86_real_case_with_local_expired_status_restores_pending_on_inquiry_01(): void
+    {
+        $attempt = $this->attempt([
+            'merchant_reference' => 'INV-20261118-DNCYOMKO-A86',
+            'status' => PaymentAttempt::StatusExpired,
+            'failure_code' => 'dana_expired',
+            'metadata' => [
+                'uncertain' => true,
+                'is_uncertain' => true,
+                'gateway_status' => '01',
+                'uncertain_resolution' => null,
+                'first_uncertain_at' => now()->subHours(2)->toISOString(),
+            ],
+        ]);
+
+        for ($i = 1; $i <= 5; $i++) {
+            PaymentReconciliationRun::query()->create([
+                'payment_attempt_id' => $attempt->id,
+                'attempt_number' => $i,
+                'status' => $i === 5 ? PaymentReconciliationRun::StatusFailed : PaymentReconciliationRun::StatusRetryable,
+                'error_code' => $i === 5 ? 'reconciliation_retry_exhausted' : 'gateway_timeout',
+                'idempotency_key' => 'reconciliation:try:'.$attempt->id.':'.$i,
+                'started_at' => now()->subMinutes(60 - ($i * 5)),
+                'finished_at' => $i === 5 ? now()->subMinutes(20) : now()->subMinutes(60 - ($i * 5) - 1),
+                'retry_after_at' => null,
+            ]);
+        }
+
+        Http::fake([
+            "https://gateway.test/api/v1/payments/{$attempt->gateway_payment_id}/status" => Http::response([
+                'data' => [
+                    'id' => $attempt->gateway_payment_id,
+                    'merchant_order_id' => $attempt->merchant_reference,
+                    'amount_minor' => 10000,
+                    'currency' => 'IDR',
+                    'status' => 'pending',
+                ],
+            ]),
+            "https://gateway.test/api/v1/payments/{$attempt->gateway_payment_id}/inquiry" => Http::response([
+                'data' => [
+                    'id' => $attempt->gateway_payment_id,
+                    'merchant_order_id' => $attempt->merchant_reference,
+                    'amount_minor' => 10000,
+                    'currency' => 'IDR',
+                    'status' => 'pending',
+                ],
+                'dana_status' => [
+                    'latest_transaction_status' => '01',
+                ],
+            ]),
+        ]);
+
+        $count = app(PaymentReconciliationService::class)->reconcilePending(10);
+        $this->assertSame(1, $count);
+
+        $attempt->refresh();
+        // Crucial: Must be restored to StatusPending, NOT left as expired!
+        $this->assertSame(PaymentAttempt::StatusPending, $attempt->status);
+        $this->assertSame('gateway_uncertain_status', $attempt->failure_code);
+        $this->assertTrue($attempt->metadata['uncertain']);
+        $this->assertSame('01', $attempt->metadata['gateway_status']);
+
+        $latestRun = PaymentReconciliationRun::query()->where('payment_attempt_id', $attempt->id)->latest('id')->first();
+        $this->assertSame(6, $latestRun->attempt_number);
+        $this->assertSame(PaymentReconciliationRun::StatusPending, $latestRun->status);
+        $this->assertSame('01', $latestRun->gateway_status);
+        $this->assertNotNull($latestRun->retry_after_at);
+        $this->assertEqualsWithDelta(15, abs($latestRun->retry_after_at->diffInMinutes(now())), 1);
+    }
+
+    public function test_attempt_86_real_case_with_local_expired_status_resolves_to_terminal_expired_on_inquiry_05(): void
+    {
+        $attempt = $this->attempt([
+            'merchant_reference' => 'INV-20261118-DNCYOMKO-A86',
+            'status' => PaymentAttempt::StatusExpired,
+            'failure_code' => 'dana_expired',
+            'metadata' => [
+                'uncertain' => true,
+                'is_uncertain' => true,
+                'gateway_status' => '01',
+                'uncertain_resolution' => null,
+                'first_uncertain_at' => now()->subHours(2)->toISOString(),
+            ],
+        ]);
+
+        for ($i = 1; $i <= 5; $i++) {
+            PaymentReconciliationRun::query()->create([
+                'payment_attempt_id' => $attempt->id,
+                'attempt_number' => $i,
+                'status' => $i === 5 ? PaymentReconciliationRun::StatusFailed : PaymentReconciliationRun::StatusRetryable,
+                'error_code' => $i === 5 ? 'reconciliation_retry_exhausted' : 'gateway_timeout',
+                'idempotency_key' => 'reconciliation:try:'.$attempt->id.':'.$i,
+                'started_at' => now()->subMinutes(60 - ($i * 5)),
+                'finished_at' => $i === 5 ? now()->subMinutes(20) : now()->subMinutes(60 - ($i * 5) - 1),
+                'retry_after_at' => null,
+            ]);
+        }
+
+        Http::fake([
+            "https://gateway.test/api/v1/payments/{$attempt->gateway_payment_id}/status" => Http::response([
+                'data' => [
+                    'id' => $attempt->gateway_payment_id,
+                    'merchant_order_id' => $attempt->merchant_reference,
+                    'amount_minor' => 10000,
+                    'currency' => 'IDR',
+                    'status' => 'expired',
+                ],
+            ]),
+            "https://gateway.test/api/v1/payments/{$attempt->gateway_payment_id}/inquiry" => Http::response([
+                'data' => [
+                    'id' => $attempt->gateway_payment_id,
+                    'merchant_order_id' => $attempt->merchant_reference,
+                    'amount_minor' => 10000,
+                    'currency' => 'IDR',
+                    'status' => 'expired',
+                ],
+                'dana_status' => [
+                    'latest_transaction_status' => '05',
+                ],
+            ]),
+        ]);
+
+        $count = app(PaymentReconciliationService::class)->reconcilePending(10);
+        $this->assertSame(1, $count);
+
+        $attempt->refresh();
+        $this->assertSame(PaymentAttempt::StatusExpired, $attempt->status);
+        $this->assertSame('gateway_expired', $attempt->failure_code);
+        $this->assertArrayNotHasKey('uncertain', $attempt->metadata);
+        $this->assertSame('expired_confirmed_by_gateway', $attempt->metadata['uncertain_resolution']);
+    }
+
+    public function test_attempt_86_real_case_with_local_expired_status_resolves_to_succeeded_and_settles_on_inquiry_00(): void
+    {
+        $attempt = $this->attemptWithMapping();
+        $attempt->update([
+            'merchant_reference' => 'INV-20261118-DNCYOMKO-A86',
+            'status' => PaymentAttempt::StatusExpired,
+            'failure_code' => 'dana_expired',
+            'metadata' => [
+                'uncertain' => true,
+                'is_uncertain' => true,
+                'gateway_status' => '01',
+                'uncertain_resolution' => null,
+                'first_uncertain_at' => now()->subHours(2)->toISOString(),
+            ],
+        ]);
+
+        for ($i = 1; $i <= 5; $i++) {
+            PaymentReconciliationRun::query()->create([
+                'payment_attempt_id' => $attempt->id,
+                'attempt_number' => $i,
+                'status' => $i === 5 ? PaymentReconciliationRun::StatusFailed : PaymentReconciliationRun::StatusRetryable,
+                'error_code' => $i === 5 ? 'reconciliation_retry_exhausted' : 'gateway_timeout',
+                'idempotency_key' => 'reconciliation:try:'.$attempt->id.':'.$i,
+                'started_at' => now()->subMinutes(60 - ($i * 5)),
+                'finished_at' => $i === 5 ? now()->subMinutes(20) : now()->subMinutes(60 - ($i * 5) - 1),
+                'retry_after_at' => null,
+            ]);
+        }
+
+        Http::fake([
+            "https://gateway.test/api/v1/payments/{$attempt->gateway_payment_id}/status" => Http::response([
+                'data' => [
+                    'id' => $attempt->gateway_payment_id,
+                    'merchant_order_id' => $attempt->merchant_reference,
+                    'amount_minor' => 10000,
+                    'currency' => 'IDR',
+                    'status' => 'paid',
+                    'paid_at' => now()->toISOString(),
+                ],
+            ]),
+            "https://gateway.test/api/v1/payments/{$attempt->gateway_payment_id}/inquiry" => Http::response([
+                'data' => [
+                    'id' => $attempt->gateway_payment_id,
+                    'merchant_order_id' => $attempt->merchant_reference,
+                    'amount_minor' => 10000,
+                    'currency' => 'IDR',
+                    'status' => 'paid',
+                    'paid_at' => now()->toISOString(),
+                ],
+                'dana_status' => [
+                    'latest_transaction_status' => '00',
+                ],
+            ]),
+        ]);
+
+        $count = app(PaymentReconciliationService::class)->reconcilePending(10);
+        $this->assertSame(1, $count);
+
+        $attempt->refresh();
+        $this->assertSame(PaymentAttempt::StatusSucceeded, $attempt->status);
+        $this->assertArrayNotHasKey('uncertain', $attempt->metadata);
+        $this->assertSame('paid_confirmed_by_gateway', $attempt->metadata['uncertain_resolution']);
+        $this->assertDatabaseCount('payment_allocations', 1);
+    }
+
     private function attempt(array $overrides = []): PaymentAttempt
     {
         $attempt = PaymentAttempt::factory()->create(array_merge([

@@ -51,7 +51,11 @@ class PaymentResultService
             throw (new ModelNotFoundException)->setModel(PaymentAttempt::class);
         }
 
-        if (! $this->isFinal($paymentAttempt->status)) {
+        $isUnresolvedUncertain = (($paymentAttempt->failure_code === 'gateway_uncertain_status')
+            || (is_array($paymentAttempt->metadata) && (($paymentAttempt->metadata['uncertain'] ?? false) || ($paymentAttempt->metadata['is_uncertain'] ?? false))))
+            && empty($paymentAttempt->metadata['uncertain_resolution']);
+
+        if (! $this->isFinal($paymentAttempt->status) || $isUnresolvedUncertain) {
             if (strtolower((string) $paymentAttempt->provider) === 'midtrans') {
                 $paymentAttempt = $this->synchronizeMidtrans($paymentAttempt);
             } else {
@@ -261,6 +265,19 @@ class PaymentResultService
         };
 
         if ($paymentAttempt->status === $status) {
+            $metadata = is_array($paymentAttempt->metadata) ? $paymentAttempt->metadata : [];
+            if (! empty($metadata['uncertain']) || ! empty($metadata['is_uncertain']) || $paymentAttempt->failure_code === 'gateway_uncertain_status') {
+                unset($metadata['uncertain'], $metadata['is_uncertain'], $metadata['gateway_status'], $metadata['failure_reason']);
+                $metadata['uncertain_resolved_at'] = now()->toISOString();
+                $metadata['uncertain_resolution'] = $status === PaymentAttempt::StatusExpired
+                    ? 'expired_confirmed_by_gateway'
+                    : ($status === PaymentAttempt::StatusCancelled ? 'cancelled_confirmed_by_gateway' : 'terminal_confirmed_by_gateway');
+                $paymentAttempt->update([
+                    'failure_code' => 'gateway_'.$gatewayStatus,
+                    'metadata' => $metadata,
+                ]);
+            }
+
             return $paymentAttempt;
         }
 
@@ -278,6 +295,12 @@ class PaymentResultService
         );
 
         if ($status === PaymentAttempt::StatusSucceeded) {
+            $metadata = is_array($updatedAttempt->metadata) ? $updatedAttempt->metadata : [];
+            if (! empty($metadata['uncertain']) || ! empty($metadata['is_uncertain']) || $updatedAttempt->failure_code === 'gateway_uncertain_status') {
+                unset($metadata['uncertain'], $metadata['is_uncertain'], $metadata['gateway_status'], $metadata['failure_reason']);
+                $metadata['uncertain_resolved_at'] = now()->toISOString();
+                $metadata['uncertain_resolution'] = 'paid_confirmed_by_gateway';
+            }
             $metadata = is_array($updatedAttempt->metadata) ? $updatedAttempt->metadata : [];
             $gatewayVerification = [
                 'provider' => $updatedAttempt->provider,
@@ -308,6 +331,19 @@ class PaymentResultService
 
             $metadata['gateway_verification'] = $gatewayVerification;
             $updatedAttempt->update(['metadata' => $metadata]);
+        } elseif (in_array($status, [PaymentAttempt::StatusExpired, PaymentAttempt::StatusCancelled, PaymentAttempt::StatusFailed], true)) {
+            $metadata = is_array($updatedAttempt->metadata) ? $updatedAttempt->metadata : [];
+            if (! empty($metadata['uncertain']) || ! empty($metadata['is_uncertain']) || $updatedAttempt->failure_code === 'gateway_uncertain_status') {
+                unset($metadata['uncertain'], $metadata['is_uncertain'], $metadata['gateway_status'], $metadata['failure_reason']);
+                $metadata['uncertain_resolved_at'] = now()->toISOString();
+                $metadata['uncertain_resolution'] = $status === PaymentAttempt::StatusExpired
+                    ? 'expired_confirmed_by_gateway'
+                    : ($status === PaymentAttempt::StatusCancelled ? 'cancelled_confirmed_by_gateway' : 'terminal_confirmed_by_gateway');
+                $updatedAttempt->update([
+                    'failure_code' => 'gateway_'.$gatewayStatus,
+                    'metadata' => $metadata,
+                ]);
+            }
         }
 
         return $updatedAttempt;

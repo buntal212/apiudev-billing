@@ -107,8 +107,31 @@ class PaymentAttemptService
             $this->assertInvoiceCanAcceptAttempt($lockedInvoice);
 
             if ($lockedAttempt->status === $status) {
+                $hasAttributeChange = false;
+                $updateAttributes = [];
+                if ($providerReference !== null && $lockedAttempt->provider_reference !== $providerReference) {
+                    $updateAttributes['provider_reference'] = $providerReference;
+                    $hasAttributeChange = true;
+                }
+                if ($failureCode !== null && $lockedAttempt->failure_code !== $failureCode) {
+                    $updateAttributes['failure_code'] = $failureCode;
+                    $hasAttributeChange = true;
+                }
+                if ($failureMessage !== null && $lockedAttempt->failure_message !== $failureMessage) {
+                    $updateAttributes['failure_message'] = $failureMessage;
+                    $hasAttributeChange = true;
+                }
+                if ($hasAttributeChange) {
+                    $lockedAttempt->update($updateAttributes);
+
+                    return $lockedAttempt->refresh();
+                }
+
                 return $lockedAttempt;
             }
+
+            $isUncertain = ($lockedAttempt->failure_code === 'gateway_uncertain_status')
+                || (is_array($lockedAttempt->metadata) && (($lockedAttempt->metadata['uncertain'] ?? false) || ($lockedAttempt->metadata['is_uncertain'] ?? false)));
 
             $validTransitions = [
                 PaymentAttempt::StatusInitiated => [
@@ -123,6 +146,22 @@ class PaymentAttemptService
                     PaymentAttempt::StatusExpired,
                     PaymentAttempt::StatusCancelled,
                 ],
+                PaymentAttempt::StatusExpired => $isUncertain ? [
+                    PaymentAttempt::StatusPending,
+                    PaymentAttempt::StatusSucceeded,
+                    PaymentAttempt::StatusCancelled,
+                    PaymentAttempt::StatusFailed,
+                ] : [],
+                PaymentAttempt::StatusCancelled => $isUncertain ? [
+                    PaymentAttempt::StatusPending,
+                    PaymentAttempt::StatusSucceeded,
+                    PaymentAttempt::StatusExpired,
+                    PaymentAttempt::StatusFailed,
+                ] : [],
+                PaymentAttempt::StatusFailed => $isUncertain ? [
+                    PaymentAttempt::StatusPending,
+                    PaymentAttempt::StatusSucceeded,
+                ] : [],
             ];
 
             if (! in_array($status, $validTransitions[$lockedAttempt->status] ?? [], true)) {

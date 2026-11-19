@@ -8,6 +8,7 @@ use App\Models\Invoice;
 use App\Models\MidtransMerchantCredential;
 use App\Models\PaymentAttempt;
 use Carbon\CarbonImmutable;
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\QueryException;
 use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Support\Facades\DB;
@@ -179,7 +180,26 @@ class CheckoutService
                     return $outbox;
                 }
 
-                // 2. Active Attempt Check on Invoice
+                // 2. Anti-Duplicate Guard: Blokir checkout baru jika invoice memiliki attempt uncertain yang belum dikonfirmasi final oleh gateway
+                $hasUncertainAttempt = PaymentAttempt::query()
+                    ->where('invoice_id', $lockedInvoice->getKey())
+                    ->where(function (Builder $query): void {
+                        $query->where('failure_code', 'gateway_uncertain_status')
+                            ->orWhere('metadata->uncertain', true)
+                            ->orWhere('metadata->is_uncertain', true);
+                    })
+                    ->whereNull('metadata->uncertain_resolution')
+                    ->lockForUpdate()
+                    ->exists();
+
+                if ($hasUncertainAttempt) {
+                    abort(
+                        Response::HTTP_CONFLICT,
+                        "Transaksi untuk invoice {$lockedInvoice->invoice_number} berstatus tidak pasti di gateway DANA (terdaftar dengan status 01). Pembuatan order baru diblokir demi mencegah pembayaran ganda. Mohon hubungi admin atau lakukan rekonsiliasi status."
+                    );
+                }
+
+                // 3. Active Attempt Check on Invoice
                 $activeAttempt = PaymentAttempt::query()
                     ->where('invoice_id', $lockedInvoice->getKey())
                     ->whereIn('status', [PaymentAttempt::StatusInitiated, PaymentAttempt::StatusPending])
@@ -188,6 +208,18 @@ class CheckoutService
                     ->first();
 
                 if ($activeAttempt !== null) {
+                    $activeMetadata = is_array($activeAttempt->metadata) ? $activeAttempt->metadata : [];
+                    $isActiveUncertain = ($activeAttempt->failure_code === 'gateway_uncertain_status')
+                        || ($activeMetadata['uncertain'] ?? false)
+                        || ($activeMetadata['is_uncertain'] ?? false);
+
+                    if ($isActiveUncertain && empty($activeMetadata['uncertain_resolution'])) {
+                        abort(
+                            Response::HTTP_CONFLICT,
+                            "Transaksi untuk invoice {$lockedInvoice->invoice_number} berstatus tidak pasti di gateway DANA (terdaftar dengan status 01). Pembuatan order baru diblokir demi mencegah pembayaran ganda. Mohon hubungi admin atau lakukan rekonsiliasi status."
+                        );
+                    }
+
                     if ($activeAttempt->checkout_expires_at !== null && $activeAttempt->checkout_expires_at->lessThanOrEqualTo(now())) {
                         $activeAttempt->update([
                             'status' => PaymentAttempt::StatusExpired,

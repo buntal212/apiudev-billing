@@ -856,6 +856,159 @@ class InvoiceCheckoutTest extends TestCase
         $this->assertSame($dummyQris, $attempt->metadata['qr_content']);
     }
 
+    public function test_checkout_blocks_new_attempt_when_unresolved_uncertain_attempt_exists_even_if_locally_expired(): void
+    {
+        [$invoice] = $this->invoiceWithGateway();
+
+        $attempt = PaymentAttempt::factory()->for($invoice)->create([
+            'attempt_number' => 86,
+            'provider' => 'dana',
+            'merchant_reference' => $invoice->invoice_number.'-A86',
+            'gateway_merchant_code' => 'udev-central',
+            'gateway_environment' => 'sandbox',
+            'gateway_payment_id' => '01JBK9Y8Z123456789ABCDEF86',
+            'status' => PaymentAttempt::StatusExpired,
+            'failure_code' => 'dana_expired',
+            'amount' => 10000,
+            'currency' => 'IDR',
+            'metadata' => [
+                'uncertain' => true,
+                'is_uncertain' => true,
+                'gateway_status' => '01',
+                'uncertain_resolution' => null,
+            ],
+        ]);
+
+        $this->actingAdmin();
+
+        $response = $this->postJson("/api/v1/admin/invoices/{$invoice->id}/checkout", [
+            'payment_method' => 'dana_wallet',
+        ], [
+            'Idempotency-Key' => 'attempt-87-new-request',
+        ]);
+
+        $response->assertStatus(409)
+            ->assertJsonPath('message', "Transaksi untuk invoice {$invoice->invoice_number} berstatus tidak pasti di gateway DANA (terdaftar dengan status 01). Pembuatan order baru diblokir demi mencegah pembayaran ganda. Mohon hubungi admin atau lakukan rekonsiliasi status.");
+
+        $this->assertSame(1, PaymentAttempt::query()->where('invoice_id', $invoice->id)->count());
+    }
+
+    public function test_checkout_does_not_locally_expire_uncertain_active_attempt_past_checkout_expires_at(): void
+    {
+        [$invoice] = $this->invoiceWithGateway();
+
+        $attempt = PaymentAttempt::factory()->for($invoice)->create([
+            'attempt_number' => 1,
+            'provider' => 'dana',
+            'merchant_reference' => $invoice->invoice_number.'-A1',
+            'gateway_merchant_code' => 'udev-central',
+            'gateway_environment' => 'sandbox',
+            'status' => PaymentAttempt::StatusPending,
+            'failure_code' => 'gateway_uncertain_status',
+            'amount' => 10000,
+            'currency' => 'IDR',
+            'checkout_expires_at' => now()->subMinutes(10),
+            'metadata' => [
+                'uncertain' => true,
+                'is_uncertain' => true,
+                'gateway_status' => '01',
+                'uncertain_resolution' => null,
+            ],
+        ]);
+
+        $this->actingAdmin();
+
+        $response = $this->postJson("/api/v1/admin/invoices/{$invoice->id}/checkout", [
+            'payment_method' => 'dana_wallet',
+        ], [
+            'Idempotency-Key' => 'attempt-2-new-request',
+        ]);
+
+        $response->assertStatus(409);
+
+        $attempt->refresh();
+        $this->assertSame(PaymentAttempt::StatusPending, $attempt->status);
+        $this->assertNull($attempt->completed_at);
+        $this->assertTrue($attempt->metadata['uncertain']);
+    }
+
+    public function test_checkout_does_not_locally_cancel_uncertain_active_attempt_on_parameter_change(): void
+    {
+        [$invoice] = $this->invoiceWithGateway();
+
+        $attempt = PaymentAttempt::factory()->for($invoice)->create([
+            'attempt_number' => 1,
+            'provider' => 'dana',
+            'merchant_reference' => $invoice->invoice_number.'-A1',
+            'gateway_merchant_code' => 'udev-central',
+            'gateway_environment' => 'sandbox',
+            'status' => PaymentAttempt::StatusPending,
+            'failure_code' => 'gateway_uncertain_status',
+            'amount' => 10000,
+            'currency' => 'IDR',
+            'metadata' => [
+                'uncertain' => true,
+                'is_uncertain' => true,
+                'gateway_status' => '01',
+                'payment_method' => 'dana_wallet',
+                'uncertain_resolution' => null,
+            ],
+        ]);
+
+        $this->actingAdmin();
+
+        // Parameter checkout diubah menjadi qris
+        $response = $this->postJson("/api/v1/admin/invoices/{$invoice->id}/checkout", [
+            'payment_method' => 'qris',
+        ], [
+            'Idempotency-Key' => 'attempt-2-change-param',
+        ]);
+
+        $response->assertStatus(409);
+
+        $attempt->refresh();
+        $this->assertSame(PaymentAttempt::StatusPending, $attempt->status);
+        $this->assertNull($attempt->completed_at);
+        $this->assertTrue($attempt->metadata['uncertain']);
+    }
+
+    public function test_checkout_allows_new_attempt_after_uncertain_attempt_is_confirmed_expired_by_gateway(): void
+    {
+        [$invoice] = $this->invoiceWithGateway();
+
+        PaymentAttempt::factory()->for($invoice)->create([
+            'attempt_number' => 1,
+            'provider' => 'dana',
+            'merchant_reference' => $invoice->invoice_number.'-A1',
+            'gateway_merchant_code' => 'udev-central',
+            'gateway_environment' => 'sandbox',
+            'status' => PaymentAttempt::StatusExpired,
+            'failure_code' => 'gateway_expired',
+            'amount' => 10000,
+            'currency' => 'IDR',
+            'metadata' => [
+                'uncertain_resolved_at' => now()->subHour()->toISOString(),
+                'uncertain_resolution' => 'expired_confirmed_by_gateway',
+            ],
+        ]);
+
+        $this->fakeGatewayForNewPayment($invoice, 'pay-dana-attempt-2');
+
+        $this->actingAdmin();
+
+        $response = $this->postJson("/api/v1/admin/invoices/{$invoice->id}/checkout", [
+            'payment_method' => 'dana_wallet',
+        ], [
+            'Idempotency-Key' => 'attempt-2-valid-checkout',
+        ]);
+
+        $response->assertOk();
+
+        $attempts = PaymentAttempt::query()->where('invoice_id', $invoice->id)->orderBy('attempt_number')->get();
+        $this->assertCount(2, $attempts);
+        $this->assertSame(2, $attempts->last()->attempt_number);
+    }
+
     private function actingAdmin(): self
     {
         Sanctum::actingAs(User::factory()->create(['is_admin' => true]), ['admin:access']);

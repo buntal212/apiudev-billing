@@ -419,6 +419,104 @@ class DanaWebhookSecurityRegressionTest extends TestCase
         $this->assertSame(1, PaymentAllocation::query()->where('invoice_id', $invoice->id)->count());
     }
 
+    public function test_webhook_status_01_does_not_expire_uncertain_attempt(): void
+    {
+        $invoice = $this->createPendingInvoice(125_000);
+        $attempt = PaymentAttempt::factory()->for($invoice)->create([
+            'attempt_number' => 1,
+            'provider' => 'dana',
+            'merchant_reference' => $invoice->invoice_number.'-A1',
+            'gateway_merchant_code' => 'udev-central',
+            'gateway_environment' => 'sandbox',
+            'gateway_payment_id' => '01JBK9Y8Z123456789ABCDEF07',
+            'status' => PaymentAttempt::StatusPending,
+            'failure_code' => 'gateway_uncertain_status',
+            'amount' => 125_000,
+            'currency' => 'IDR',
+            'metadata' => [
+                'uncertain' => true,
+                'is_uncertain' => true,
+                'gateway_status' => '01',
+            ],
+        ]);
+
+        $payload = [
+            'merchant_order_id' => $invoice->invoice_number.'-A1',
+            'originalReferenceNo' => '01JBK9Y8Z123456789ABCDEF07',
+            'status' => 'expired',
+            'latestTransactionStatus' => '01',
+        ];
+
+        $response = $this->postJson('/api/v1/payment-gateways/dana/webhook', $payload, [
+            'X-Webhook-Secret' => 'configured-webhook-secret-token-64char',
+        ]);
+
+        $response->assertOk()
+            ->assertJsonPath('status', 'OK')
+            ->assertJsonPath('message', 'Status transaksi DANA masih aktif/pending (01).');
+
+        $attempt->refresh();
+        $this->assertSame(PaymentAttempt::StatusPending, $attempt->status);
+        $this->assertSame('gateway_uncertain_status', $attempt->failure_code);
+        $this->assertTrue($attempt->metadata['uncertain']);
+    }
+
+    public function test_webhook_expired_with_inquiry_returning_01_does_not_expire_uncertain_attempt(): void
+    {
+        $invoice = $this->createPendingInvoice(125_000);
+        $attempt = PaymentAttempt::factory()->for($invoice)->create([
+            'attempt_number' => 1,
+            'provider' => 'dana',
+            'merchant_reference' => $invoice->invoice_number.'-A1',
+            'gateway_merchant_code' => 'udev-central',
+            'gateway_environment' => 'sandbox',
+            'gateway_payment_id' => '01JBK9Y8Z123456789ABCDEF07',
+            'status' => PaymentAttempt::StatusPending,
+            'failure_code' => 'gateway_uncertain_status',
+            'amount' => 125_000,
+            'currency' => 'IDR',
+            'metadata' => [
+                'uncertain' => true,
+                'is_uncertain' => true,
+                'gateway_status' => '01',
+            ],
+        ]);
+
+        Http::fake([
+            'http://dana-gateway.test/api/v1/payments/*' => Http::response([
+                'data' => [
+                    'id' => $attempt->gateway_payment_id,
+                    'merchant_order_id' => $attempt->merchant_reference,
+                    'amount_minor' => 125000,
+                    'currency' => 'IDR',
+                    'status' => 'pending',
+                ],
+                'dana_status' => [
+                    'latest_transaction_status' => '01',
+                ],
+            ]),
+        ]);
+
+        $payload = [
+            'merchant_order_id' => $invoice->invoice_number.'-A1',
+            'originalReferenceNo' => '01JBK9Y8Z123456789ABCDEF07',
+            'status' => 'expired',
+        ];
+
+        $response = $this->postJson('/api/v1/payment-gateways/dana/webhook', $payload, [
+            'X-Webhook-Secret' => 'configured-webhook-secret-token-64char',
+        ]);
+
+        $response->assertOk()
+            ->assertJsonPath('status', 'skipped')
+            ->assertJsonPath('message', 'Transaksi masih aktif/pending (01) di gateway DANA. Status tidak diubah menjadi kedaluwarsa.');
+
+        $attempt->refresh();
+        $this->assertSame(PaymentAttempt::StatusPending, $attempt->status);
+        $this->assertSame('gateway_uncertain_status', $attempt->failure_code);
+        $this->assertTrue($attempt->metadata['uncertain']);
+    }
+
     private function createPendingInvoice(float $amount): Invoice
     {
         $application = Application::factory()->create();

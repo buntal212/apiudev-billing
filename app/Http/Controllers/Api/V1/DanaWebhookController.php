@@ -100,9 +100,18 @@ class DanaWebhookController extends Controller
         $status = strtolower((string) ($payload['status'] ?? ''));
         $snapStatus = (string) ($payload['latestTransactionStatus'] ?? '');
 
-        $isPaid = $status === 'paid' || $snapStatus === '00';
-        $isCancelled = in_array($status, ['cancelled', 'cancel'], true) || $snapStatus === '02';
-        $isExpired = in_array($status, ['expired', 'expire'], true) || $snapStatus === '05';
+        // Rule: Status 01 (Pending) can NEVER be interpreted as paid, cancelled, or expired
+        $isSnapPending = $snapStatus === '01';
+        $isPaid = ! $isSnapPending && ($status === 'paid' || $snapStatus === '00');
+        $isCancelled = ! $isSnapPending && (in_array($status, ['cancelled', 'cancel'], true) || $snapStatus === '02');
+        $isExpired = ! $isSnapPending && (in_array($status, ['expired', 'expire'], true) || $snapStatus === '05');
+
+        if ($isSnapPending) {
+            return response()->json([
+                'status' => 'OK',
+                'message' => 'Status transaksi DANA masih aktif/pending (01).',
+            ]);
+        }
 
         if ($isPaid) {
             // Verifikasi status riil ke DANA Gateway sebelum melakukan settlement
@@ -185,6 +194,11 @@ class DanaWebhookController extends Controller
 
             // Perbaiki konsistensi metadata gateway_verification untuk PaymentResultController
             $metadata = is_array($updatedAttempt->metadata) ? $updatedAttempt->metadata : [];
+            if (! empty($metadata['uncertain']) || ! empty($metadata['is_uncertain']) || $updatedAttempt->failure_code === 'gateway_uncertain_status') {
+                unset($metadata['uncertain'], $metadata['is_uncertain'], $metadata['gateway_status'], $metadata['failure_reason']);
+                $metadata['uncertain_resolved_at'] = now()->toISOString();
+                $metadata['uncertain_resolution'] = 'paid_confirmed_by_gateway';
+            }
             $metadata['gateway_verification'] = [
                 'provider' => 'dana',
                 'gateway_payment_id' => $resolvedGatewayPaymentId,
@@ -214,38 +228,101 @@ class DanaWebhookController extends Controller
             ]);
         }
 
-        if ($isCancelled) {
-            if (! in_array($attempt->status, [PaymentAttempt::StatusSucceeded, PaymentAttempt::StatusCancelled], true)) {
-                $this->paymentAttemptService->transitionStatus(
-                    $attempt,
-                    PaymentAttempt::StatusCancelled,
-                    providerReference: (string) ($gatewayPaymentId ?: $attempt->gateway_payment_id),
-                    failureCode: 'dana_cancelled',
-                    failureMessage: 'Transaksi dibatalkan pada gateway DANA.',
-                );
+        if ($isCancelled || $isExpired) {
+            $isUncertain = ($attempt->failure_code === 'gateway_uncertain_status')
+                || (is_array($attempt->metadata) && (($attempt->metadata['uncertain'] ?? false) || ($attempt->metadata['is_uncertain'] ?? false)));
+
+            if ($isUncertain) {
+                // Must verify with DANA gateway (inquiry) to ensure it is really terminal
+                try {
+                    $merchant = $this->merchantResolver->resolve(
+                        (string) $attempt->gateway_merchant_code,
+                        (string) $attempt->gateway_environment,
+                    );
+
+                    $targetPaymentId = (string) ($gatewayPaymentId ?: $attempt->gateway_payment_id);
+                    $inquiryResult = ! empty($targetPaymentId)
+                        ? $this->gatewayClient->queryPaymentStatus($merchant, $targetPaymentId)
+                        : (! empty($attempt->merchant_reference) ? $this->gatewayClient->findPaymentByMerchantOrderId($merchant, (string) $attempt->merchant_reference) : null);
+
+                    $inquiryStatus = $inquiryResult['data']['status'] ?? ($inquiryResult['status'] ?? null);
+                    $inquiryDanaStatus = $inquiryResult['dana_status']['latest_transaction_status'] ?? null;
+
+                    // If gateway inquiry shows it is STILL pending (01), reject expiration/cancellation!
+                    if ($inquiryDanaStatus === '01' || $inquiryStatus === 'pending') {
+                        Log::warning('Webhook DANA expired/cancelled diabaikan: gateway masih berstatus 01 (pending).', [
+                            'payment_attempt_id' => $attempt->id,
+                            'inquiry_status' => $inquiryStatus,
+                            'inquiry_dana_status' => $inquiryDanaStatus,
+                        ]);
+
+                        return response()->json([
+                            'status' => 'skipped',
+                            'message' => 'Transaksi masih aktif/pending (01) di gateway DANA. Status tidak diubah menjadi kedaluwarsa.',
+                        ]);
+                    }
+                } catch (\Throwable $e) {
+                    Log::warning('Gagal memverifikasi status terminal ke gateway DANA untuk transaksi uncertain.', [
+                        'payment_attempt_id' => $attempt->id,
+                        'error' => $e->getMessage(),
+                    ]);
+
+                    return response()->json([
+                        'status' => 'error',
+                        'message' => 'Gagal memverifikasi status ke gateway DANA. Transaksi uncertain tidak diubah.',
+                    ], Response::HTTP_BAD_GATEWAY);
+                }
             }
 
-            return response()->json([
-                'status' => 'OK',
-                'message' => 'Transaksi DANA ditandai sebagai dibatalkan.',
-            ]);
-        }
+            if ($isCancelled) {
+                if (! in_array($attempt->status, [PaymentAttempt::StatusSucceeded, PaymentAttempt::StatusCancelled], true)) {
+                    $this->paymentAttemptService->transitionStatus(
+                        $attempt,
+                        PaymentAttempt::StatusCancelled,
+                        providerReference: (string) ($gatewayPaymentId ?: $attempt->gateway_payment_id),
+                        failureCode: 'dana_cancelled',
+                        failureMessage: 'Transaksi dibatalkan pada gateway DANA.',
+                    );
+                }
 
-        if ($isExpired) {
-            if (! in_array($attempt->status, [PaymentAttempt::StatusSucceeded, PaymentAttempt::StatusExpired], true)) {
-                $this->paymentAttemptService->transitionStatus(
-                    $attempt,
-                    PaymentAttempt::StatusExpired,
-                    providerReference: (string) ($gatewayPaymentId ?: $attempt->gateway_payment_id),
-                    failureCode: 'dana_expired',
-                    failureMessage: 'Batas waktu transaksi DANA telah habis.',
-                );
+                $metadata = is_array($attempt->metadata) ? $attempt->metadata : [];
+                if (! empty($metadata['uncertain']) || ! empty($metadata['is_uncertain']) || $attempt->failure_code === 'gateway_uncertain_status') {
+                    unset($metadata['uncertain'], $metadata['is_uncertain'], $metadata['gateway_status'], $metadata['failure_reason']);
+                    $metadata['uncertain_resolved_at'] = now()->toISOString();
+                    $metadata['uncertain_resolution'] = 'cancelled_confirmed_by_gateway';
+                    $attempt->update(['metadata' => $metadata]);
+                }
+
+                return response()->json([
+                    'status' => 'OK',
+                    'message' => 'Transaksi DANA ditandai sebagai dibatalkan.',
+                ]);
             }
 
-            return response()->json([
-                'status' => 'OK',
-                'message' => 'Transaksi DANA ditandai sebagai kedaluwarsa.',
-            ]);
+            if ($isExpired) {
+                if (! in_array($attempt->status, [PaymentAttempt::StatusSucceeded, PaymentAttempt::StatusExpired], true)) {
+                    $this->paymentAttemptService->transitionStatus(
+                        $attempt,
+                        PaymentAttempt::StatusExpired,
+                        providerReference: (string) ($gatewayPaymentId ?: $attempt->gateway_payment_id),
+                        failureCode: 'dana_expired',
+                        failureMessage: 'Batas waktu transaksi DANA telah habis.',
+                    );
+                }
+
+                $metadata = is_array($attempt->metadata) ? $attempt->metadata : [];
+                if (! empty($metadata['uncertain']) || ! empty($metadata['is_uncertain']) || $attempt->failure_code === 'gateway_uncertain_status') {
+                    unset($metadata['uncertain'], $metadata['is_uncertain'], $metadata['gateway_status'], $metadata['failure_reason']);
+                    $metadata['uncertain_resolved_at'] = now()->toISOString();
+                    $metadata['uncertain_resolution'] = 'expired_confirmed_by_gateway';
+                    $attempt->update(['metadata' => $metadata]);
+                }
+
+                return response()->json([
+                    'status' => 'OK',
+                    'message' => 'Transaksi DANA ditandai sebagai kedaluwarsa.',
+                ]);
+            }
         }
 
         return response()->json([

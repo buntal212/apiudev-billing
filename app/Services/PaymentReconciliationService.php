@@ -154,7 +154,16 @@ class PaymentReconciliationService
                 $query->whereNotNull('gateway_payment_id')
                     ->orWhereNotNull('merchant_reference');
             })
-            ->whereIn('status', [PaymentAttempt::StatusInitiated, PaymentAttempt::StatusPending]);
+            ->where(function (Builder $statusQuery): void {
+                $statusQuery->whereIn('status', [PaymentAttempt::StatusInitiated, PaymentAttempt::StatusPending])
+                    ->orWhere(function (Builder $uncertQuery): void {
+                        $uncertQuery->where(function (Builder $q): void {
+                            $q->where('failure_code', 'gateway_uncertain_status')
+                                ->orWhere('metadata->uncertain', true)
+                                ->orWhere('metadata->is_uncertain', true);
+                        })->whereNull('metadata->uncertain_resolution');
+                    });
+            });
 
         // Prioritaskan attempt yang belum pernah direkonsiliasi agar backlog lama
         // tidak menghalangi transaksi baru ketika batch terbatas.
@@ -239,7 +248,7 @@ class PaymentReconciliationService
             return $this->finishRetryable($run, $attempt, 'gateway_paid_timestamp_invalid');
         }
 
-        $pendingAttempt = $attempt->status === PaymentAttempt::StatusInitiated
+        $pendingAttempt = in_array($attempt->status, [PaymentAttempt::StatusInitiated, PaymentAttempt::StatusExpired, PaymentAttempt::StatusCancelled, PaymentAttempt::StatusFailed], true)
             ? $this->paymentAttemptService->transitionStatus($attempt, PaymentAttempt::StatusPending)
             : $attempt;
         $updatedAttempt = $this->paymentAttemptService->transitionStatus(
@@ -251,7 +260,7 @@ class PaymentReconciliationService
             $paidAt,
         );
         $metadata = is_array($updatedAttempt->metadata) ? $updatedAttempt->metadata : [];
-        if (! empty($metadata['uncertain']) || ! empty($metadata['is_uncertain']) || $updatedAttempt->failure_code === 'gateway_uncertain_status') {
+        if (! empty($metadata['uncertain']) || ! empty($metadata['is_uncertain']) || $updatedAttempt->failure_code === 'gateway_uncertain_status' || empty($metadata['uncertain_resolution'])) {
             unset($metadata['uncertain'], $metadata['is_uncertain'], $metadata['gateway_status'], $metadata['failure_reason']);
             $metadata['uncertain_resolved_at'] = now()->toISOString();
             $metadata['uncertain_resolution'] = 'paid_confirmed_by_gateway';
@@ -291,7 +300,8 @@ class PaymentReconciliationService
         $updatedAttempt = $attempt;
         $isUncertain = $this->isUncertain($attempt);
 
-        if ($attempt->status === PaymentAttempt::StatusInitiated) {
+        if ($attempt->status === PaymentAttempt::StatusInitiated
+            || ($isUncertain && in_array($attempt->status, [PaymentAttempt::StatusExpired, PaymentAttempt::StatusCancelled, PaymentAttempt::StatusFailed], true))) {
             $updatedAttempt = $this->paymentAttemptService->transitionStatus(
                 $attempt,
                 PaymentAttempt::StatusPending,
@@ -306,7 +316,9 @@ class PaymentReconciliationService
             $currentMetadata['uncertain'] = true;
             $currentMetadata['is_uncertain'] = true;
             $currentMetadata['gateway_status'] = '01';
+            unset($currentMetadata['uncertain_resolution'], $currentMetadata['uncertain_resolved_at']);
             $updatedAttempt->update([
+                'status' => PaymentAttempt::StatusPending,
                 'failure_code' => 'gateway_uncertain_status',
                 'metadata' => $currentMetadata,
             ]);
@@ -354,7 +366,7 @@ class PaymentReconciliationService
         }
 
         $metadata = is_array($updatedAttempt->metadata) ? $updatedAttempt->metadata : [];
-        if (! empty($metadata['uncertain']) || ! empty($metadata['is_uncertain']) || $updatedAttempt->failure_code === 'gateway_uncertain_status') {
+        if (! empty($metadata['uncertain']) || ! empty($metadata['is_uncertain']) || $updatedAttempt->failure_code === 'gateway_uncertain_status' || ! empty($metadata['gateway_status']) || empty($metadata['uncertain_resolution'])) {
             unset($metadata['uncertain'], $metadata['is_uncertain'], $metadata['gateway_status'], $metadata['failure_reason']);
             $metadata['uncertain_resolved_at'] = now()->toISOString();
             $metadata['uncertain_resolution'] = $status === PaymentAttempt::StatusExpired
@@ -495,12 +507,18 @@ class PaymentReconciliationService
         try {
             return DB::transaction(function () use ($paymentAttempt, $force): ?PaymentReconciliationRun {
                 $attempt = PaymentAttempt::query()->lockForUpdate()->find($paymentAttempt->getKey());
-                if ($attempt === null || $this->isFinal($attempt->status)) {
+                if ($attempt === null) {
                     return null;
                 }
 
                 $now = now()->toImmutable();
                 $isUncertain = $this->isUncertain($attempt);
+                $isUnresolvedUncertain = $isUncertain && empty($attempt->metadata['uncertain_resolution']);
+
+                // If attempt has terminal status, only allow claiming if it is an uncertain attempt that has not been resolved
+                if ($this->isFinal($attempt->status) && ! $isUnresolvedUncertain) {
+                    return null;
+                }
 
                 if ($isUncertain) {
                     $this->ensureFirstUncertainRecorded($attempt);
@@ -886,10 +904,12 @@ class PaymentReconciliationService
         $hasIdentifier = (is_string($attempt->gateway_payment_id) && $attempt->gateway_payment_id !== '')
             || (is_string($attempt->merchant_reference) && $attempt->merchant_reference !== '');
 
+        $isUnresolvedUncertain = $this->isUncertain($attempt) && empty($attempt->metadata['uncertain_resolution']);
+
         return in_array(strtolower((string) $attempt->provider), ['dana', 'midtrans'], true)
             && in_array($attempt->gateway_environment, ['sandbox', 'production'], true)
             && $hasIdentifier
-            && in_array($attempt->status, [PaymentAttempt::StatusInitiated, PaymentAttempt::StatusPending], true);
+            && (in_array($attempt->status, [PaymentAttempt::StatusInitiated, PaymentAttempt::StatusPending], true) || $isUnresolvedUncertain);
     }
 
     private function isFinal(string $status): bool
