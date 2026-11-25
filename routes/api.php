@@ -96,7 +96,7 @@ Route::prefix('v1/admin')
         Route::apiResource('referral-codes', ReferralCodeController::class)
             ->only(['index', 'store', 'show', 'update']);
         Route::apiResource('applications', ApplicationController::class)
-            ->only(['index', 'store', 'show', 'update']);
+            ->only(['index', 'store', 'show', 'update', 'destroy']);
         Route::get('applications/{application}/integration-tokens', [ApplicationIntegrationTokenController::class, 'index'])
             ->middleware('throttle:admin-dana-gateway-read');
         Route::get('applications/{application}/integration-audits', [ApplicationIntegrationAuditController::class, 'index'])

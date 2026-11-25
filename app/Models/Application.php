@@ -55,6 +55,22 @@ class Application extends Model
     }
 
     /**
+     * @return HasMany<CustomerReferral, $this>
+     */
+    public function customerReferrals(): HasMany
+    {
+        return $this->hasMany(CustomerReferral::class);
+    }
+
+    /**
+     * @return HasMany<DanaPaymentFeeSetting, $this>
+     */
+    public function danaPaymentFeeSettings(): HasMany
+    {
+        return $this->hasMany(DanaPaymentFeeSetting::class);
+    }
+
+    /**
      * @return array<string, string>
      */
     protected function casts(): array

@@ -38,4 +38,12 @@ class ApplicationPolicy
     {
         return $user->is_admin;
     }
+
+    /**
+     * Determine whether the user can delete the model.
+     */
+    public function delete(User $user, Application $application): bool
+    {
+        return $user->is_admin;
+    }
 }
